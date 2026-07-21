@@ -24,6 +24,9 @@ keys.json
 *.img
 ios3vm_nand_*.img
 
+# Python wheels local tools may fetch to cross-check semantics (e.g. unicorn)
+*.whl
+
 # Local scratch worktrees
 /.local-worktrees/
 
