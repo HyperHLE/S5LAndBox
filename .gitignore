@@ -43,3 +43,6 @@ ios3vm_nand_*.img
 *.a
 *.exe
 compile_commands.json
+
+# Local scratch config (local CLI)
+/.local-tools/
