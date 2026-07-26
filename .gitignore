@@ -51,3 +51,6 @@ compile_commands.json
 
 # Local scratch config (local CLI)
 /.local-tools/
+
+# Guest console tee, written into the CWD by -F runs (see the CONSOLE CAPTURE block)
+uart-console.log
