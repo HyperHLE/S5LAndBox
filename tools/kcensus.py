@@ -9,7 +9,7 @@ import collections
 import os
 import sys
 
-REPO = r"F:\workspace\projects\iOS3-VM"
+REPO = r"F:\workspace\projects\S5LBox"
 sys.path.insert(0, os.path.join(REPO, "work", "tools", "capstone-python"))
 from capstone import Cs, CS_ARCH_ARM, CS_MODE_THUMB
 
