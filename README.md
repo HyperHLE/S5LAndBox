@@ -140,7 +140,10 @@ userspace received the framebuffer read-only and faulted on its first store.*
 > The evidence behind every claim above — what was measured, in which run, and
 > what each result does *not* prove — is in
 > [Quality and validation](docs/QUALITY.md). A project continuation
-> should begin with the [continuation handoff](docs/DEVELOPMENT_NOTES.md).
+> should begin with [the roadmap](docs/ROADMAP.md) for what is done and what is
+> next, and [where the time goes](docs/hotpath.md) for the performance picture.
+> Where a source comment cites a derivation by section number, that section is
+> in [Derivations cited by the source](docs/derivations.md).
 
 ## Current status
 
