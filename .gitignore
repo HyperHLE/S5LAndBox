@@ -44,10 +44,10 @@ keys.json
 *.img
 ios3vm_nand_*.img
 
-# Python wheels local tools may fetch to cross-check semantics (e.g. unicorn)
+# Python wheels fetched to cross-check semantics (e.g. unicorn)
 *.whl
 
-# Local scratch worktrees
+# Scratch worktrees created inside the repo by isolated tooling
 /.local-worktrees/
 
 # Editor / OS cruft
@@ -60,7 +60,7 @@ ios3vm_nand_*.img
 *.exe
 compile_commands.json
 
-# Local scratch config (local CLI)
+# Scratch tool config (local CLI)
 /.local-tools/
 
 # Guest console tee, written into the CWD by -F runs (see the CONSOLE CAPTURE block)
