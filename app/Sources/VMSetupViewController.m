@@ -27,6 +27,8 @@ static UILabel *SetupLabel(NSString *text, UIFontTextStyle style) {
     label.font = [UIFont preferredFontForTextStyle:style];
     label.adjustsFontForContentSizeCategory = YES;
     label.numberOfLines = 0;
+    label.lineBreakMode = NSLineBreakByWordWrapping;
+    [label setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisVertical];
     return label;
 }
 
@@ -137,7 +139,7 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
     [hero addArrangedSubview:brand];
     [brand.widthAnchor constraintEqualToConstant:104].active = YES;
     [brand.heightAnchor constraintEqualToAnchor:brand.widthAnchor].active = YES;
-    UILabel *title = SetupLabel(@"Welcome to S5LBox", UIFontTextStyleLargeTitle);
+    UILabel *title = SetupLabel(@"Welcome to\nS5LBox", UIFontTextStyleLargeTitle);
     title.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleLargeTitle]
         scaledFontForFont:[UIFont systemFontOfSize:32 weight:UIFontWeightBold]];
     title.textAlignment = NSTextAlignmentCenter;
