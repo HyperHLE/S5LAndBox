@@ -10,6 +10,7 @@
 #import "VMGuestPackageDownloader.h"
 #import "VMInstanceStore.h"
 #import "VMResumeCheckpoint.h"
+#include <string.h>
 
 @interface VMGuestInstallViewController ()
 - (void)offerPackagesIfVisible:(NSNotification * _Nullable)notification;
@@ -45,7 +46,7 @@ static void VMGuestInstallBuildProgress(
     BOOL _packageOfferPending;
     BOOL _started;
     BOOL _finished;
-    BOOL _packageFlow, _jailbreakNeeded, _keepsAwake, _previousIdle;
+    BOOL _packageFlow, _jailbreakNeeded, _openForShutdown, _keepsAwake, _previousIdle;
 }
 
 - (instancetype)initWithInstanceID:(NSString *)instanceID
@@ -279,7 +280,7 @@ static void VMGuestInstallBuildProgress(
         [self->_spinner stopAnimating];
         self->_hint.hidden = YES;
         self->_retry.hidden = NO;
-        [self->_retry setTitle:self->_jailbreakNeeded ? @"Jailbreak & Set Up" : @"Try Again" forState:UIControlStateNormal];
+        [self->_retry setTitle:self->_openForShutdown ? @"Open Machine" : self->_jailbreakNeeded ? @"Jailbreak & Set Up" : @"Try Again" forState:UIControlStateNormal];
         self.navigationItem.hidesBackButton = NO;
         self.navigationController.interactivePopGestureRecognizer.enabled = YES;
     });
@@ -291,6 +292,11 @@ static void VMGuestInstallBuildProgress(
 
 - (void)retryTapped {
     if (!_finished) return;
+    if (_openForShutdown) {
+        _openPackagesWhenReady = NO;
+        if (self.readyHandler) self.readyHandler();
+        return;
+    }
     if (!_jailbreakNeeded) { [self startInstall]; return; }
     UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"Jailbreak this machine?"
         message:@"Install Cydia and set up Packages. The saved running state will be discarded."
@@ -303,6 +309,27 @@ static void VMGuestInstallBuildProgress(
             [self startInstall];
         }]];
     [self presentViewController:confirm animated:YES completion:nil];
+}
+
+- (void)failBuildStatus:(vm_guest_install_build_status_t)status
+                result:(const vm_guest_install_build_result_t *)result
+                detail:(const char *)detail {
+    // A force-off can leave the volume header behind its catalog writes.
+    // Keep the disk validator strict; let iPhone OS finish and flush the disk.
+    BOOL interruptedCatalog = status == VM_GUEST_INSTALL_BUILD_ERR_ROOTFS &&
+        result->forced_power_off && result->rootfs.status == ROOTFS_WORK_PROVISION_CATALOG_CORRUPT &&
+        detail && strstr(detail, "from nextCatalogID is already in use") != NULL;
+    if (status == VM_GUEST_INSTALL_BUILD_ERR_STORAGE_NOT_CLEAN || interruptedCatalog) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self->_openForShutdown = YES;
+            [self failWithHeadline:@"Shut down iPhone OS first"
+                description:@"Open this machine and use Back \u2192 Shut down. Then try setup again."];
+        });
+        return;
+    }
+    NSString *why = detail && detail[0] ? [NSString stringWithUTF8String:detail] : nil;
+    [self failWithDescription:why ?: (status == VM_GUEST_INSTALL_BUILD_OK ? @"Guest installation did not finish." :
+        [NSString stringWithUTF8String:vm_guest_install_build_status_text(status)])];
 }
 
 - (BOOL)preparePackages:(NSError **)error {
@@ -373,6 +400,7 @@ static void VMGuestInstallBuildProgress(
 
 - (void)startInstall {
     _finished = NO;
+    _openForShutdown = NO;
     _retry.hidden = YES;
     _hint.hidden = NO;
     _headline.textColor = UIColor.labelColor;
@@ -445,15 +473,7 @@ static void VMGuestInstallBuildProgress(
             return;
         }
         if (status != VM_GUEST_INSTALL_BUILD_ERR_ARGUMENT) {
-            NSString *why = detail[0]
-                ? [NSString stringWithUTF8String:detail] : nil;
-            NSString *headline =
-                status == VM_GUEST_INSTALL_BUILD_ERR_STORAGE_NOT_CLEAN
-                    ? @"Shut down this guest first"
-                    : @"Jailbreak failed";
-            [self_ failWithHeadline:headline description:why ?:
-                [NSString stringWithUTF8String:
-                    vm_guest_install_build_status_text(status)]];
+            [self_ failBuildStatus:status result:&result detail:detail];
             return;
         }
 
@@ -492,15 +512,7 @@ static void VMGuestInstallBuildProgress(
                 &result, detail, sizeof detail);
         if (status != VM_GUEST_INSTALL_BUILD_OK ||
             !result.transaction.committed) {
-            NSString *why = detail[0]
-                ? [NSString stringWithUTF8String:detail] : nil;
-            NSString *headline =
-                status == VM_GUEST_INSTALL_BUILD_ERR_STORAGE_NOT_CLEAN
-                    ? @"Shut down this guest first"
-                    : @"Jailbreak failed";
-            [self_ failWithHeadline:headline description:why ?:
-                [NSString stringWithUTF8String:
-                    vm_guest_install_build_status_text(status)]];
+            [self_ failBuildStatus:status result:&result detail:detail];
             return;
         }
         NSError *bridgeError = nil;
