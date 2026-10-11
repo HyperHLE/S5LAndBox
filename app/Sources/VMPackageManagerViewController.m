@@ -66,6 +66,7 @@ static UIImage *Tile(NSString *symbol) {
 - (void)closePackages;
 - (void)addSource;
 - (void)cancel;
+- (void)updateIdleTimer;
 @end
 
 // A small shared table shell keeps lists, details and review screens consistent.
@@ -163,7 +164,7 @@ static UIImage *Tile(NSString *symbol) {
     dispatch_queue_t _queue;
     NSData *_status;
     NSString *_message;
-    BOOL _busy, _idleWasDisabled;
+    BOOL _busy, _idleWasDisabled, _holdsIdleTimer;
     BOOL _connecting, _needsSetup, _closed, _loadedSources;
     BOOL _connectionTimedOut, _finishingSetup;
     NSTimeInterval _connectionDeadline;
@@ -236,7 +237,12 @@ static UIImage *Tile(NSString *symbol) {
     [super viewDidDisappear:animated];
     if (self.isBeingDismissed || !self.presentingViewController) {
         _closed=YES; ++_connectionGeneration; _bridge.canceled=YES;
+        [self updateIdleTimer];
     }
+}
+- (void)dealloc {
+    if (_holdsIdleTimer) UIApplication.sharedApplication.idleTimerDisabled=_idleWasDisabled;
+    if (_background!=UIBackgroundTaskInvalid) [UIApplication.sharedApplication endBackgroundTask:_background];
 }
 - (void)connectGuest {
     if (_closed || _busy || _connecting) return;
@@ -470,6 +476,7 @@ static UIImage *Tile(NSString *symbol) {
     screen.sections=sections; [screen.tableView reloadData];
 }
 - (void)renderAll {
+    [self updateIdleTimer];
     // Empty tabs are not a setup checklist. Once a catalog is available, it
     // remains browsable offline; package mutations still require live status.
     for (NSUInteger i=1;i<self.viewControllers.count;i++)
@@ -514,7 +521,20 @@ static UIImage *Tile(NSString *symbol) {
 - (void)closePackages {
     if (_busy) return;
     _closed=YES; ++_connectionGeneration; _bridge.canceled=YES;
+    [self updateIdleTimer];
     [self dismissViewControllerAnimated:YES completion:nil];
+}
+- (void)updateIdleTimer {
+    BOOL waiting=!_needsSetup && !_status && !_connectionTimedOut && _connectionDeadline>0;
+    BOOL keepAwake=!_closed && (_busy || waiting);
+    if (keepAwake && !_holdsIdleTimer) {
+        _idleWasDisabled=UIApplication.sharedApplication.idleTimerDisabled;
+        UIApplication.sharedApplication.idleTimerDisabled=YES;
+        _holdsIdleTimer=YES;
+    } else if (!keepAwake && _holdsIdleTimer) {
+        UIApplication.sharedApplication.idleTimerDisabled=_idleWasDisabled;
+        _holdsIdleTimer=NO;
+    }
 }
 - (void)setWorking:(BOOL)busy {
     _busy=busy; self.modalInPresentation=busy;
@@ -526,17 +546,16 @@ static UIImage *Tile(NSString *symbol) {
     }
     if (busy) {
         _bridge.canceled=NO; _repository.canceled=NO;
-        _idleWasDisabled=UIApplication.sharedApplication.idleTimerDisabled; UIApplication.sharedApplication.idleTimerDisabled=YES;
         __weak VMPackageManagerViewController *weakSelf=self;
         _background=[UIApplication.sharedApplication beginBackgroundTaskWithExpirationHandler:^{
             VMPackageManagerViewController *owner=weakSelf;
             if (owner) { owner->_bridge.canceled=YES; owner->_repository.canceled=YES; }
         }];
     } else {
-        UIApplication.sharedApplication.idleTimerDisabled=_idleWasDisabled;
         if (_background!=UIBackgroundTaskInvalid) [UIApplication.sharedApplication endBackgroundTask:_background];
         _background=UIBackgroundTaskInvalid;
     }
+    [self updateIdleTimer];
 }
 - (void)report:(NSString *)message {
     dispatch_async(dispatch_get_main_queue(),^{
