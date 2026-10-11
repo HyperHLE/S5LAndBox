@@ -33,9 +33,11 @@ static void VMGuestInstallBuildProgress(
     NSString *_instanceID;
     NSString *_machineName;
     NSString *_machineDirectory;
-    UIView *_guestScreen;
     UILabel *_headline;
     UILabel *_detail;
+    UILabel *_hint;
+    UIActivityIndicatorView *_spinner;
+    UIButton *_retry;
     UIProgressView *_progressBar;
     VMGuestPackageDownloader *_downloader;
     dispatch_queue_t _buildQueue;
@@ -43,6 +45,7 @@ static void VMGuestInstallBuildProgress(
     BOOL _packageOfferPending;
     BOOL _started;
     BOOL _finished;
+    BOOL _packageFlow, _jailbreakNeeded, _keepsAwake, _previousIdle;
 }
 
 - (instancetype)initWithInstanceID:(NSString *)instanceID
@@ -57,95 +60,137 @@ static void VMGuestInstallBuildProgress(
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = _machineName.length ? _machineName : @"iPhone OS 3.1.3";
-    self.view.backgroundColor = [UIColor blackColor];
+    _packageFlow = self.packageManagerOnly;
+    self.title = _packageFlow ? @"Set Up Packages" : @"Jailbreak";
+    self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
+    self.view.accessibilityIdentifier = @"s5lbox.guest-install.screen";
     self.navigationItem.hidesBackButton = YES;
-    self.navigationItem.largeTitleDisplayMode =
-        UINavigationItemLargeTitleDisplayModeNever;
+    self.navigationItem.largeTitleDisplayMode = UINavigationItemLargeTitleDisplayModeNever;
 
-    _guestScreen = [[UIView alloc] initWithFrame:CGRectZero];
-    _guestScreen.translatesAutoresizingMaskIntoConstraints = NO;
-    _guestScreen.backgroundColor = [UIColor blackColor];
-    _guestScreen.layer.borderWidth = 1.0;
-    _guestScreen.layer.borderColor = [UIColor darkGrayColor].CGColor;
-    _guestScreen.accessibilityIdentifier = @"s5lbox.guest-install.screen";
-    [self.view addSubview:_guestScreen];
+    UIScrollView *scroll = [UIScrollView new];
+    scroll.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:scroll];
+    _retry = [UIButton buttonWithType:UIButtonTypeSystem];
+    _retry.translatesAutoresizingMaskIntoConstraints = NO;
+    _retry.backgroundColor = UIColor.systemBlueColor;
+    _retry.layer.cornerRadius = 14;
+    [_retry setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    _retry.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
+    _retry.titleLabel.adjustsFontForContentSizeCategory = YES;
+    _retry.titleLabel.numberOfLines = 0;
+    _retry.contentEdgeInsets = UIEdgeInsetsMake(14, 18, 14, 18);
+    _retry.accessibilityIdentifier = @"s5lbox.guest-install.retry";
+    [_retry addTarget:self action:@selector(retryTapped) forControlEvents:UIControlEventTouchUpInside];
+    _retry.hidden = YES;
+    [self.view addSubview:_retry];
 
-    _headline = [[UILabel alloc] initWithFrame:CGRectZero];
-    _headline.translatesAutoresizingMaskIntoConstraints = NO;
-    _headline.text = self.packageManagerOnly ? @"Setting up Packages\u2026" : @"Jailbreaking\u2026";
-    _headline.textColor = [UIColor whiteColor];
-    _headline.font = [UIFont preferredFontForTextStyle:UIFontTextStyleTitle2];
+    UIView *canvas = [UIView new];
+    canvas.translatesAutoresizingMaskIntoConstraints = NO;
+    [scroll addSubview:canvas];
+    UIStackView *stack = [UIStackView new];
+    stack.axis = UILayoutConstraintAxisVertical;
+    stack.spacing = 24;
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [canvas addSubview:stack];
+    UIImageView *symbol = [[UIImageView alloc] initWithImage:
+        [UIImage systemImageNamed:_packageFlow ? @"shippingbox" : @"lock.open"]];
+    symbol.contentMode = UIViewContentModeScaleAspectFit;
+    symbol.tintColor = UIColor.systemBlueColor;
+    symbol.isAccessibilityElement = NO;
+    [symbol.heightAnchor constraintEqualToConstant:56].active = YES;
+    [stack addArrangedSubview:symbol];
+    UILabel *machine = [UILabel new];
+    machine.text = _machineName ?: @"iPhone OS";
+    machine.font = [UIFont preferredFontForTextStyle:UIFontTextStyleTitle2];
+    machine.adjustsFontForContentSizeCategory = YES;
+    machine.textAlignment = NSTextAlignmentCenter;
+    machine.numberOfLines = 0;
+    machine.lineBreakMode = NSLineBreakByWordWrapping;
+    [stack addArrangedSubview:machine];
+
+    UIView *card = [UIView new];
+    card.backgroundColor = UIColor.secondarySystemGroupedBackgroundColor;
+    card.layer.cornerRadius = 18;
+    UIStackView *content = [UIStackView new];
+    content.axis = UILayoutConstraintAxisVertical;
+    content.spacing = 12;
+    content.translatesAutoresizingMaskIntoConstraints = NO;
+    [card addSubview:content];
+    _headline = [UILabel new];
+    _headline.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
     _headline.adjustsFontForContentSizeCategory = YES;
-    _headline.textAlignment = NSTextAlignmentCenter;
+    _headline.numberOfLines = 0;
+    _headline.lineBreakMode = NSLineBreakByWordWrapping;
     _headline.accessibilityIdentifier = @"s5lbox.guest-install.headline";
-    [_guestScreen addSubview:_headline];
-
-    _detail = [[UILabel alloc] initWithFrame:CGRectZero];
-    _detail.translatesAutoresizingMaskIntoConstraints = NO;
-    _detail.text = @"Checking this machine\u2026";
-    _detail.textColor = [UIColor lightGrayColor];
-    _detail.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+    _headline.text = @"Checking machine";
+    [content addArrangedSubview:_headline];
+    _detail = [UILabel new];
+    _detail.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
     _detail.adjustsFontForContentSizeCategory = YES;
-    _detail.textAlignment = NSTextAlignmentCenter;
+    _detail.textColor = UIColor.secondaryLabelColor;
     _detail.numberOfLines = 0;
-    [_guestScreen addSubview:_detail];
-
-    _progressBar = [[UIProgressView alloc]
-        initWithProgressViewStyle:UIProgressViewStyleDefault];
-    _progressBar.translatesAutoresizingMaskIntoConstraints = NO;
-    _progressBar.progress = 0.0f;
+    _detail.lineBreakMode = NSLineBreakByWordWrapping;
+    _detail.accessibilityIdentifier = @"s5lbox.guest-install.detail";
+    [content addArrangedSubview:_detail];
+    _spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
+    _spinner.hidesWhenStopped = YES;
+    [content addArrangedSubview:_spinner];
+    _progressBar = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
     _progressBar.accessibilityIdentifier = @"s5lbox.guest-install.progress";
-    [_guestScreen addSubview:_progressBar];
+    _progressBar.accessibilityLabel = @"Current step progress";
+    [content addArrangedSubview:_progressBar];
+    [stack addArrangedSubview:card];
+    _hint = [UILabel new];
+    _hint.text = @"Keep S5LBox open.";
+    _hint.textColor = UIColor.secondaryLabelColor;
+    _hint.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+    _hint.adjustsFontForContentSizeCategory = YES;
+    _hint.textAlignment = NSTextAlignmentCenter;
+    _hint.numberOfLines = 0;
+    [stack addArrangedSubview:_hint];
 
     UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
-    NSLayoutConstraint *idealWidth =
-        [_guestScreen.widthAnchor constraintEqualToConstant:320.0];
-    idealWidth.priority = UILayoutPriorityDefaultHigh;
+    NSLayoutConstraint *height = [canvas.heightAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.heightAnchor];
+    height.priority = UILayoutPriorityDefaultLow;
+    NSLayoutConstraint *width = [stack.widthAnchor constraintEqualToAnchor:safe.widthAnchor constant:-48];
+    width.priority = UILayoutPriorityDefaultHigh;
+    NSLayoutConstraint *buttonWidth = [_retry.widthAnchor constraintEqualToAnchor:stack.widthAnchor];
+    buttonWidth.active = YES;
     [NSLayoutConstraint activateConstraints:@[
-        [_guestScreen.topAnchor constraintGreaterThanOrEqualToAnchor:safe.topAnchor
-                                                            constant:16.0],
-        [_guestScreen.bottomAnchor constraintLessThanOrEqualToAnchor:safe.bottomAnchor
-                                                            constant:-16.0],
-        [_guestScreen.centerXAnchor constraintEqualToAnchor:safe.centerXAnchor],
-        [_guestScreen.centerYAnchor constraintEqualToAnchor:safe.centerYAnchor],
-        [_guestScreen.widthAnchor constraintLessThanOrEqualToAnchor:safe.widthAnchor
-                                                           multiplier:0.84],
-        idealWidth,
-        [_guestScreen.heightAnchor constraintEqualToAnchor:_guestScreen.widthAnchor
-                                                 multiplier:1.5],
-        [_guestScreen.heightAnchor constraintLessThanOrEqualToAnchor:safe.heightAnchor
-                                                            constant:-32.0],
-
-        [_headline.leadingAnchor constraintEqualToAnchor:_guestScreen.leadingAnchor
-                                                constant:20.0],
-        [_headline.trailingAnchor constraintEqualToAnchor:_guestScreen.trailingAnchor
-                                                 constant:-20.0],
-        [_headline.centerYAnchor constraintEqualToAnchor:_guestScreen.centerYAnchor
-                                                constant:-30.0],
-        [_detail.topAnchor constraintEqualToAnchor:_headline.bottomAnchor
-                                          constant:14.0],
-        [_detail.leadingAnchor constraintEqualToAnchor:_guestScreen.leadingAnchor
-                                              constant:20.0],
-        [_detail.trailingAnchor constraintEqualToAnchor:_guestScreen.trailingAnchor
-                                               constant:-20.0],
-        [_progressBar.topAnchor constraintEqualToAnchor:_detail.bottomAnchor
-                                               constant:22.0],
-        [_progressBar.leadingAnchor constraintEqualToAnchor:_guestScreen.leadingAnchor
-                                                   constant:28.0],
-        [_progressBar.trailingAnchor constraintEqualToAnchor:_guestScreen.trailingAnchor
-                                                    constant:-28.0]
+        [scroll.topAnchor constraintEqualToAnchor:safe.topAnchor],
+        [scroll.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor],
+        [scroll.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor],
+        [scroll.bottomAnchor constraintEqualToAnchor:_retry.topAnchor constant:-12],
+        [_retry.bottomAnchor constraintEqualToAnchor:safe.bottomAnchor constant:-16],
+        [_retry.centerXAnchor constraintEqualToAnchor:safe.centerXAnchor],
+        [_retry.heightAnchor constraintGreaterThanOrEqualToConstant:54],
+        [canvas.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor],
+        [canvas.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor],
+        [canvas.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor],
+        [canvas.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor],
+        [canvas.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor],
+        [canvas.heightAnchor constraintGreaterThanOrEqualToAnchor:scroll.frameLayoutGuide.heightAnchor], height,
+        [stack.centerXAnchor constraintEqualToAnchor:canvas.centerXAnchor],
+        [stack.centerYAnchor constraintEqualToAnchor:canvas.centerYAnchor],
+        [stack.topAnchor constraintGreaterThanOrEqualToAnchor:canvas.topAnchor constant:24],
+        [stack.bottomAnchor constraintLessThanOrEqualToAnchor:canvas.bottomAnchor constant:-24],
+        [stack.widthAnchor constraintLessThanOrEqualToAnchor:safe.widthAnchor constant:-48],
+        [stack.widthAnchor constraintLessThanOrEqualToConstant:520], width,
+        [content.topAnchor constraintEqualToAnchor:card.topAnchor constant:20],
+        [content.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-20],
+        [content.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:20],
+        [content.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-20]
     ]];
-
-    _buildQueue = dispatch_queue_create(
-        "com.j0shua.S5LBox.GuestInstallBuild", DISPATCH_QUEUE_SERIAL);
+    for (UILabel *label in @[machine, _headline, _detail, _hint])
+        [label setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisVertical];
+    _buildQueue = dispatch_queue_create("com.j0shua.S5LBox.GuestInstallBuild", DISPATCH_QUEUE_SERIAL);
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(offerPackagesIfVisible:)
         name:UIApplicationDidBecomeActiveNotification object:nil];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
-    self.navigationController.interactivePopGestureRecognizer.enabled = NO;
+    self.navigationController.interactivePopGestureRecognizer.enabled = _finished;
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -168,17 +213,24 @@ static void VMGuestInstallBuildProgress(
 - (void)dealloc {
     [NSNotificationCenter.defaultCenter removeObserver:self];
     [_downloader cancel];
+    if (_keepsAwake) UIApplication.sharedApplication.idleTimerDisabled = _previousIdle;
     if (_backgroundTask != UIBackgroundTaskInvalid)
         [[UIApplication sharedApplication] endBackgroundTask:_backgroundTask];
 }
 
 - (void)beginBackgroundTime {
+    if (!_keepsAwake) {
+        _previousIdle = UIApplication.sharedApplication.idleTimerDisabled;
+        UIApplication.sharedApplication.idleTimerDisabled = YES;
+        _keepsAwake = YES;
+    }
     if (_backgroundTask != UIBackgroundTaskInvalid) return;
     __weak VMGuestInstallViewController *weakSelf = self;
     _backgroundTask = [[UIApplication sharedApplication]
         beginBackgroundTaskWithName:@"Preparing guest installation"
                   expirationHandler:^{
         VMGuestInstallViewController *self_ = weakSelf;
+        if (!self_) return;
         [self_->_downloader cancel];
         if (self_ && self_->_backgroundTask != UIBackgroundTaskInvalid) {
             [[UIApplication sharedApplication]
@@ -189,6 +241,8 @@ static void VMGuestInstallBuildProgress(
 }
 
 - (void)endBackgroundTime {
+    if (_keepsAwake) UIApplication.sharedApplication.idleTimerDisabled = _previousIdle;
+    _keepsAwake = NO;
     if (_backgroundTask == UIBackgroundTaskInvalid) return;
     [[UIApplication sharedApplication] endBackgroundTask:_backgroundTask];
     _backgroundTask = UIBackgroundTaskInvalid;
@@ -197,10 +251,13 @@ static void VMGuestInstallBuildProgress(
 - (void)setFraction:(double)fraction stage:(NSString *)stage {
     NSAssert([NSThread isMainThread], @"guest install UI belongs on main");
     if (_finished) return;
-    if (fraction < 0.0) fraction = 0.0;
     if (fraction > 1.0) fraction = 1.0;
-    [_progressBar setProgress:(float)fraction animated:YES];
-    if (stage.length) _detail.text = stage;
+    _progressBar.hidden = fraction < 0;
+    if (fraction < 0) [_spinner startAnimating]; else [_spinner stopAnimating];
+    if (fraction >= 0) [_progressBar setProgress:(float)fraction animated:NO];
+    if (stage.length) _headline.text = stage;
+    _detail.text = fraction >= 0 ? [NSString stringWithFormat:@"%.0f%%", fraction * 100] : @"";
+    _detail.hidden = !_detail.text.length;
 }
 
 - (void)failWithHeadline:(NSString *)headline
@@ -211,16 +268,45 @@ static void VMGuestInstallBuildProgress(
         [self endBackgroundTime];
         self->_headline.text = headline.length ? headline : @"Jailbreak failed";
         self->_headline.textColor = [UIColor systemRedColor];
+        self->_detail.hidden = NO;
         self->_detail.text = description.length ? description
-                                                : @"The guest disk was not changed.";
-        self->_progressBar.progressTintColor = [UIColor systemRedColor];
+                                                : @"Try again, or return to Machines.";
+        self->_progressBar.hidden = YES;
+        [self->_spinner stopAnimating];
+        self->_hint.hidden = YES;
+        self->_retry.hidden = NO;
+        [self->_retry setTitle:self->_jailbreakNeeded ? @"Jailbreak & Set Up" : @"Try Again" forState:UIControlStateNormal];
         self.navigationItem.hidesBackButton = NO;
         self.navigationController.interactivePopGestureRecognizer.enabled = YES;
     });
 }
 
 - (void)failWithDescription:(NSString *)description {
-    [self failWithHeadline:@"Jailbreak failed" description:description];
+    [self failWithHeadline:_packageFlow ? @"Couldn’t set up Packages" : @"Jailbreak failed" description:description];
+}
+
+- (void)retryTapped {
+    if (!_finished) return;
+    if (!_jailbreakNeeded) { [self startInstall]; return; }
+    UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"Jailbreak this machine?"
+        message:@"Install Cydia and set up Packages. The saved running state will be discarded."
+        preferredStyle:UIAlertControllerStyleAlert];
+    [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [confirm addAction:[UIAlertAction actionWithTitle:@"Jailbreak & Set Up" style:UIAlertActionStyleDestructive
+        handler:^(__unused UIAlertAction *action) {
+            self.packageManagerOnly = NO;
+            self->_jailbreakNeeded = NO;
+            [self startInstall];
+        }]];
+    [self presentViewController:confirm animated:YES completion:nil];
+}
+
+- (BOOL)preparePackages:(NSError **)error {
+    __weak VMGuestInstallViewController *weakSelf = self;
+    return [VMPackageBridge prepareStoppedMachine:_machineDirectory instanceID:_instanceID
+        progress:^(NSString *stage, double fraction) {
+            dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf setFraction:fraction stage:stage]; });
+        } error:error];
 }
 
 - (void)completeInstallAlreadyPresent:(BOOL)alreadyPresent
@@ -234,13 +320,16 @@ static void VMGuestInstallBuildProgress(
         if (self->_finished) return;
         self->_finished = YES;
         [self endBackgroundTime];
+        [self->_spinner stopAnimating];
+        self->_hint.hidden = YES;
         [self->_progressBar setProgress:1.0f animated:YES];
         BOOL updated = cydiaCacheStaged || aptVerifierStaged || cydiaPrivilegesRepaired ||
             cydiaSourcesAdded || aptTrustInstalled;
         self->_headline.text = !alreadyPresent ? @"Finishing jailbreak"
             : updated ? @"Finishing Cydia setup"
             : storageUpgraded ? @"Storage expanded" : @"Jailbreak already installed";
-        self->_detail.text = @"Starting iPhone OS. Keep the machine running while setup finishes.";
+        self->_detail.hidden = NO;
+        self->_detail.text = @"Ready to start iPhone OS.";
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
                                      (int64_t)(0.8 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
@@ -257,6 +346,11 @@ static void VMGuestInstallBuildProgress(
         self.navigationController.topViewController != self) return;
     _packageOfferPending = NO;
     void (^ready)(void) = [self.readyHandler copy];
+    if (_packageFlow) {
+        _openPackagesWhenReady = YES;
+        if (ready) ready();
+        return;
+    }
     UIAlertController *offer = [UIAlertController alertControllerWithTitle:@"Use S5LBox Packages?"
         message:@"Browse and install tweaks from S5LBox."
         preferredStyle:UIAlertControllerStyleAlert];
@@ -273,7 +367,12 @@ static void VMGuestInstallBuildProgress(
 }
 
 - (void)startInstall {
-    if (self.packageManagerOnly) _headline.text = @"Setting up packages…";
+    _finished = NO;
+    _retry.hidden = YES;
+    _hint.hidden = NO;
+    _headline.textColor = UIColor.labelColor;
+    self.navigationItem.hidesBackButton = YES;
+    self.navigationController.interactivePopGestureRecognizer.enabled = NO;
     [self beginBackgroundTime];
     _machineDirectory = [[VMInstanceStore sharedStore]
         directoryForInstanceWithID:_instanceID];
@@ -282,7 +381,7 @@ static void VMGuestInstallBuildProgress(
         return;
     }
 
-    [self setFraction:0.01 stage:@"Discarding saved running state and checking the guest disk…"];
+    [self setFraction:-1 stage:@"Checking machine"];
     __weak VMGuestInstallViewController *weakSelf = self;
     dispatch_async(_buildQueue, ^{
         VMGuestInstallViewController *self_ = weakSelf;
@@ -290,19 +389,31 @@ static void VMGuestInstallBuildProgress(
         if (self_.packageManagerOnly) {
             NSError *error = nil; char recovery[320] = {0};
             const char *work = self_->_machineDirectory.fileSystemRepresentation;
-            if (vm_guest_maintenance_recover(work,NULL,NULL,NULL,recovery,sizeof recovery) != VM_GUEST_INSTALL_OK ||
-                !vm_resume_checkpoint_disarm(work,recovery,sizeof recovery)) {
+            if (vm_guest_maintenance_recover(work,NULL,NULL,NULL,recovery,sizeof recovery) != VM_GUEST_INSTALL_OK) {
                 [self_ failWithHeadline:@"Package setup failed" description:[NSString stringWithUTF8String:recovery]]; return;
             }
-            if (![VMPackageBridge prepareStoppedMachine:self_->_machineDirectory instanceID:self_->_instanceID error:&error]) {
+            vm_guest_install_probe_t probe = vm_guest_install_probe(work, NULL, recovery, sizeof recovery);
+            if (probe == VM_GUEST_INSTALL_PROBE_ABSENT) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    self_->_jailbreakNeeded = YES;
+                    [self_ failWithHeadline:@"Jailbreak required" description:@"Jailbreak this machine to install tweaks with Packages."];
+                });
+                return;
+            }
+            if (probe != VM_GUEST_INSTALL_PROBE_VALID || !vm_resume_checkpoint_disarm(work,recovery,sizeof recovery)) {
+                [self_ failWithDescription:[NSString stringWithUTF8String:recovery]]; return;
+            }
+            if (![self_ preparePackages:&error]) {
                 [self_ failWithHeadline:@"Package setup failed" description:error.localizedDescription]; return;
             }
             dispatch_async(dispatch_get_main_queue(),^{
                 self_->_openPackagesWhenReady = YES;
                 [self_ endBackgroundTime];
-                [self_ setFraction:1 stage:@"Package manager ready. Starting the guest…"];
+                [self_ setFraction:1 stage:@"Starting iPhone OS"];
                 self_->_finished = YES;
-                if (self_.readyHandler) self_.readyHandler();
+                self_->_hint.hidden = YES;
+                self_->_packageOfferPending = YES;
+                [self_ offerPackagesIfVisible:nil];
             });
             return;
         }
@@ -315,7 +426,7 @@ static void VMGuestInstallBuildProgress(
                 &result, detail, sizeof detail);
         if (status == VM_GUEST_INSTALL_BUILD_OK && result.already_installed) {
             NSError *bridgeError = nil;
-            if (![VMPackageBridge prepareStoppedMachine:self_->_machineDirectory instanceID:self_->_instanceID error:&bridgeError]) {
+            if (![self_ preparePackages:&bridgeError]) {
                 [self_ failWithDescription:bridgeError.localizedDescription]; return;
             }
             [self_ completeInstallAlreadyPresent:YES
@@ -342,12 +453,12 @@ static void VMGuestInstallBuildProgress(
         }
 
         dispatch_async(dispatch_get_main_queue(), ^{
-            [self_ setFraction:0.03 stage:@"Preparing package download\u2026"];
+            [self_ setFraction:-1 stage:@"Preparing package download\u2026"];
             self_->_downloader = [[VMGuestPackageDownloader alloc] init];
             [self_->_downloader startWithProgress:
                 ^(uint64_t completed, uint64_t total, NSString *stage) {
                     double part = total ? (double)completed / (double)total : 0.0;
-                    [self_ setFraction:0.03 + 0.27 * part stage:stage];
+                    [self_ setFraction:total ? part : -1 stage:stage];
                 }
                 completion:^(NSURL *directory, NSError *error) {
                     if (error) {
@@ -361,7 +472,7 @@ static void VMGuestInstallBuildProgress(
 }
 
 - (void)runBuilderWithPackageDirectory:(NSURL *)packageDirectory {
-    [self setFraction:0.31 stage:@"Verifying packages\u2026"];
+    [self setFraction:-1 stage:@"Verifying packages\u2026"];
     __weak VMGuestInstallViewController *weakSelf = self;
     dispatch_async(_buildQueue, ^{
         VMGuestInstallViewController *self_ = weakSelf;
@@ -388,7 +499,7 @@ static void VMGuestInstallBuildProgress(
             return;
         }
         NSError *bridgeError = nil;
-        if (![VMPackageBridge prepareStoppedMachine:self_->_machineDirectory instanceID:self_->_instanceID error:&bridgeError]) {
+        if (![self_ preparePackages:&bridgeError]) {
             [self_ failWithDescription:bridgeError.localizedDescription]; return;
         }
         [self_ completeInstallAlreadyPresent:result.already_installed
@@ -404,16 +515,8 @@ static void VMGuestInstallBuildProgress(
 
 - (void)receiveBuildPhase:(vm_guest_install_build_phase_t)phase
                  completed:(uint64_t)completed total:(uint64_t)total {
-    double within = total ? (double)completed / (double)total : 0.0;
-    double fraction = 0.31;
-    switch (phase) {
-        case VM_GUEST_INSTALL_BUILD_RECOVERING: fraction = 0.31 + 0.01 * within; break;
-        case VM_GUEST_INSTALL_BUILD_PLANNING:   fraction = 0.32 + 0.05 * within; break;
-        case VM_GUEST_INSTALL_BUILD_STAGING:    fraction = 0.37 + 0.03 * within; break;
-        case VM_GUEST_INSTALL_BUILD_COPYING:    fraction = 0.40 + 0.54 * within; break;
-        case VM_GUEST_INSTALL_BUILD_PUBLISHING: fraction = 0.94 + 0.05 * within; break;
-        case VM_GUEST_INSTALL_BUILD_COMPLETE:   fraction = 1.0; break;
-    }
+    double fraction = total ? (double)completed / (double)total : -1;
+    if (phase == VM_GUEST_INSTALL_BUILD_COMPLETE) fraction = 1;
     NSString *stage = [NSString stringWithUTF8String:
         vm_guest_install_build_phase_text(phase)] ?: @"Preparing guest disk";
     dispatch_async(dispatch_get_main_queue(), ^{

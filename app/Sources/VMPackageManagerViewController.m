@@ -165,6 +165,8 @@ static UIImage *Tile(NSString *symbol) {
     NSString *_message;
     BOOL _busy, _idleWasDisabled;
     BOOL _connecting, _needsSetup, _closed, _loadedSources;
+    BOOL _connectionTimedOut;
+    NSTimeInterval _connectionDeadline;
     NSString *_instanceID;
     NSUInteger _connectionGeneration;
     NSUInteger _finishAction;
@@ -223,7 +225,7 @@ static UIImage *Tile(NSString *symbol) {
 }
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
-    if (!_status && !_connecting && !_busy && !_closed) [self connectGuest];
+    if (!_status && !_connecting && !_busy && !_closed && !_connectionTimedOut) [self connectGuest];
 }
 - (void)viewDidDisappear:(BOOL)animated {
     [super viewDidDisappear:animated];
@@ -236,12 +238,19 @@ static UIImage *Tile(NSString *symbol) {
     if (self.presentedViewController) { [self scheduleGuestConnection]; return; }
     _needsSetup=![VMPackageBridge hasCapabilityForInstance:_instanceID];
     if (_needsSetup) {
-        _message=@"Add the guest helper to install tweaks from S5LBox. Cydia stays available.";
+        _message=@"Set up this machine to browse and install tweaks here.";
+        _connectionTimedOut=NO;
+        [self renderAll]; return;
+    }
+    if (!_connectionDeadline) _connectionDeadline=NSProcessInfo.processInfo.systemUptime+120;
+    if (NSProcessInfo.processInfo.systemUptime>=_connectionDeadline) {
+        _connectionTimedOut=YES;
+        _message=@"Check that iPhone OS has finished starting, then try again. If it still cannot connect, repair setup.";
         [self renderAll]; return;
     }
     _connecting=YES; _bridge.canceled=NO;
     NSUInteger generation=++_connectionGeneration;
-    _message=@"Connecting automatically when iPhone OS is ready. If it is asleep or locked, tap Done to wake and unlock the guest.";
+    _message=@"Waiting for iPhone OS to finish starting. Packages will open automatically.";
     [self renderAll];
     dispatch_async(_queue,^{
         NSError *error=nil; BOOL connected=[self readInstalled:&error];
@@ -249,6 +258,8 @@ static UIImage *Tile(NSString *symbol) {
             self->_connecting=NO;
             if (self->_closed || generation!=self->_connectionGeneration) return;
             if (connected) {
+                self->_connectionDeadline=0;
+                self->_connectionTimedOut=NO;
                 self->_message=@"Connected to your guest.";
                 [self renderAll];
                 if (!self->_loadedSources) [self refresh];
@@ -325,30 +336,40 @@ static UIImage *Tile(NSString *symbol) {
     if ([kind isEqual:@"home"]) {
         NSMutableDictionary *hero=[Row(@"S5LBox Packages",@"Tweaks and tools for iPhone OS 3",@"shippingbox.fill",nil) mutableCopy]; hero[@"hero"]=@YES;
         [sections addObject:Section(nil,@[hero],nil)];
-        NSMutableDictionary *status=[Row(_busy ? @"Refreshing packages" : _status ? @"Connected to your guest" : _needsSetup ? @"Setup needed" : @"Waiting for your guest",
-            _message,_status ? @"checkmark.circle" : @"cable.connector",_busy ? nil : @"refresh") mutableCopy];
-        status[@"spinner"]=@(_busy || _connecting);
+        NSMutableDictionary *status=[Row(_busy ? @"Refreshing packages" : _status ? @"Connected" : _needsSetup ? @"Welcome to Packages" : _connectionTimedOut ? @"Couldn’t connect" : @"Connecting to iPhone OS",
+            _message,_status ? @"checkmark.circle" : @"shippingbox",_status && !_busy ? @"refresh" : nil) mutableCopy];
+        status[@"spinner"]=@(_busy || (!_needsSetup && !_status && !_connectionTimedOut));
         if (!_status) {
             // Make boot/setup progress visible before browsing, not below the
             // fold where the user could mistake normal startup for a failure.
             NSMutableArray *connectionRows=[NSMutableArray arrayWithObject:status];
-            if (self.setupRequest) [connectionRows addObject:Row(_needsSetup ? @"Set up Packages" : @"Repair package setup",
-                _needsSetup ? @"Install the helper and return here automatically." : @"Use this if the guest has finished booting but still cannot connect.",
-                @"shippingbox",_busy ? nil : @"setup")];
+            if (_connectionTimedOut) {
+                NSMutableDictionary *retry=[Row(@"Try Again",nil,@"arrow.clockwise",@"refresh") mutableCopy];
+                retry[@"button"]=@YES; [connectionRows addObject:retry];
+            }
+            if (self.setupRequest && (_needsSetup || _connectionTimedOut)) {
+                NSMutableDictionary *setup=[Row(_needsSetup ? @"Set Up Packages" : @"Repair Setup",
+                    @"This machine will restart.",@"shippingbox",_busy ? nil : @"setup") mutableCopy];
+                setup[@"button"]=@YES; setup[@"identifier"]=@"s5lbox.packages.setup";
+                [connectionRows addObject:setup];
+            }
+            if (!_needsSetup) [connectionRows addObject:Row(@"Show iPhone OS",nil,@"iphone",@"show-guest")];
             [sections addObject:Section(nil,connectionRows,nil)];
         }
         if (_finishAction) [sections addObject:Section(nil,@[Row(FinishTitle(_finishAction),
             _finishReady ? @"Apply your package changes." : @"Finish or repair the package operation, then refresh Installed.",
             @"arrow.clockwise",_finishReady && !_busy ? @"finish-guest" : nil)],nil)];
-        [sections addObject:Section(@"Discover",@[
+        if (_status || _catalog.packages.count) [sections addObject:Section(@"Discover",@[
             Row(@"All packages",@"Browse your sources",@"square.grid.2x2",@"all"),
             Row(@"Categories",@"Tweaks, themes, utilities and more",@"square.stack.3d.up",@"categories")],nil)];
         NSMutableArray *machineRows=[NSMutableArray array];
         if (_status) [machineRows addObject:status];
-        [machineRows addObjectsFromArray:@[
-            Row(@"Installed packages",[NSString stringWithFormat:@"%lu packages",(unsigned long)[self installedPackages].count],@"checkmark.seal",@"installed"),
-            Row(@"Sources",[NSString stringWithFormat:@"%lu repositories",(unsigned long)_sources.count],@"tray.2",@"sources")]];
-        [sections addObject:Section(@"Your machine",machineRows,nil)];
+        if (_status) {
+            [machineRows addObjectsFromArray:@[
+                Row(@"Installed packages",[NSString stringWithFormat:@"%lu packages",(unsigned long)[self installedPackages].count],@"checkmark.seal",@"installed"),
+                Row(@"Sources",[NSString stringWithFormat:@"%lu repositories",(unsigned long)_sources.count],@"tray.2",@"sources")]];
+            [sections addObject:Section(@"Your machine",machineRows,nil)];
+        }
         [sections addObject:Section(nil,@[Row(@"About package safety",@"Compatibility, sources and recovery",@"info.circle",@"safety")],nil)];
     } else if ([kind isEqual:@"sources"]) {
         NSMutableArray *rows=[NSMutableArray array];
@@ -440,6 +461,10 @@ static UIImage *Tile(NSString *symbol) {
     screen.sections=sections; [screen.tableView reloadData];
 }
 - (void)renderAll {
+    // Empty tabs are not a setup checklist. Once a catalog is available, it
+    // remains browsable offline; package mutations still require live status.
+    for (NSUInteger i=1;i<self.viewControllers.count;i++)
+        self.viewControllers[i].tabBarItem.enabled=!_busy && (_status || _catalog.packages.count);
     for (UINavigationController *nav in self.viewControllers) for (VMPackageScreen *screen in nav.viewControllers) [self render:screen];
     NSArray *updates=[self packagesFor:(VMPackageScreen *)[(UINavigationController *)self.viewControllers[2] viewControllers].firstObject];
     self.viewControllers[2].tabBarItem.badgeValue=updates.count ? [NSString stringWithFormat:@"%lu",(unsigned long)updates.count] : nil;
@@ -459,7 +484,9 @@ static UIImage *Tile(NSString *symbol) {
     else if ([action isEqual:@"installed"]) self.selectedIndex=3;
     else if ([action isEqual:@"sources"]) self.selectedIndex=1;
     else if ([action isEqual:@"refresh"]) [self refresh];
+    else if ([action isEqual:@"show-guest"]) [self closePackages];
     else if ([action isEqual:@"setup"]) {
+        _connectionDeadline=0; _connectionTimedOut=NO;
         ++_connectionGeneration; _bridge.canceled=YES;
         if (self.setupRequest) self.setupRequest();
         [self scheduleGuestConnection];
@@ -522,14 +549,20 @@ static UIImage *Tile(NSString *symbol) {
     NSData *status=[_bridge status:error]; if (!status) return NO;
     NSArray *records=[VMPackageCatalog parse:status error:error]; if (!records) return NO;
     NSUInteger finish=_bridge.finishAction; BOOL ready=_bridge.finishReady && Configured(records);
+    __block BOOL accepted=NO;
     dispatch_sync(dispatch_get_main_queue(),^{
+        if (self->_closed || self->_bridge.canceled) return;
         self->_status=status; self->_catalog.installed=records; self->_finishAction=finish; self->_finishReady=ready;
+        accepted=YES;
     });
-    return YES;
+    return accepted;
 }
 - (void)refresh {
     if (_closed || _connecting) return;
-    if (!_status) { [self connectGuest]; return; }
+    if (!_status) {
+        _connectionDeadline=0; _connectionTimedOut=NO;
+        [self connectGuest]; return;
+    }
     if (!_queue || _busy) return; _operation=nil; [self setWorking:YES]; [self report:@"Loading repositories…"];
     _loadedSources=YES;
     NSArray *sources=[_sources copy];
@@ -541,10 +574,13 @@ static UIImage *Tile(NSString *symbol) {
         BOOL guest=[self readInstalled:&guestError];
         dispatch_async(dispatch_get_main_queue(),^{
             [self setWorking:NO];
+            if (self->_closed) return;
             if (!guest) self->_status=nil;
-            self->_message=guestError.localizedDescription ?: repoError.localizedDescription ?: [NSString stringWithFormat:@"%lu package versions. Installed list is current.",(unsigned long)self->_catalog.packages.count];
+            if (!guest && self->_bridge.canceled) self->_connectionTimedOut=YES;
+            self->_message=guestError.localizedDescription ?: repoError.localizedDescription ?: (guest ? [NSString stringWithFormat:@"%lu package versions. Installed list is current.",(unsigned long)self->_catalog.packages.count] : @"Connection interrupted. Try again.");
             if (guestError && repoError) self->_message=[NSString stringWithFormat:@"%@\nSources: %@",guestError.localizedDescription,repoError.localizedDescription];
             [self renderAll];
+            if (!guest && !self->_bridge.canceled) [self scheduleGuestConnection];
         });
     });
 }
@@ -635,7 +671,7 @@ static UIImage *Tile(NSString *symbol) {
         dispatch_async(dispatch_get_main_queue(),^{
             self->_finishAction=finish; self->_finishReady=ready;
             if (installed) { self->_catalog.installed=installed; self->_status=result; }
-            else if (error) self->_status=nil;
+            else if (error) { self->_status=nil; self->_connectionTimedOut=YES; }
             [self setWorking:NO]; op.outcome=error ? -1 : 1;
             op.operationState=error ? @"Needs attention" : removing ? @"Removal complete" : @"Installation complete";
             op.operationDetail=error.localizedDescription ?: (finish ?

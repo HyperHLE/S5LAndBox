@@ -797,10 +797,10 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
             if (request) [self dismissViewControllerAnimated:YES completion:request];
         } else if (row == VMGeneralRowPackageSetup) {
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Set up package manager?"
-                message:@"The machine will power off before setup. Saved running state will be discarded; unsaved work may be lost."
+                message:@"The saved running state will be replaced. Unsaved work may be lost."
                 preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-            [alert addAction:[UIAlertAction actionWithTitle:@"Force Off & Set Up" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *a) {
+            [alert addAction:[UIAlertAction actionWithTitle:@"Set Up Packages" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *a) {
                 [self chooseMachineWithRequest:self.guestPackageSetupRequest];
             }]];
             [self presentViewController:alert animated:YES completion:nil];
