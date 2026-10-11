@@ -263,8 +263,8 @@ static UIImage *Tile(NSString *symbol) {
     }
     _connecting=YES; _bridge.canceled=NO;
     NSUInteger generation=++_connectionGeneration;
-    _message=_finishingSetup ? @"Finishing iPhone OS setup. This first start can take several minutes."
-        : @"Packages will connect when iPhone OS is ready.";
+    _message=_finishingSetup ? @"First startup can take several minutes. Wake and unlock iPhone OS if it is asleep."
+        : @"Wake and unlock iPhone OS to connect.";
     [self renderAll];
     dispatch_async(_queue,^{
         NSError *error=nil; BOOL connected=[self readInstalled:&error];

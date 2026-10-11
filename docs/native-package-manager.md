@@ -27,6 +27,8 @@ wait is bounded to ten minutes. Regular connection attempts stop after two
 minutes. **Try Again**, **Repair Setup**, and **Show iPhone OS** provide recovery
 without an endless spinner. Empty browsing tabs remain disabled until connected
 or a cached catalog is available.
+If the guest is asleep or locked, use **Show iPhone OS** to wake and unlock it,
+then return to Packages. The host stays awake during the bounded connection wait.
 
 The full-screen workspace has five tabs:
 
