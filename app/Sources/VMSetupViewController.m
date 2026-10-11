@@ -117,8 +117,10 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
         [stack.centerYAnchor constraintEqualToAnchor:canvas.centerYAnchor],
         [stack.topAnchor constraintGreaterThanOrEqualToAnchor:canvas.topAnchor constant:24],
         [stack.bottomAnchor constraintLessThanOrEqualToAnchor:canvas.bottomAnchor constant:-24],
+        [stack.widthAnchor constraintLessThanOrEqualToAnchor:canvas.widthAnchor constant:-48],
         [stack.widthAnchor constraintLessThanOrEqualToConstant:520], columnWidth,
         [actions.centerXAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerXAnchor],
+        [actions.widthAnchor constraintLessThanOrEqualToAnchor:self.view.safeAreaLayoutGuide.widthAnchor constant:-48],
         [actions.widthAnchor constraintLessThanOrEqualToConstant:520], actionWidth,
         [actions.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-16]
     ]];
