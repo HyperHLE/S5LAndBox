@@ -305,10 +305,16 @@ static NSString *VMStringFromC(const char *text) {
 - (NSArray<NSNumber *> *)generalRowsInSection:(NSInteger)section {
     if (section == VMSettingsSectionGeneral)
         return _advanced
-            ? @[@(VMGeneralRowGraphicsMode), @(VMGeneralRowPackageSetup), @(VMGeneralRowDeveloperMode)]
+            ? (self.guestPackageSetupRequest
+                ? @[@(VMGeneralRowGraphicsMode), @(VMGeneralRowPackageSetup), @(VMGeneralRowDeveloperMode)]
+                : @[@(VMGeneralRowGraphicsMode), @(VMGeneralRowDeveloperMode)])
             : @[@(VMGeneralRowInterface), @(VMGeneralRowFirmware)];
-    if (section == VMSettingsSectionApps)
-        return @[@(VMGeneralRowJailbreak), @(VMGeneralRowInstallIPA)];
+    if (section == VMSettingsSectionApps) {
+        NSMutableArray<NSNumber *> *rows = [NSMutableArray array];
+        if (self.guestInstallRequest) [rows addObject:@(VMGeneralRowJailbreak)];
+        if (self.guestIPARequest) [rows addObject:@(VMGeneralRowInstallIPA)];
+        return rows;
+    }
     if (section == VMSettingsSectionHelp)
         return @[@(VMGeneralRowManual), @(VMGeneralRowAdvanced)];
     return nil;
@@ -316,7 +322,10 @@ static NSString *VMStringFromC(const char *text) {
 
 - (void)rebuildVisibleSections {
     if (!_advanced) {
-        _visible = @[@(VMSettingsSectionGeneral), @(VMSettingsSectionApps), @(VMSettingsSectionHelp)];
+        NSMutableArray<NSNumber *> *sections = [NSMutableArray arrayWithObject:@(VMSettingsSectionGeneral)];
+        if ([self generalRowsInSection:VMSettingsSectionApps].count) [sections addObject:@(VMSettingsSectionApps)];
+        [sections addObject:@(VMSettingsSectionHelp)];
+        _visible = sections;
         return;
     }
     BOOL dev = [[VMSettings sharedSettings] developerMode];
@@ -513,9 +522,7 @@ titleForFooterInSection:(NSInteger)section {
         } else if (row == VMGeneralRowJailbreak) {
             cell.textLabel.text = @"Jailbreak";
             cell.accessibilityIdentifier = @"s5lbox.settings.jailbreak";
-            cell.detailTextLabel.text = self.guestInstallRequest
-                ? @"Install or repair Cydia."
-                : @"Available from Settings on the Machines screen.";
+            cell.detailTextLabel.text = @"Install or repair Cydia.";
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             cell.selectionStyle = UITableViewCellSelectionStyleDefault;
         } else if (row == VMGeneralRowInstallIPA) {
