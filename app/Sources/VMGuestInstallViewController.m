@@ -153,7 +153,9 @@ static void VMGuestInstallBuildProgress(
     NSLayoutConstraint *height = [canvas.heightAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.heightAnchor];
     height.priority = UILayoutPriorityDefaultLow;
     NSLayoutConstraint *width = [stack.widthAnchor constraintEqualToAnchor:safe.widthAnchor constant:-48];
-    width.priority = UILayoutPriorityDefaultHigh;
+    // Keep a stable card width as short progress labels replace longer errors.
+    // Text/button intrinsic widths must not win over the page margins.
+    width.priority = UILayoutPriorityRequired - 1;
     NSLayoutConstraint *buttonWidth = [_retry.widthAnchor constraintEqualToAnchor:stack.widthAnchor];
     buttonWidth.active = YES;
     [NSLayoutConstraint activateConstraints:@[
