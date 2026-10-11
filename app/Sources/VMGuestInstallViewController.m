@@ -235,45 +235,12 @@ static void VMGuestInstallBuildProgress(
         self->_finished = YES;
         [self endBackgroundTime];
         [self->_progressBar setProgress:1.0f animated:YES];
-        self->_headline.text = cydiaCacheStaged ? @"Cydia cache job ready"
-                              : (aptVerifierStaged ? @"Cydia verifier ready"
-                              : (cydiaPrivilegesRepaired ? @"Cydia repaired"
-                              : (cydiaSourcesAdded ? @"Cydia repositories ready"
-                              : (aptTrustInstalled ? @"Cydia trust ready"
-                              : (storageUpgraded ? @"Storage upgraded"
-                              : (alreadyPresent ? @"Jailbreak already installed"
-                                                : @"Finishing jailbreak"))))));
-        NSString *baseDetail = cydiaPrivilegesRepaired && cydiaSourcesAdded
-            ? (storageUpgraded
-                ? @"Starting iPhone OS with a 2 GiB guest disk. Cydia's executable permissions were repaired and the period-compatible BigBoss repository was added without removing existing data."
-                : @"Starting iPhone OS. Cydia's executable permissions were repaired and the period-compatible BigBoss repository was added without removing guest data.")
-            : (cydiaSourcesAdded
-                ? (storageUpgraded
-                    ? @"Starting iPhone OS with a 2 GiB guest disk. The period-compatible BigBoss repository was added and existing Cydia data was preserved."
-                    : @"Starting iPhone OS. The period-compatible BigBoss repository was added without replacing existing APT configuration.")
-            : (cydiaPrivilegesRepaired
-            ? (storageUpgraded
-                ? @"Starting iPhone OS with a 2 GiB guest disk. The exact legacy Cydia executable permissions were repaired and existing data was preserved."
-                : @"Starting iPhone OS. The exact legacy Cydia executable permissions were repaired; no guest data was removed.")
-            : (storageUpgraded
-                ? @"Starting iPhone OS with a 2 GiB guest disk. Existing Cydia data was preserved."
-                : @"Starting iPhone OS to finish installing Cydia. The Home screen will restart automatically; keep the machine running.")));
-        NSString *trustDetail = aptTrustInstalled
-            ? [baseDetail stringByAppendingString:
-                @" BigBoss's verified legacy public key was installed; APT signature checks remain enabled."]
-            : baseDetail;
-        NSString *verifierDetail = aptVerifierStaged
-            ? [trustDetail stringByAppendingString:
-                @" Signature-verifier support is provisioned; guest dpkg completes it during boot if needed."]
-            : trustDetail;
-        self->_detail.text = cydiaCacheStaged
-            ? [verifierDetail stringByAppendingString:
-                @" Repository caches will be prepared in the background during boot."]
-            : verifierDetail;
-        if (!alreadyPresent) {
-            self->_headline.text = @"Finishing jailbreak";
-            self->_detail.text = @"Starting iPhone OS to finish installing Cydia. The Home screen will restart automatically; keep the machine running.";
-        }
+        BOOL updated = cydiaCacheStaged || aptVerifierStaged || cydiaPrivilegesRepaired ||
+            cydiaSourcesAdded || aptTrustInstalled;
+        self->_headline.text = !alreadyPresent ? @"Finishing jailbreak"
+            : updated ? @"Finishing Cydia setup"
+            : storageUpgraded ? @"Storage expanded" : @"Jailbreak already installed";
+        self->_detail.text = @"Starting iPhone OS. Keep the machine running while setup finishes.";
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
                                      (int64_t)(0.8 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
@@ -291,7 +258,7 @@ static void VMGuestInstallBuildProgress(
     _packageOfferPending = NO;
     void (^ready)(void) = [self.readyHandler copy];
     UIAlertController *offer = [UIAlertController alertControllerWithTitle:@"Use S5LBox Packages?"
-        message:@"Browse sources and install tweaks from S5LBox. Cydia stays available inside the guest."
+        message:@"Browse and install tweaks from S5LBox."
         preferredStyle:UIAlertControllerStyleAlert];
     [offer addAction:[UIAlertAction actionWithTitle:@"Not now" style:UIAlertActionStyleCancel
         handler:^(__unused UIAlertAction *action) {

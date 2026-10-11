@@ -75,7 +75,7 @@ typedef NS_ENUM(NSInteger, VMRuntimeSection) {
     if (section == VMRuntimeSectionSession)
         return @"Changes apply to this session only.";
     if (section == VMRuntimeSectionPower)
-        return @"Save & close keeps your place. Shut down starts fresh next time.";
+        return @"Save & close keeps your place. Shut down powers off iPhone OS.";
     if (section == VMRuntimeSectionDeveloper)
         return nil;
     return nil;

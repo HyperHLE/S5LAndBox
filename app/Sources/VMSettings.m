@@ -395,7 +395,7 @@ static const uint64_t kVMInstructionCaps[] = {
             @"Import your IPSW; no key entry is required. Advanced manual\n"
             @"overrides in Settings are held only for the current app session.\n"
             @"\n"
-            @"Nothing here is downloaded. Use firmware you are entitled to use.\n";
+            @"Open Settings > Firmware to manage firmware.\n";
         [text writeToFile:readme atomically:YES
                  encoding:NSUTF8StringEncoding error:NULL];
     }
