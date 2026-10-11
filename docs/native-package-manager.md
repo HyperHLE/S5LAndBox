@@ -1,7 +1,5 @@
 # Native package manager
 
-Work branch: `feature/native-package-manager`. Not merged to main.
-
 The host app handles repository download/decompression, search, dependency
 planning and package downloads. The running guest executes its own `dpkg` and
 maintainer scripts. This avoids interpreting repository processing inside the
@@ -9,16 +7,28 @@ emulator without pretending that arbitrary guest scripts can run on the host.
 
 ## Using it
 
-New jailbreak preparations include the guest helper. For an existing jailbroken
-machine, return to Machines and choose **App Settings > Set up package manager**.
-This explicitly discards the saved running state, validates the stopped disk,
-and adds the helper using the existing crash-safe disk-publication transaction.
-It does not rerun Cydia repair. Important: historical snapshots block setup;
-back up important machine data first. Strict filesystem errors are not repaired
-or ignored by helper setup.
+Open **Machine Settings > Packages**. If setup is needed, choose **Set Up
+Packages**; confirm the restart before the running guest is powered off. A stock
+machine offers **Jailbreak & Set Up**, with a separate confirmation. New jailbreak
+preparations already include the helper. For a stopped machine, the same setup
+is available under **App Settings > Advanced > Set up package manager**.
 
-Then open the machine and use **Machine Settings > Packages**. A dedicated
-full-screen, five-tab workspace opens; it does not redesign the rest of S5LBox:
+Setup shows the current step and real, centered copy progress. Keep S5LBox open
+while it prepares the disk; the app prevents Auto-Lock during preparation.
+Errors offer retry or, for an interrupted shutdown, a path back to the machine
+to shut down iPhone OS normally. Setup discards the saved running state,
+validates the stopped disk, and uses the crash-safe disk-publication transaction.
+Helper-only setup does not rerun Cydia repair. Historical snapshots still block
+setup, and strict filesystem errors are not ignored.
+
+The machine starts and Packages reopens automatically after setup. The one-time
+post-jailbreak startup can take several minutes on older hosts; that connection
+wait is bounded to ten minutes. Regular connection attempts stop after two
+minutes. **Try Again**, **Repair Setup**, and **Show iPhone OS** provide recovery
+without an endless spinner. Empty browsing tabs remain disabled until connected
+or a cached catalog is available.
+
+The full-screen workspace has five tabs:
 
 - **Packages:** connection status, all packages, and category browsing.
 - **Sources:** iOS 3 Party and Saurik initially. Open a source to browse its
