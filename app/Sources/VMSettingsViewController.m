@@ -6,7 +6,6 @@
 #import "VMSettingsViewController.h"
 
 #import "VMBootOptions.h"       /* what each switch actually does, per row */
-#import "VMEngine.h"            /* +firmwareReadinessSummary, used below */
 #import "VMJitProbe.h"          /* the explicit, recoverable execution test */
 #import "VMFirmwareImportViewController.h"
 #import "VMFirmwareImporter.h"
@@ -50,12 +49,12 @@ typedef NS_ENUM(NSInteger, VMSettingsSection) {
     VMSettingsSectionDiagnostics,
     VMSettingsSectionCommandLine,
     VMSettingsSectionReset,
+    VMSettingsSectionApps,
+    VMSettingsSectionHelp,
     VMSettingsSectionCount
 };
 
-/* Keep this order mirrored explicitly in both the cell builder and selection
- * handler. Graphics mode sits before the switches because it is the one
- * performance choice a non-developer needs before opening a new machine. */
+/* Stable action identifiers; generalRowsInSection: owns their presentation. */
 typedef NS_ENUM(NSInteger, VMGeneralRow) {
     VMGeneralRowManual = 0,
     VMGeneralRowInterface,
@@ -64,6 +63,8 @@ typedef NS_ENUM(NSInteger, VMGeneralRow) {
     VMGeneralRowInstallIPA,
     VMGeneralRowPackageSetup,
     VMGeneralRowDeveloperMode,
+    VMGeneralRowFirmware,
+    VMGeneralRowAdvanced,
     VMGeneralRowCount
 };
 
@@ -126,6 +127,7 @@ static NSString *VMStringFromC(const char *text) {
 - (void)developerModeToggled:(UISwitch *)sender;
 - (void)chooseGraphicsMode;
 - (void)chooseEmulatorInterface;
+- (NSArray<NSNumber *> *)generalRowsInSection:(NSInteger)section;
 /* These two were missing, which the comment above says cannot happen: clang
  * late-parses method bodies inside an @implementation, so a call before the
  * definition compiles anyway and the invariant this block exists to hold was
@@ -141,25 +143,23 @@ static NSString *VMStringFromC(const char *text) {
     NSArray<NSArray<NSNumber *> *> *_optionsByGroup;
     UILabel *_banner;
     BOOL _copiedCommandLine;
+    BOOL _advanced;
 }
 
 #pragma mark - Lifecycle
 
-/* Grouped, not inset-grouped: the sections carry long explanatory footers and
- * the extra inset costs a noticeable amount of their width on a phone. Routed
- * through -initWithStyle:, which is UITableViewController's designated
- * initializer, so this stays a plain convenience initializer. */
 - (instancetype)init {
-    return [self initWithStyle:UITableViewStyleGrouped];
+    return [self initWithStyle:UITableViewStyleInsetGrouped];
 }
 
 - (void)viewDidLoad {
     [super viewDidLoad];
 
     _settings = [VMSettings sharedSettings];
-    self.title = @"App Settings";
-    self.tableView.accessibilityIdentifier = @"s5lbox.app-settings";
-    self.navigationController.navigationBar.prefersLargeTitles = YES;
+    self.title = _advanced ? @"Advanced" : @"App Settings";
+    self.tableView.accessibilityIdentifier = _advanced
+        ? @"s5lbox.advanced-settings" : @"s5lbox.app-settings";
+    self.navigationItem.largeTitleDisplayMode = UINavigationItemLargeTitleDisplayModeNever;
     /* App Settings is presented from Machines. Follow the person's
      * system appearance instead of forcing a dark settings sheet globally. */
 
@@ -186,16 +186,9 @@ static NSString *VMStringFromC(const char *text) {
     self.tableView.estimatedSectionHeaderHeight = 28.0;
     self.tableView.estimatedSectionFooterHeight = 44.0;
 
-    /* The first thing on the screen is the limitation, not the switches. */
-    _banner = [[UILabel alloc] initWithFrame:CGRectZero];
-    _banner.numberOfLines = 0;
-    _banner.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
-    _banner.adjustsFontForContentSizeCategory = YES;
-    _banner.textColor = [UIColor systemOrangeColor];
-    [self refreshBanner];
-    UIView *header = [[UIView alloc] initWithFrame:CGRectZero];
-    [header addSubview:_banner];
-    self.tableView.tableHeaderView = header;
+    // Technical limitations belong with the controls they describe, not in
+    // a warning banner above everyday settings.
+    [self rebuildVisibleSections];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(firmwareChanged)
         name:VMFirmwareImportDidChangeNotification object:nil];
 }
@@ -212,6 +205,7 @@ static NSString *VMStringFromC(const char *text) {
  * is expensive enough for a full reload to matter. */
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
+    [self rebuildVisibleSections];
     [self refreshBanner];
     [self.tableView reloadData];
 }
@@ -246,48 +240,39 @@ static NSString *VMStringFromC(const char *text) {
 
 
 
-/* The banner says the same true thing in both modes, but it cannot name "the
- * three sections below" in a mode that has none -- a caveat that describes a
- * screen the reader is not looking at reads as a bug in the caveat. */
-
 - (void)inlineConsoleChanged:(UISwitch *)sender {
     [[VMSettings sharedSettings] setInlineConsole:sender.isOn];
 }
 
-/*
- * The banner counted the switches nobody applies. It counted them by hand, in
- * a sentence, and the count was "all of them" -- which stopped being true and
- * would have gone on being displayed. The numbers come from VMBootOptions now,
- * computed from the switches as they are actually set, so the banner cannot
- * claim more or less than the mapping does.
- */
 - (void)refreshBanner {
-    BOOL dev = [[VMSettings sharedSettings] developerMode];
-    NSString *readiness = [VMEngine firmwareReadinessSummary];
-    if (!dev) {
-        _banner.text = [readiness stringByAppendingString:@" See the Manual."];
+    if (!_advanced || !_settings.developerMode) {
+        self.tableView.tableHeaderView = nil;
         return;
     }
-
+    if (!_banner) {
+        _banner = [[UILabel alloc] initWithFrame:CGRectZero];
+        _banner.numberOfLines = 0;
+        _banner.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+        _banner.adjustsFontForContentSizeCategory = YES;
+        _banner.textColor = UIColor.secondaryLabelColor;
+    }
+    if (!self.tableView.tableHeaderView) {
+        UIView *header = [[UIView alloc] initWithFrame:CGRectZero];
+        [header addSubview:_banner];
+        self.tableView.tableHeaderView = header;
+    }
     vm_boot_options_report_t report;
     VMResolveOptions(&report);
-    NSMutableString *text = [NSMutableString stringWithString:readiness];
-    [text appendFormat:
-        @"\n\n%u of the %u option switches below %@ a firmware boot, and %u %@ "
-        @"written into a machine's work image when that image is made. The "
-        @"rest change nothing, and each says so under its own switch.",
-        report.applied, report.count,
-        report.applied == 1u ? @"reaches" : @"reach",
-        report.provisioned, report.provisioned == 1u ? @"is" : @"are"];
+    NSMutableString *text = [NSMutableString stringWithString:
+        @"Boot options are defaults for new machines. Each switch explains "
+         "whether it takes effect; some are unavailable or fixed into an existing disk."];
     if (report.overridden > 0u) {
         NSString *summary =
             [NSString stringWithUTF8String:report.summary] ?: @"";
         if (summary.length) [text appendFormat:@"\n\n%@", summary];
     }
-    [text appendString:
-        @"\n\nRuntime defaults are copied when you open a machine. Use "
-        @"Machine Settings inside the guest screen to change that session."];
     _banner.text = text;
+    [self.view setNeedsLayout];
 }
 
 - (void)developerModeToggled:(UISwitch *)sender {
@@ -315,21 +300,25 @@ static NSString *VMStringFromC(const char *text) {
 }
 
 
-/*
- * WHICH SECTIONS EXIST, AND WHY THIS IS A MAP RATHER THAN AN if.
- *
- * Off developer mode this screen shows General, Firmware and Reset: three
- * short lists of things a person can decide. On, it also shows the sixteen
- * option-table rows, the diagnostics, and the rendered command line.
- *
- * The table's delegate methods are indexed by VISIBLE section, and every one
- * of them switches on VMSettingsSection. Translating once here means none of
- * them has to know the mode exists -- and, more to the point, means a section
- * cannot be shown while its row count comes from a different one, which is
- * exactly the bug an `if (dev) section += 3` scattered through six methods
- * produces.
- */
+// Cell construction and selection use this same mapping. Developer Mode
+// changes only Advanced, never the shape of the everyday settings page.
+- (NSArray<NSNumber *> *)generalRowsInSection:(NSInteger)section {
+    if (section == VMSettingsSectionGeneral)
+        return _advanced
+            ? @[@(VMGeneralRowGraphicsMode), @(VMGeneralRowPackageSetup), @(VMGeneralRowDeveloperMode)]
+            : @[@(VMGeneralRowInterface), @(VMGeneralRowFirmware)];
+    if (section == VMSettingsSectionApps)
+        return @[@(VMGeneralRowJailbreak), @(VMGeneralRowInstallIPA)];
+    if (section == VMSettingsSectionHelp)
+        return @[@(VMGeneralRowManual), @(VMGeneralRowAdvanced)];
+    return nil;
+}
+
 - (void)rebuildVisibleSections {
+    if (!_advanced) {
+        _visible = @[@(VMSettingsSectionGeneral), @(VMSettingsSectionApps), @(VMSettingsSectionHelp)];
+        return;
+    }
     BOOL dev = [[VMSettings sharedSettings] developerMode];
     NSMutableArray<NSNumber *> *v = [NSMutableArray array];
     [v addObject:@(VMSettingsSectionGeneral)];
@@ -362,7 +351,8 @@ static NSString *VMStringFromC(const char *text) {
 - (NSInteger)tableView:(UITableView *)tableView
  numberOfRowsInSection:(NSInteger)section {
     section = [self sectionAt:section];
-    if (section == VMSettingsSectionGeneral) return VMGeneralRowCount;
+    NSArray<NSNumber *> *general = [self generalRowsInSection:section];
+    if (general) return (NSInteger)general.count;
     (void)tableView;
     if (section < VM_OPT_GROUP_COUNT) {
         return (NSInteger)[self optionsInGroup:section].count;
@@ -384,7 +374,8 @@ titleForHeaderInSection:(NSInteger)section {
     if (section < VM_OPT_GROUP_COUNT)
         return VMStringFromC(vm_option_group_title((unsigned)section));
     switch ((VMSettingsSection)section) {
-        case VMSettingsSectionFirmware:    return @"Firmware";
+        case VMSettingsSectionApps:        return @"Guest apps";
+        case VMSettingsSectionFirmware:    return @"Firmware files";
         case VMSettingsSectionDiagnostics: return @"Runtime defaults & diagnostics";
         case VMSettingsSectionCommandLine: return @"Equivalent command line";
         default:                           return nil;
@@ -395,9 +386,7 @@ titleForHeaderInSection:(NSInteger)section {
 titleForFooterInSection:(NSInteger)section {
     section = [self sectionAt:section];
     if (section == VMSettingsSectionGeneral) {
-        return @"App-wide setup and defaults. Controls for an open machine "
-               @"are in its own Machine Settings. Developer Mode adds boot "
-               @"options, the guest console and diagnostics.";
+        return _advanced ? @"Developer Mode reveals boot options and diagnostics." : nil;
     }
     (void)tableView;
 
@@ -431,27 +420,9 @@ titleForFooterInSection:(NSInteger)section {
 
     switch ((VMSettingsSection)section) {
         case VMSettingsSectionFirmware:
-            return [NSString stringWithFormat:
-                    @"The project ships no Apple firmware, bundles none, and "
-                    @"downloads none. The three rows above report whether a "
-                    @"file with the expected name is present in\n\n%@\n\n"
-                    @"Import unpacks an IPSW you already have into exactly "
-                    @"those three files. It cannot finish on its own: every "
-                    @"payload in a 3.x IPSW is encrypted with a key that is "
-                    @"not in the archive, and this app has none of them and "
-                    @"fetches none — it asks you for the ones it needs.\n\n"
-                    @"With all three present, opening a machine boots Apple's "
-                    @"own kernel. The first open makes a writable copy of the "
-                    @"root filesystem beside them — about 450 MB, once — and "
-                    @"runs the built-in test guest while it does; reopen the "
-                    @"machine afterwards. If a boot cannot be started, the "
-                    @"machine says why instead of pretending.\n\n%@",
-                    [_settings firmwareDirectory] ?: @"(no documents directory)",
-                    [VMEngine firmwareReadinessSummary]];
+            return @"Import prepares these files automatically. File presence alone does not verify their contents.";
         case VMSettingsSectionDiagnostics:
-            return @"The instruction cap, background pause and inline console "
-                    @"are defaults for newly opened sessions. The JIT row tests "
-                    @"host capability; it is not an emulator speed switch.";
+            return @"Defaults for newly opened sessions. The JIT test checks host capability; it does not speed up the emulator.";
         case VMSettingsSectionCommandLine:
             return @"What these switches would spell on a tools/bootkernel "
                     "command line, so a phone session and a desktop session can "
@@ -495,56 +466,75 @@ titleForFooterInSection:(NSInteger)section {
          cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     (void)tableView;
     const NSInteger section = [self sectionAt:indexPath.section];
-    if (section == VMSettingsSectionGeneral) {
-        UITableViewCell *cell = [self cellWithIdentifier:@"general"
-                                                   style:UITableViewCellStyleSubtitle];
-        if (indexPath.row == VMGeneralRowManual) {
+    NSArray<NSNumber *> *general = [self generalRowsInSection:section];
+    if (general) {
+        VMGeneralRow row = (VMGeneralRow)general[(NSUInteger)indexPath.row].integerValue;
+        BOOL valueRow = (row == VMGeneralRowInterface || row == VMGeneralRowFirmware) &&
+            !UIContentSizeCategoryIsAccessibilityCategory(self.traitCollection.preferredContentSizeCategory);
+        UITableViewCell *cell = [self cellWithIdentifier:valueRow ? @"general-value" : @"general"
+            style:valueRow ? UITableViewCellStyleValue1 : UITableViewCellStyleSubtitle];
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        if (valueRow)
+            cell.detailTextLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+        if (row == VMGeneralRowFirmware) {
+            cell.textLabel.text = @"Firmware";
+            cell.detailTextLabel.text = [VMFirmwareImporter sharedImporter].isRunning ? @"Preparing…"
+                : [VMFirmwareImporter hasConfiguredFirmware]
+                    ? @"Imported" : @"Setup needed";
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            cell.accessibilityIdentifier = @"s5lbox.settings.firmware";
+        } else if (row == VMGeneralRowAdvanced) {
+            cell.textLabel.text = @"Advanced";
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            cell.accessibilityIdentifier = @"s5lbox.settings.advanced";
+        } else if (row == VMGeneralRowManual) {
             cell.textLabel.text = @"Manual";
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-        } else if (indexPath.row == VMGeneralRowInterface) {
+        } else if (row == VMGeneralRowInterface) {
             cell.textLabel.text = @"Emulator interface";
             cell.detailTextLabel.text = _settings.legacyEmulatorUI ? @"Legacy" : @"Modern";
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             cell.accessibilityIdentifier = @"s5lbox.settings.interface";
-        } else if (indexPath.row == VMGeneralRowGraphicsMode) {
+        } else if (row == VMGeneralRowGraphicsMode) {
             VMGraphicsMode mode = [_settings graphicsModeForNewMachines];
             cell.textLabel.text = @"Graphics for new machines";
             if (mode == VMGraphicsModeSoftware)
                 cell.detailTextLabel.text =
-                    @"CPU software renderer; MBX off (compatibility option)";
+                    @"Software (compatibility)";
             else if (mode == VMGraphicsModeExperimentalMBX)
                 cell.detailTextLabel.text =
-                    @"MBX on; CPU software renderer off (default, experimental)";
+                    @"MBX (experimental)";
             else
                 cell.detailTextLabel.text =
-                    @"Custom developer switches; not a controlled test mode";
+                    @"Custom";
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-        } else if (indexPath.row == VMGeneralRowJailbreak) {
+        } else if (row == VMGeneralRowJailbreak) {
             cell.textLabel.text = @"Jailbreak";
             cell.accessibilityIdentifier = @"s5lbox.settings.jailbreak";
             cell.detailTextLabel.text = self.guestInstallRequest
-                ? @"Install Cydia, or repair and expand a compatible older guest"
-                : @"Return to Machines and open Settings there before installing";
+                ? @"Install or repair Cydia in a virtual machine."
+                : @"Available from Settings on the Machines screen.";
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-        } else if (indexPath.row == VMGeneralRowInstallIPA) {
+        } else if (row == VMGeneralRowInstallIPA) {
             cell.textLabel.text = @"Install IPA";
-            cell.detailTextLabel.text = @"Add a compatible app to a jailbroken guest.";
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             cell.accessibilityIdentifier = @"s5lbox.settings.install-ipa";
-        } else if (indexPath.row == VMGeneralRowPackageSetup) {
+        } else if (row == VMGeneralRowPackageSetup) {
             cell.textLabel.text = @"Set up package manager";
-            cell.detailTextLabel.text = @"One-time setup for an existing jailbroken machine.";
+            cell.detailTextLabel.text = @"For previously jailbroken machines.";
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             cell.accessibilityIdentifier = @"s5lbox.settings.package-setup";
-        } else if (indexPath.row == VMGeneralRowDeveloperMode) {
+        } else if (row == VMGeneralRowDeveloperMode) {
             cell.textLabel.text = @"Developer Mode";
             cell.accessoryType = UITableViewCellAccessoryNone;
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
             UISwitch *sw = [[UISwitch alloc] init];
             sw.on = [[VMSettings sharedSettings] developerMode];
+            sw.accessibilityLabel = cell.textLabel.text;
+            sw.accessibilityIdentifier = @"s5lbox.settings.developer-mode";
             [sw addTarget:self action:@selector(developerModeToggled:)
                  forControlEvents:UIControlEventValueChanged];
             cell.accessoryView = sw;
@@ -632,10 +622,7 @@ titleForFooterInSection:(NSInteger)section {
             if (indexPath.row == VMFirmwareRowImport) {
                 UITableViewCell *cell = [self cellWithIdentifier:kVMPlainCell
                                                            style:UITableViewCellStyleSubtitle];
-                cell.textLabel.text = @"Import from an IPSW";
-                cell.detailTextLabel.text =
-                    @"Unpacks an IPSW you already have into the three files "
-                     "above. Some of them need a key that you supply.";
+                cell.textLabel.text = @"Import IPSW";
                 cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
                 cell.selectionStyle = UITableViewCellSelectionStyleDefault;
                 return cell;
@@ -667,9 +654,8 @@ titleForFooterInSection:(NSInteger)section {
                 UITableViewCell *cell = [self cellWithIdentifier:kVMValueCell
                                                            style:UITableViewCellStyleSubtitle];
                 cell.textLabel.text = @"Instruction cap";
-                cell.detailTextLabel.text = [NSString stringWithFormat:
-                    @"%@  ·  new-session default  ·  tap to change",
-                    VMDescribeInstructionCap([_settings instructionCap])];
+                cell.detailTextLabel.text = VMDescribeInstructionCap([_settings instructionCap]);
+                cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
                 cell.selectionStyle = UITableViewCellSelectionStyleDefault;
                 return cell;
             }
@@ -690,8 +676,7 @@ titleForFooterInSection:(NSInteger)section {
                                                            style:UITableViewCellStyleSubtitle];
                 cell.textLabel.text = @"Console under the screen";
                 cell.detailTextLabel.text =
-                    @"Default for new sessions. Show guest output beneath "
-                    @"the display when Developer Mode is enabled.";
+                    @"Show guest output when Developer Mode is enabled.";
                 UISwitch *t = [[UISwitch alloc] initWithFrame:CGRectZero];
                 t.on = [[VMSettings sharedSettings] inlineConsole];
                 [t addTarget:self action:@selector(inlineConsoleChanged:)
@@ -705,8 +690,7 @@ titleForFooterInSection:(NSInteger)section {
                                                        style:UITableViewCellStyleSubtitle];
             cell.textLabel.text = @"Pause in background";
             cell.detailTextLabel.text =
-                @"Default for new sessions. Recommended: iOS may terminate "
-                @"the app if it continues running in the background.";
+                @"Recommended. iOS may terminate the app if disabled.";
             UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
             toggle.on = [_settings pausesInBackground];
             [toggle addTarget:self
@@ -735,10 +719,10 @@ titleForFooterInSection:(NSInteger)section {
         case VMSettingsSectionReset: {
             UITableViewCell *cell = [self cellWithIdentifier:kVMPlainCell
                                                        style:UITableViewCellStyleSubtitle];
-            cell.textLabel.text = @"Reset to defaults";
+            cell.textLabel.text = @"Reset settings";
             cell.textLabel.textColor = [UIColor systemRedColor];
             cell.detailTextLabel.text =
-                @"Reset app defaults. Does not delete machines or their files.";
+                @"Your machines and files are kept.";
             cell.selectionStyle = UITableViewCellSelectionStyleDefault;
             return cell;
         }
@@ -779,22 +763,32 @@ titleForFooterInSection:(NSInteger)section {
 didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
 
-    if ([self sectionAt:indexPath.section] == VMSettingsSectionGeneral) {
-        [tableView deselectRowAtIndexPath:indexPath animated:YES];
-        if (indexPath.row == VMGeneralRowManual) {
+    NSArray<NSNumber *> *general = [self generalRowsInSection:[self sectionAt:indexPath.section]];
+    if (general) {
+        VMGeneralRow row = (VMGeneralRow)general[(NSUInteger)indexPath.row].integerValue;
+        if (row == VMGeneralRowFirmware) {
+            [self.navigationController pushViewController:[[VMFirmwareImportViewController alloc] init] animated:YES];
+        } else if (row == VMGeneralRowAdvanced) {
+            VMSettingsViewController *advanced = [[VMSettingsViewController alloc] init];
+            advanced->_advanced = YES;
+            advanced.guestInstallRequest = self.guestInstallRequest;
+            advanced.guestIPARequest = self.guestIPARequest;
+            advanced.guestPackageSetupRequest = self.guestPackageSetupRequest;
+            [self.navigationController pushViewController:advanced animated:YES];
+        } else if (row == VMGeneralRowManual) {
             VMManualViewController *m = [[VMManualViewController alloc] init];
             if (self.navigationController)
                 [self.navigationController pushViewController:m animated:YES];
-        } else if (indexPath.row == VMGeneralRowGraphicsMode) {
+        } else if (row == VMGeneralRowGraphicsMode) {
             [self chooseGraphicsMode];
-        } else if (indexPath.row == VMGeneralRowInterface) {
+        } else if (row == VMGeneralRowInterface) {
             [self chooseEmulatorInterface];
-        } else if (indexPath.row == VMGeneralRowJailbreak) {
+        } else if (row == VMGeneralRowJailbreak) {
             [self confirmGuestInstall];
-        } else if (indexPath.row == VMGeneralRowInstallIPA) {
+        } else if (row == VMGeneralRowInstallIPA) {
             void (^request)(void) = [self.guestIPARequest copy];
             if (request) [self dismissViewControllerAnimated:YES completion:request];
-        } else if (indexPath.row == VMGeneralRowPackageSetup) {
+        } else if (row == VMGeneralRowPackageSetup) {
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Set up package manager?"
                 message:@"Adds live package installation to a jailbroken machine. Saved running state is discarded; unsaved work may be lost. Guest files are kept."
                 preferredStyle:UIAlertControllerStyleAlert];
@@ -838,10 +832,8 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 
         case VMSettingsSectionReset: {
             UIAlertController *confirm = [UIAlertController
-                alertControllerWithTitle:@"Reset to defaults"
-                                 message:@"Every switch goes back to the value "
-                                          "tools/bootkernel uses with nothing on "
-                                          "its command line."
+                alertControllerWithTitle:@"Reset settings?"
+                                 message:@"Restore app settings to their defaults? Your machines, firmware and files will not be deleted."
                           preferredStyle:UIAlertControllerStyleAlert];
             /* Weak, then strong inside: the alert retains the block and the
              * block must not retain the controller back. */
@@ -987,14 +979,9 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 - (void)chooseGraphicsMode {
     VMGraphicsMode current = [_settings graphicsModeForNewMachines];
     NSString *message =
-        @"Choose before opening a new machine for the first time. It records "
-        @"this exact graphics pair and reuses it whenever it starts, matching "
-        @"the value "
-        @"written into their writable image. Older machines created before "
-        @"that record existed keep the app-wide setting because their saved "
-        @"option bits cannot be trusted.\n\nMBX is the default for new "
-        @"machines and remains experimental. CPU software is available as "
-        @"a compatibility option. This does not convert an existing disk.";
+        @"New machines use this setting. Existing machines keep their saved graphics mode; "
+        @"older machines without a saved mode follow this default.\n\n"
+        @"MBX is experimental. Software is a compatibility option. Existing disks are not converted.";
     UIAlertController *picker = [UIAlertController
         alertControllerWithTitle:@"Graphics for new machines"
                          message:message

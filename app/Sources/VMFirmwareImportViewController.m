@@ -15,9 +15,8 @@
 /*
  * WHICH SECTIONS EXIST, AND WHY THIS IS A MAP RATHER THAN A RUN OF ifs.
  *
- * Four of the five sections come and go: there is no progress until something
- * is running, no results until something has finished, and no key rows unless
- * the report actually says a key is what is missing. The delegate methods are
+ * There is no progress until something is running, no results until something
+ * has finished, and manual keys are collapsed until requested. The delegate methods are
  * indexed by VISIBLE section, so the translation happens once, in -sectionAt:,
  * and no other method has to know that a section can be absent. The bug that
  * shape prevents is a section drawn from one identity while its row count comes
@@ -40,7 +39,8 @@ typedef NS_ENUM(NSInteger, VMImportSection) {
     VMImportSectionProgress,
     VMImportSectionResults,
     VMImportSectionKeys,
-    VMImportSectionReport
+    VMImportSectionReport,
+    VMImportSectionAdvanced
 };
 
 typedef NS_ENUM(NSInteger, VMImportChooseRow) {
@@ -188,6 +188,7 @@ static UIColor *VMImportStateColor(vm_fw_state_t state) {
     BOOL   _running;
     BOOL   _cancelRequested;
     BOOL   _copiedReport;
+    BOOL   _showManualKeys;
 
     BOOL             _haveReport;
     vm_fw_report_t   _report;
@@ -234,17 +235,16 @@ static BOOL VMProbeFirmware(vm_firmware_boot_state_t *out) {
 
 #pragma mark - Lifecycle
 
-/* Grouped, not inset-grouped, for the same reason as the settings screen: the
- * sections carry long explanatory footers and the extra inset costs a
- * noticeable amount of their width on a phone. */
 - (instancetype)init {
-    return [self initWithStyle:UITableViewStyleGrouped];
+    return [self initWithStyle:UITableViewStyleInsetGrouped];
 }
 
 - (void)viewDidLoad {
     [super viewDidLoad];
 
-    self.title = @"Import firmware";
+    self.title = @"Firmware";
+    self.navigationItem.largeTitleDisplayMode = UINavigationItemLargeTitleDisplayModeNever;
+    self.tableView.accessibilityIdentifier = @"s5lbox.firmware-settings";
 
     /*
      * The shared one. Keys the user typed on a previous visit are still here,
@@ -254,6 +254,10 @@ static BOOL VMProbeFirmware(vm_firmware_boot_state_t *out) {
     _importer = [VMFirmwareImporter sharedImporter];
     _importer.delegate = self;
     _running = [_importer isRunning];
+    // Do not hide overrides that were set earlier in the same app session.
+    _showManualKeys = [_importer haveKeyForArtefact:VM_FW_KERNEL] ||
+        [_importer haveKeyForArtefact:VM_FW_DEVICE_TREE] ||
+        [_importer haveKeyForArtefact:VM_FW_ROOT_FILESYSTEM];
 
     _stage         = VM_FW_STAGE_OPENING;
     _stageArtefact = VM_FW_KERNEL;
@@ -264,15 +268,14 @@ static BOOL VMProbeFirmware(vm_firmware_boot_state_t *out) {
     self.tableView.estimatedSectionHeaderHeight = 28.0;
     self.tableView.estimatedSectionFooterHeight = 44.0;
 
-    /* The first thing on the screen is what this cannot do. */
     _intro = [[UILabel alloc] initWithFrame:CGRectZero];
     _intro.numberOfLines = 0;
     _intro.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
     _intro.adjustsFontForContentSizeCategory = YES;
     _intro.textColor = [UIColor secondaryLabelColor];
     _intro.text =
-        @"Import iPhone OS 3.1.3 (7E18) for iPhone 3G. Public keys are selected "
-        @"automatically; no key entry is needed. No Apple firmware is included or downloaded.";
+        @"iPhone OS 3.1.3 (7E18) · iPhone 3G\n"
+        @"Decryption keys are automatic. Apple firmware is not included or downloaded.";
     UIView *header = [[UIView alloc] initWithFrame:CGRectZero];
     [header addSubview:_intro];
     self.tableView.tableHeaderView = header;
@@ -339,7 +342,10 @@ static BOOL VMProbeFirmware(vm_firmware_boot_state_t *out) {
     /* Advanced overrides remain available independently of the last report;
      * ordinary imports resolve the bundled public keys without these rows. */
     _keyRows = @[@(VM_FW_KERNEL), @(VM_FW_DEVICE_TREE), @(VM_FW_ROOT_FILESYSTEM)];
-    if (!_running) [visible addObject:@(VMImportSectionKeys)];
+    if (!_running) {
+        [visible addObject:@(VMImportSectionAdvanced)];
+        if (_showManualKeys) [visible addObject:@(VMImportSectionKeys)];
+    }
 
     if (_haveReport) [visible addObject:@(VMImportSectionReport)];
     _visible = [visible copy];
@@ -374,6 +380,7 @@ static BOOL VMProbeFirmware(vm_firmware_boot_state_t *out) {
     (void)tableView;
     switch ((VMImportSection)[self sectionAt:section]) {
         case VMImportSectionReadiness: return 1;
+        case VMImportSectionAdvanced: return 1;
         case VMImportSectionChoose:   return _chooseRowCount;
         case VMImportSectionProgress: return VMImportProgressRowCount;
         case VMImportSectionResults:  return VM_FW_ARTEFACT_COUNT + 1;
@@ -389,7 +396,7 @@ titleForHeaderInSection:(NSInteger)section {
     switch ((VMImportSection)[self sectionAt:section]) {
         case VMImportSectionProgress: return @"Running";
         case VMImportSectionResults:  return @"Results";
-        case VMImportSectionKeys:     return @"Advanced · Manual key overrides";
+        case VMImportSectionKeys:     return @"Manual key overrides";
         case VMImportSectionChoose:
         case VMImportSectionReport:
         default:                      return nil;
@@ -408,26 +415,16 @@ titleForFooterInSection:(NSInteger)section {
             return @"Cancel discards this attempt. Previously prepared firmware is kept.";
 
         case VMImportSectionResults:
-            return [NSString stringWithFormat:
-                    @"Files are written to\n\n%@\n\n"
-                    @"\"verified\" means the bytes are identical to the "
-                    @"known-good file for this build. \"extracted, "
-                    @"unverified\" means it was produced, but S5LBox holds no "
-                    @"reference hash for this build to check it against.",
-                    [[VMSettings sharedSettings] firmwareDirectory]
-                        ?: @"(no documents directory)"];
+            return @"Verified files match the reference hashes for this build. Unverified files have not passed that check.";
 
         case VMImportSectionReadiness:
-            return @"Firmware is shared. Each machine creates its own writable disk on first boot.";
+            return @"Each machine prepares its own disk on first boot.";
 
         case VMImportSectionKeys:
-            return @"Optional overrides, held only for this app session. Saving an override "
-                    "retries the selected IPSW immediately. Use automatic keys to clear overrides.";
+            return @"Optional, for this app session only. Saving a key retries the selected IPSW.";
 
         case VMImportSectionReport:
-            return @"Everything above as plain text, including the SHA-256 of "
-                    "whatever was produced. Written for pasting into a bug "
-                    "report.";
+            return @"Includes technical details and file hashes for troubleshooting.";
 
         default:
             return nil;
@@ -535,28 +532,20 @@ estimatedHeightForRowAtIndexPath:(NSIndexPath *)indexPath {
                     @"there is no Documents directory to look in";
                 return cell;
             }
-            switch (st.readiness) {
-                /*
-                 * Both mean the same thing from here, because this screen
-                 * cannot see a machine: the three shared files are present.
-                 * What happens NEXT is per-machine, and saying so plainly is
-                 * what stops "Preparing iPhone OS" reading as a fault.
-                 */
-                case VM_FW_BOOT_READY:
-                case VM_FW_BOOT_NEEDS_WORK_IMAGE:
-                    cell.textLabel.text = @"Firmware imported";
-                    cell.textLabel.textColor = [UIColor systemGreenColor];
-                    cell.detailTextLabel.text =
-                        @"Open a machine to start iPhone OS. On first boot its writable disk "
-                        @"is prepared automatically, with progress shown on screen.";
-                    break;
-                case VM_FW_BOOT_INCOMPLETE:
-                default:
-                    cell.textLabel.text = @"Not ready -- the synthetic guest "
-                                          @"will run instead";
-                    cell.textLabel.textColor = [UIColor systemOrangeColor];
-                    cell.detailTextLabel.text = VMStringFromC(st.detail);
-                    break;
+            // Match onboarding and App Settings, including incomplete file
+            // sizes. Availability is not a claim of cryptographic validation;
+            // the importer and boot path perform that check independently.
+            if ([VMFirmwareImporter hasConfiguredFirmware]) {
+                cell.textLabel.text = @"Firmware imported";
+                cell.textLabel.textColor = [UIColor systemGreenColor];
+                cell.detailTextLabel.text = @"Open a machine to start iPhone OS.";
+            } else {
+                BOOL partial = st.kernel_present || st.devicetree_present || st.rootfs_present;
+                cell.textLabel.text = partial ? @"Firmware incomplete" : @"Firmware needed";
+                cell.textLabel.textColor = [UIColor systemOrangeColor];
+                cell.detailTextLabel.text = partial
+                    ? @"Import the supported IPSW again to repair missing or incomplete files."
+                    : @"Import an IPSW to set up iPhone OS.";
             }
             return cell;
         }
@@ -566,7 +555,7 @@ estimatedHeightForRowAtIndexPath:(NSIndexPath *)indexPath {
                 [self cellWithIdentifier:kVMImportPlainCell
                                    style:UITableViewCellStyleSubtitle];
             if (row == VMImportChooseRowAgain && _chooseRowCount > 1) {
-                cell.textLabel.text = @"Import that file again";
+                cell.textLabel.text = @"Import again";
                 cell.detailTextLabel.text = _pickedURL.lastPathComponent
                     ?: @"the file you chose";
                 cell.selectionStyle = UITableViewCellSelectionStyleDefault;
@@ -576,13 +565,13 @@ estimatedHeightForRowAtIndexPath:(NSIndexPath *)indexPath {
                 NSArray<NSString *> *found =
                     [[VMSettings sharedSettings] detectedArchivePaths];
                 if (found.count == 0) {
-                    cell.textLabel.text = @"No IPSW in the firmware folder";
+                    cell.textLabel.text = @"No IPSW found";
                     cell.textLabel.textColor = [UIColor secondaryLabelColor];
                     cell.detailTextLabel.text =
-                        @"copy one into S5LBox > firmware in the Files app";
+                        @"S5LBox > firmware in Files";
                     cell.selectionStyle = UITableViewCellSelectionStyleNone;
                 } else {
-                    cell.textLabel.text = @"Detect IPSW";
+                    cell.textLabel.text = @"Import from firmware folder";
                     cell.detailTextLabel.text = found.count == 1
                         ? [found.firstObject lastPathComponent]
                         : [NSString stringWithFormat:@"%@ and %lu more",
@@ -596,13 +585,12 @@ estimatedHeightForRowAtIndexPath:(NSIndexPath *)indexPath {
                 }
                 return cell;
             }
-            cell.textLabel.text = @"Choose an IPSW...";
+            cell.textLabel.text = @"Choose IPSW";
             if (_running) {
                 cell.textLabel.textColor = [UIColor secondaryLabelColor];
-                cell.detailTextLabel.text = @"an import is already running";
+                cell.detailTextLabel.text = @"Import in progress.";
             } else {
-                cell.detailTextLabel.text =
-                    @"opens the Files picker; the file is read where it is";
+                cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
                 cell.selectionStyle = UITableViewCellSelectionStyleDefault;
             }
             return cell;
@@ -626,9 +614,7 @@ estimatedHeightForRowAtIndexPath:(NSIndexPath *)indexPath {
             cell.textLabel.text = _cancelRequested ? @"Cancelling" : @"Cancel";
             cell.textLabel.textColor = _cancelRequested
                 ? [UIColor secondaryLabelColor] : [UIColor systemRedColor];
-            cell.detailTextLabel.text = _cancelRequested
-                ? @"waiting for the current block to finish"
-                : @"stops at the next block and deletes what was written";
+            cell.detailTextLabel.text = _cancelRequested ? @"Finishing the current step…" : nil;
             if (!_cancelRequested)
                 cell.selectionStyle = UITableViewCellSelectionStyleDefault;
             return cell;
@@ -666,6 +652,21 @@ estimatedHeightForRowAtIndexPath:(NSIndexPath *)indexPath {
                 ? VMStringFromC(artefact->detail)
                 : [NSString stringWithFormat:@"target file name \"%@\"",
                    VMStringFromC(vm_fw_artefact_filename(which))];
+            return cell;
+        }
+
+        case VMImportSectionAdvanced: {
+            UITableViewCell *cell = [self cellWithIdentifier:kVMImportPlainCell
+                style:UITableViewCellStyleSubtitle];
+            cell.textLabel.text = _showManualKeys ? @"Hide manual keys" : @"Manual keys";
+            if ([_importer haveKeyForArtefact:VM_FW_KERNEL] ||
+                [_importer haveKeyForArtefact:VM_FW_DEVICE_TREE] ||
+                [_importer haveKeyForArtefact:VM_FW_ROOT_FILESYSTEM])
+                cell.detailTextLabel.text = @"Manual overrides are active.";
+            cell.accessibilityIdentifier = @"s5lbox.firmware-import.manual-keys";
+            cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+            cell.accessoryType = _showManualKeys ? UITableViewCellAccessoryNone
+                : UITableViewCellAccessoryDisclosureIndicator;
             return cell;
         }
 
@@ -724,6 +725,11 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 
     const NSInteger row = indexPath.row;
     switch ((VMImportSection)[self sectionAt:indexPath.section]) {
+        case VMImportSectionAdvanced:
+            if (_running) return;
+            _showManualKeys = !_showManualKeys;
+            [self refresh];
+            return;
         case VMImportSectionChoose:
             if (_running) return;
             if (row == VMImportChooseRowDetect) {

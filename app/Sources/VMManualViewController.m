@@ -163,25 +163,14 @@ typedef struct {
               @"in Files first, then choose the local copy." }];
 
     [e addObject:@{ @"h": @"App Settings",
-        @"b": dev
-            ? @"Developer mode is ON, so App Settings shows the full option table: "
-              @"sixteen switches that mirror the desktop tool exactly, plus "
-              @"the instruction cap and the diagnostics pages.\n\nEach row says "
-              @"whether it reaches the boot, is fixed into a work image, or "
-              @"is unavailable here. That answer comes from the same mapping "
-              @"the engine uses rather than a separate UI promise. None "
-              @"of them changes the built-in test program, which has no device "
-              @"tree to configure.\n\nThe screen also renders them as a command "
-              @"line you can run on the desktop, where all sixteen are resolved."
-            : @"App Settings is deliberately short. The switches that control how a "
-              @"real firmware boot is set up — which pieces of hardware the "
-              @"guest is told about, which compatibility fixes are applied — "
-              @"live behind Developer Mode.\n\nThey are not hidden because they "
-              @"are dangerous. Some are experiments, some describe hardware "
-              @"that remains absent, and they only matter once you have "
-              @"imported firmware. "
-              @"They are hidden because the first thing you meet should not be "
-              @"a list of device-tree paths." }];
+        @"b": @"App Settings contains the emulator interface, firmware import, "
+              @"jailbreak and IPA installation. Firmware import selects the public "
+              @"keys automatically for iPhone OS 3.1.3 (7E18), iPhone 3G. "
+              @"Manual keys remain available on the Firmware screen.\n\n"
+              @"Advanced contains graphics defaults, package-manager setup and "
+              @"Reset settings. Turn on Developer Mode there to reveal boot "
+              @"options, session defaults and diagnostics. Each boot option "
+              @"explains whether it takes effect or is fixed into an existing disk." }];
 
     [e addObject:@{ @"h": @"Developer mode",
         @"b": @"Turning it on adds: the full sixteen-switch option table, the "
@@ -212,7 +201,7 @@ typedef struct {
 
     [e addObject:@{ @"h": @"Guest networking",
         @"b": @"Guest networking and internet routing are on by default for "
-              @"new machines. App Settings in Developer Mode lets you turn "
+              @"new machines. App Settings → Advanced, with Developer Mode on, lets you turn "
               @"them off before the first open. Explicit saved choices are "
               @"preserved. The networking service is installed when the guest "
               @"disk is prepared; changing defaults does not add it to an "

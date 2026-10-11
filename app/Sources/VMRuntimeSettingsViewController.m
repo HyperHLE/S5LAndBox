@@ -17,13 +17,13 @@ typedef NS_ENUM(NSInteger, VMRuntimeSection) {
 @implementation VMRuntimeSettingsViewController
 
 - (instancetype)init {
-    return [self initWithStyle:UITableViewStyleGrouped];
+    return [self initWithStyle:UITableViewStyleInsetGrouped];
 }
 
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"Machine Settings";
-    self.navigationController.navigationBar.prefersLargeTitles = YES;
+    self.navigationItem.largeTitleDisplayMode = UINavigationItemLargeTitleDisplayModeNever;
     self.tableView.accessibilityIdentifier = @"s5lbox.machine-settings";
     self.tableView.rowHeight = UITableViewAutomaticDimension;
     self.tableView.estimatedRowHeight = 65;
@@ -73,11 +73,11 @@ typedef NS_ENUM(NSInteger, VMRuntimeSection) {
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     (void)tableView;
     if (section == VMRuntimeSectionSession)
-        return @"Changes apply only to this open session. App defaults, firmware and jailbreak are in App Settings on Machines.";
+        return @"Changes apply to this session only.";
     if (section == VMRuntimeSectionPower)
-        return @"Save & close keeps your place. Shut down powers off iPhone OS for a fresh boot next time.";
+        return @"Save & close keeps your place. Shut down starts fresh next time.";
     if (section == VMRuntimeSectionDeveloper)
-        return @"These controls do not change defaults for other machines.";
+        return nil;
     return nil;
 }
 
@@ -140,13 +140,15 @@ typedef NS_ENUM(NSInteger, VMRuntimeSection) {
     }
     BOOL enabled = owner != nil;
     if (path.section == VMRuntimeSectionApps) {
-        cell.textLabel.text = path.row == 0 ? @"Install IPA…" : @"Packages…";
+        cell.textLabel.text = path.row == 0 ? @"Install IPA" : @"Packages";
         enabled = self.usbTransport && [owner runtimeCanControlGuest] && ![owner runtimePaused];
-        cell.detailTextLabel.text = [owner runtimePaused] ? @"Resume the guest first." : @"Choose an app from your IPA Library. Uses virtual USB, without shutting down.";
+        // Explain an unavailable action, rather than repeat its label when it works.
+        cell.detailTextLabel.text = [owner runtimePaused] ? @"Resume the guest first."
+            : ![owner runtimeCanControlGuest] ? @"Start the guest first."
+            : !self.usbTransport ? @"Guest connection unavailable." : nil;
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
         cell.accessibilityIdentifier = @"s5lbox.machine-settings.ipa";
         if (path.row == 1) {
-            cell.detailTextLabel.text = [owner runtimePaused] ? @"Resume the guest first." : @"Browse sources and install tweaks in the running guest.";
             cell.accessibilityIdentifier = @"s5lbox.machine-settings.packages";
         }
     } else if (path.section == VMRuntimeSectionSnapshots) {
@@ -163,12 +165,12 @@ typedef NS_ENUM(NSInteger, VMRuntimeSection) {
             enabled = [owner runtimeCanShutDown];
             cell.accessibilityIdentifier = @"s5lbox.machine-settings.shutdown";
         } else if (path.row == VMRuntimeActionRestart) {
-            cell.textLabel.text = @"Restart guest…";
+            cell.textLabel.text = @"Restart guest";
             cell.detailTextLabel.text = @"Unsaved work may be lost.";
             cell.textLabel.textColor = [UIColor systemRedColor];
             cell.accessibilityIdentifier = @"s5lbox.machine-settings.restart";
         } else {
-            cell.textLabel.text = @"Force Power Off…";
+            cell.textLabel.text = @"Force Power Off";
             cell.detailTextLabel.text = @"Works during boot. Unsaved work may be lost.";
             enabled = [owner runtimeCanForcePowerOff];
             cell.textLabel.textColor = [UIColor systemRedColor];
