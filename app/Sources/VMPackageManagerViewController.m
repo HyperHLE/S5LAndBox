@@ -165,7 +165,7 @@ static UIImage *Tile(NSString *symbol) {
     NSString *_message;
     BOOL _busy, _idleWasDisabled;
     BOOL _connecting, _needsSetup, _closed, _loadedSources;
-    BOOL _connectionTimedOut;
+    BOOL _connectionTimedOut, _finishingSetup;
     NSTimeInterval _connectionDeadline;
     NSString *_instanceID;
     NSUInteger _connectionGeneration;
@@ -175,7 +175,12 @@ static UIImage *Tile(NSString *symbol) {
     __weak VMPackageScreen *_operation;
 }
 - (instancetype)initWithTransport:(VMUSBTransport *)transport instanceID:(NSString *)identifier {
+    return [self initWithTransport:transport instanceID:identifier finishingSetup:NO];
+}
+- (instancetype)initWithTransport:(VMUSBTransport *)transport instanceID:(NSString *)identifier
+                  finishingSetup:(BOOL)finishingSetup {
     self=[super init]; if (!self) return nil;
+    _finishingSetup=finishingSetup;
     _catalog=[VMPackageCatalog new]; _repository=[VMPackageRepository new];
     _bridge=[[VMPackageBridge alloc] initWithTransport:transport instanceID:identifier];
     _instanceID=[identifier copy];
@@ -242,15 +247,18 @@ static UIImage *Tile(NSString *symbol) {
         _connectionTimedOut=NO;
         [self renderAll]; return;
     }
-    if (!_connectionDeadline) _connectionDeadline=NSProcessInfo.processInfo.systemUptime+120;
+    // A newly jailbroken guest still runs its one-time first-boot jobs. On
+    // older hosts that can take several minutes; regular reconnects stay short.
+    if (!_connectionDeadline) _connectionDeadline=NSProcessInfo.processInfo.systemUptime+(_finishingSetup ? 600 : 120);
     if (NSProcessInfo.processInfo.systemUptime>=_connectionDeadline) {
         _connectionTimedOut=YES;
-        _message=@"Check that iPhone OS has finished starting, then try again. If it still cannot connect, repair setup.";
+        _message=@"Make sure iPhone OS has started and is unlocked, then try again.";
         [self renderAll]; return;
     }
     _connecting=YES; _bridge.canceled=NO;
     NSUInteger generation=++_connectionGeneration;
-    _message=@"Waiting for iPhone OS to finish starting. Packages will open automatically.";
+    _message=_finishingSetup ? @"Finishing iPhone OS setup. This first start can take several minutes."
+        : @"Packages will connect when iPhone OS is ready.";
     [self renderAll];
     dispatch_async(_queue,^{
         NSError *error=nil; BOOL connected=[self readInstalled:&error];
@@ -260,6 +268,7 @@ static UIImage *Tile(NSString *symbol) {
             if (connected) {
                 self->_connectionDeadline=0;
                 self->_connectionTimedOut=NO;
+                self->_finishingSetup=NO;
                 self->_message=@"Connected to your guest.";
                 [self renderAll];
                 if (!self->_loadedSources) [self refresh];
