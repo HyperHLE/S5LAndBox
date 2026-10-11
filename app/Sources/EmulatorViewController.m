@@ -717,7 +717,7 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
                 void (^setup)(void) = [screen.packageSetupRequest copy];
                 screen->_packageSetupRequested = NO;
                 [screen.navigationController popViewControllerAnimated:NO];
-                setup();
+                dispatch_async(dispatch_get_main_queue(), setup);
                 return;
             }
             [screen.navigationController popViewControllerAnimated:YES];
@@ -1050,7 +1050,7 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
         VMPackageManagerViewController *workspace = weakPackages;
         if (!owner || !workspace || ![owner runtimeCanForcePowerOff] || !owner.packageSetupRequest) return;
         UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"Set up Packages?"
-            message:@"The guest will power off and restart. Unsaved guest work may be lost; guest files are kept. Packages will reopen automatically."
+            message:@"Restart this machine to set up Packages. Unsaved work may be lost."
             preferredStyle:UIAlertControllerStyleAlert];
         [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
         [confirm addAction:[UIAlertAction actionWithTitle:@"Power Off & Set Up" style:UIAlertActionStyleDestructive
@@ -1390,15 +1390,8 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
     if (f > 1.0) f = 1.0;
     _prepareBar.hidden = NO;
     _prepareBar.progress = (float)f;
-    /* ASCII only, deliberately. The first version of these two literals was
-     * written through a shell heredoc that turned every "\n" into a real
-     * newline, which left the string unterminated and dropped an em dash into
-     * code -- "error: unexpected character <U+2014>". Plain ASCII and explicit
-     * escapes cannot fail that way, and no glyph here needed to be typographic. */
     _prepareLabel.text = [NSString stringWithFormat:
-        _legacyInterface ? @"Preparing iPhone OS\n%.0f%% - copying the root filesystem\n"
-         "You can leave this screen; it keeps going."
-        : @"Preparing iPhone OS\nCopying filesystem: %.0f%%\nYou can leave this screen.", f * 100.0];
+        @"Preparing iPhone OS\nCopying filesystem: %.0f%%", f * 100.0];
 }
 
 - (void)viewDidLayoutSubviews {

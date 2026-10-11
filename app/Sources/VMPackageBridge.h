@@ -1,5 +1,6 @@
 #import <Foundation/Foundation.h>
 @class VMUSBTransport;
+typedef void (^VMPackageSetupProgress)(NSString *stage, double fraction);
 @interface VMPackageBridge : NSObject
 /* Local preflight only: a capability does not prove that the guest is ready. */
 + (BOOL)hasCapabilityForInstance:(NSString *)identifier;
@@ -18,4 +19,7 @@
 // Caller must own a stopped machine, have explicit force-off consent, and
 // finish the existing jailbreak builder/recovery before invoking this method.
 + (BOOL)prepareStoppedMachine:(NSString *)directory instanceID:(NSString *)identifier error:(NSError **)error;
+// Synchronous worker callback. fraction is phase-local, or -1 if indeterminate.
++ (BOOL)prepareStoppedMachine:(NSString *)directory instanceID:(NSString *)identifier
+                    progress:(VMPackageSetupProgress)progress error:(NSError **)error;
 @end

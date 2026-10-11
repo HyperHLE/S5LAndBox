@@ -10,6 +10,18 @@
 #include "sha256.h"
 #include <arpa/inet.h>
 
+typedef struct {
+    __unsafe_unretained VMPackageSetupProgress progress;
+    NSTimeInterval last;
+} PackageCopyProgress;
+static void PackageCopy(void *context, uint64_t done, uint64_t total) {
+    PackageCopyProgress *state = context;
+    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+    if (!state->progress || (now - state->last < 0.1 && done != total)) return;
+    state->last = now;
+    state->progress(@"Preparing package files", total ? (double)done / total : -1);
+}
+
 static NSData *Capability(NSString *identifier, BOOL create, NSError **error) {
     if (identifier.length != 16 || [identifier rangeOfCharacterFromSet:[[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet]].location != NSNotFound) {
         if (error) *error = VMPackageError(@"Invalid machine identity."); return nil;
@@ -159,8 +171,19 @@ static NSData *Capability(NSString *identifier, BOOL create, NSError **error) {
     return ok;
 }
 + (BOOL)prepareStoppedMachine:(NSString *)directory instanceID:(NSString *)identifier error:(NSError **)error {
+    return [self prepareStoppedMachine:directory instanceID:identifier progress:nil error:error];
+}
++ (BOOL)prepareStoppedMachine:(NSString *)directory instanceID:(NSString *)identifier
+                    progress:(VMPackageSetupProgress)progress error:(NSError **)error {
     if (NSThread.isMainThread) { if (error) *error = VMPackageError(@"Guest preparation requires a worker thread."); return NO; }
-    NSData *token = Capability(identifier,YES,error); if (!token) return NO;
+    if (progress) progress(@"Checking machine", -1);
+    // Check eligibility before creating credentials. A rejected stock machine
+    // must not later look like one whose package service is merely starting.
+    char detail[1200] = {0}; const char *work = directory.fileSystemRepresentation;
+    uint8_t manifest[32];
+    if (vm_guest_install_probe(work,manifest,detail,sizeof detail) != VM_GUEST_INSTALL_PROBE_VALID) {
+        if (error) *error = VMPackageError(@"Jailbreak this machine before setting up Packages."); return NO;
+    }
     NSURL *binaryURL = [NSBundle.mainBundle URLForResource:@"s5lbox-package-service" withExtension:nil];
     if (!binaryURL) { if (error) *error=VMPackageError(@"This build is missing its guest package helper."); return NO; }
     NSData *binary = [NSData dataWithContentsOfURL:binaryURL options:0 error:error]; if (!binary.length) return NO;
@@ -179,19 +202,15 @@ static NSData *Capability(NSString *identifier, BOOL create, NSError **error) {
         if (!bytes) return NO; [legacyPlists addObject:bytes];
     }
     rootfs_work_file_rewrite_t rewrite={0}; BOOL needsRewrite=NO;
-    NSArray *files = @[@[program,binary,@0755],@[[root stringByAppendingPathComponent:@"capability"],token,@0600],
-        @[@"/System/Library/LaunchDaemons/com.j0shua.s5lbox.packages-v1.plist",plist,@0644]];
     NSString *live = [directory stringByAppendingPathComponent:@"rootfs-work.img"];
-    char detail[1200] = {0}; const char *work = directory.fileSystemRepresentation;
-    uint8_t manifest[32];
-    if (vm_guest_install_probe(work,manifest,detail,sizeof detail) != VM_GUEST_INSTALL_PROBE_VALID) {
-        if (error) *error = VMPackageError(@"Prepare a jailbroken machine first."); return NO;
-    }
     // Strict read-only validation, never the allocation/backlink repair path.
     rootfs_work_result_t check;
     if (rootfs_work_validate_source_ex(live.fileSystemRepresentation,true,&check) != ROOTFS_WORK_OK) {
         if (error) *error = VMPackageError([NSString stringWithUTF8String:check.detail]); return NO;
     }
+    NSData *token = Capability(identifier,YES,error); if (!token) return NO;
+    NSArray *files = @[@[program,binary,@0755],@[[root stringByAppendingPathComponent:@"capability"],token,@0600],
+        @[@"/System/Library/LaunchDaemons/com.j0shua.s5lbox.packages-v1.plist",plist,@0644]];
     rootfs_work_entry_t entries[4] = {0}; size_t count = 1;
     entries[0].kind=ROOTFS_WORK_ENTRY_DIRECTORY; entries[0].path=root.UTF8String;
     entries[0].permissions=0700; entries[0].existing_policy=ROOTFS_WORK_EXISTING_REUSE_DIRECTORY;
@@ -217,7 +236,10 @@ static NSData *Capability(NSString *identifier, BOOL create, NSError **error) {
             entries[count].content=data.bytes; entries[count].content_size=data.length; entries[count].permissions=mode; count++;
         }
     }
-    if (count == 1 && !needsRewrite) return YES;
+    if (count == 1 && !needsRewrite) {
+        if (progress) progress(@"Package files verified", 1);
+        return YES;
+    }
     char snapshots[VM_GUEST_INSTALL_PATH_CAPACITY]; vm_snapshot_info_t items[VM_SNAPSHOT_MAX]; size_t n=0;
     if (vm_snapshot_dir(work,snapshots,sizeof snapshots) != VM_SNAPSHOT_OK ||
         vm_snapshot_list(snapshots,items,VM_SNAPSHOT_MAX,&n,detail,sizeof detail) != VM_SNAPSHOT_OK || n) {
@@ -230,15 +252,21 @@ static NSData *Capability(NSString *identifier, BOOL create, NSError **error) {
     }
     rootfs_work_options_t options={0}; options.preserve_fstab=true; options.allow_unclean_source=true;
     options.entries=entries; options.entry_count=count;
+    __attribute__((objc_precise_lifetime)) VMPackageSetupProgress copyProgress = [progress copy];
+    PackageCopyProgress progressState = {copyProgress, 0};
+    options.progress=PackageCopy; options.progress_ctx=&progressState;
+    if (progress) progress(@"Preparing package files", 0);
     if (needsRewrite) { options.file_rewrites=&rewrite; options.file_rewrite_count=1; }
     if (rootfs_work_create(live.fileSystemRepresentation,stage,&options,&check) != ROOTFS_WORK_OK || !check.published) {
         vm_guest_app_discard_stage(work,NULL,0);
         if (error) *error = VMPackageError([NSString stringWithUTF8String:check.detail]); return NO;
     }
     unsigned char identity[32]; ios3_sha256(binary.bytes,binary.length,identity);
+    if (progress) progress(@"Finishing setup", -1);
     if (vm_guest_app_publish(work,identity,&transaction,detail,sizeof detail) != VM_GUEST_INSTALL_OK || !transaction.committed) {
         if (error) *error = VMPackageError([NSString stringWithUTF8String:detail]); return NO;
     }
+    if (progress) progress(@"Package files verified", 1);
     return YES;
 }
 @end

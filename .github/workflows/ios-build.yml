@@ -223,6 +223,7 @@ jobs:
             app/Sources/EmulatorViewController.m app/Sources/VMHardwareButton.m \
             app/Sources/VMDeviceControlsViewController.m app/Sources/VMSettingsViewController.m \
             app/Sources/VMSetupViewController.m app/Sources/VMFirmwareImportViewController.m \
+            app/Sources/VMGuestInstallViewController.m \
             app/Sources/VMFirmwareImporter.m app/Sources/VMFirmwareStore.m \
             app/Sources/VMFirmwareDownloader.m
 
