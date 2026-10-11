@@ -18,7 +18,7 @@
     UIActivityIndicatorView *_spinner;
     UIButton *_primary, *_chooseAnother;
     BOOL _ready;
-    BOOL _manualAttempt, _keepsAwake, _wasIdleDisabled;
+    BOOL _manualAttempt;
 }
 
 static UILabel *SetupLabel(NSString *text, UIFontTextStyle style) {
@@ -240,7 +240,6 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
 
 - (void)dealloc {
     [NSNotificationCenter.defaultCenter removeObserver:self];
-    if (_keepsAwake) UIApplication.sharedApplication.idleTimerDisabled = _wasIdleDisabled;
 }
 - (void)downloadChanged:(NSNotification *)notification {
     (void)notification;
@@ -274,13 +273,6 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
     vm_fw_report_t report;
     BOOL haveReport = [_importer getLastReport:&report];
     BOOL failed = !running && !_ready && (downloadFailed || (haveReport && !vm_fw_report_is_verified(&report)));
-    if (running != _keepsAwake) {
-        if (running) {
-            _wasIdleDisabled = UIApplication.sharedApplication.idleTimerDisabled;
-            UIApplication.sharedApplication.idleTimerDisabled = YES;
-        } else UIApplication.sharedApplication.idleTimerDisabled = _wasIdleDisabled;
-        _keepsAwake = running;
-    }
     self.modalInPresentation = running;
     self.navigationController.modalInPresentation = running;
     self.navigationItem.leftBarButtonItem.title = running ? @"Cancel" : @"Later";
