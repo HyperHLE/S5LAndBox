@@ -2,6 +2,7 @@
 // Copyright (c) 2026 j0shua-SYSON. MIT licensed.
 #import "VMSetupViewController.h"
 #import "VMFirmwareImporter.h"
+#import "VMFirmwareDownloader.h"
 #import "VMSettingsViewController.h"
 #include <math.h>
 
@@ -10,12 +11,14 @@
 
 @implementation VMSetupViewController {
     VMFirmwareImporter *_importer;
+    VMFirmwareDownloader *_downloader;
     UILabel *_status, *_detail, *_file, *_hint;
     UIImageView *_statusIcon;
     UIProgressView *_progress;
     UIActivityIndicatorView *_spinner;
     UIButton *_primary, *_chooseAnother;
     BOOL _ready;
+    BOOL _manualAttempt, _keepsAwake, _wasIdleDisabled;
 }
 
 static UILabel *SetupLabel(NSString *text, UIFontTextStyle style) {
@@ -68,6 +71,7 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
         style:UIBarButtonItemStylePlain target:self action:@selector(settingsTapped)];
     self.navigationItem.rightBarButtonItem.accessibilityLabel = @"Settings";
     _importer = VMFirmwareImporter.sharedImporter;
+    _downloader = VMFirmwareDownloader.sharedDownloader;
 
     UIScrollView *scroll = [UIScrollView new];
     scroll.translatesAutoresizingMaskIntoConstraints = NO;
@@ -194,7 +198,7 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
     _progress.accessibilityLabel = @"Firmware preparation progress";
     [contents addArrangedSubview:_progress];
     [stack addArrangedSubview:card];
-    _hint = SetupLabel(@"Keep S5LBox open while preparing firmware.", UIFontTextStyleFootnote);
+    _hint = SetupLabel(@"Keep S5LBox open.", UIFontTextStyleFootnote);
     _hint.textColor = UIColor.secondaryLabelColor;
     _hint.textAlignment = NSTextAlignmentCenter;
     [stack addArrangedSubview:_hint];
@@ -214,7 +218,8 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
     _primary.accessibilityIdentifier = @"s5lbox.setup.primary";
     [actions addArrangedSubview:_primary];
     _chooseAnother = [UIButton buttonWithType:UIButtonTypeSystem];
-    [_chooseAnother setTitle:@"Choose another IPSW" forState:UIControlStateNormal];
+    [_chooseAnother setTitle:@"Import IPSW" forState:UIControlStateNormal];
+    _chooseAnother.accessibilityIdentifier = @"s5lbox.setup.import";
     _chooseAnother.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
     _chooseAnother.titleLabel.adjustsFontForContentSizeCategory = YES;
     _chooseAnother.titleLabel.numberOfLines = 0;
@@ -225,12 +230,24 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
     [actions addArrangedSubview:_chooseAnother];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(becameActive)
         name:UIApplicationDidBecomeActiveNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(downloadChanged:)
+        name:VMFirmwareDownloadDidChangeNotification object:_downloader];
 }
 
-- (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; }
+- (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+    if (_keepsAwake) UIApplication.sharedApplication.idleTimerDisabled = _wasIdleDisabled;
+}
+- (void)downloadChanged:(NSNotification *)notification {
+    (void)notification;
+    [self refresh];
+    if (!_downloader.running)
+        UIAccessibilityPostNotification(UIAccessibilityAnnouncementNotification, _status.text);
+}
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     _importer.delegate = self;
+    if (_importer.isRunning && _downloader.phase != VMFirmwareDownloadImporting) _manualAttempt = YES;
     [self refresh];
     [_importer replayStateToDelegate];
 }
@@ -241,33 +258,61 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
 - (void)becameActive {
     if (!self.view.window || self.presentedViewController || self.navigationController.topViewController != self) return;
     _importer.delegate = self;
-    [_importer importDetectedIPSWIfNeeded];
+    if (!_downloader.running && [_importer importDetectedIPSWIfNeeded]) _manualAttempt = YES;
     [self refresh];
 }
 - (void)refresh {
-    BOOL running = _importer.isRunning;
+    BOOL running = _importer.isRunning || _downloader.running;
+    BOOL receiving = _downloader.running && _downloader.phase != VMFirmwareDownloadImporting;
+    BOOL downloadFailed = !_manualAttempt && (_downloader.phase == VMFirmwareDownloadFailed ||
+        _downloader.phase == VMFirmwareDownloadCancelled);
     _ready = !running && [VMFirmwareImporter hasConfiguredFirmware];
     vm_fw_report_t report;
     BOOL haveReport = [_importer getLastReport:&report];
-    BOOL failed = !running && haveReport && !vm_fw_report_is_verified(&report);
+    BOOL failed = !running && !_ready && (downloadFailed || (haveReport && !vm_fw_report_is_verified(&report)));
+    if (running != _keepsAwake) {
+        if (running) {
+            _wasIdleDisabled = UIApplication.sharedApplication.idleTimerDisabled;
+            UIApplication.sharedApplication.idleTimerDisabled = YES;
+        } else UIApplication.sharedApplication.idleTimerDisabled = _wasIdleDisabled;
+        _keepsAwake = running;
+    }
     self.modalInPresentation = running;
     self.navigationController.modalInPresentation = running;
     self.navigationItem.leftBarButtonItem.title = running ? @"Cancel" : @"Later";
+    self.navigationItem.leftBarButtonItem.enabled = !(_downloader.running && _downloader.cancellationRequested);
     self.navigationItem.rightBarButtonItem.enabled = !running;
     _primary.enabled = !running;
     _primary.alpha = running ? 0.55 : 1;
-    [_primary setTitle:running ? @"Preparing…" : _ready ? @"Start iPhone OS" : failed ? @"Try again" : @"Import IPSW"
+    [_primary setTitle:receiving ? @"Downloading…" : running ? @"Preparing…"
+        : _ready ? @"Start iPhone OS" : downloadFailed ? @"Try again" : @"Download iPhone OS"
         forState:UIControlStateNormal];
-    _chooseAnother.hidden = running || !haveReport || _ready;
+    _chooseAnother.hidden = running || _ready;
     _file.text = _importer.selectedURL.lastPathComponent;
-    _file.hidden = !_file.text.length || (!running && !failed);
+    _file.hidden = !_file.text.length || receiving || !_manualAttempt || (!running && !failed);
     _hint.hidden = !running;
     _statusIcon.hidden = running;
     _spinner.hidden = !running;
     if (running) [_spinner startAnimating]; else [_spinner stopAnimating];
-    _progress.hidden = !running || _importer.fraction < 0;
-    if (!_progress.hidden) _progress.progress = (float)fmax(0, fmin(1, _importer.fraction));
-    if (running) {
+    double fraction = receiving ? _downloader.fraction : _importer.fraction;
+    _progress.accessibilityLabel = receiving ? @"Firmware download progress" : @"Firmware preparation progress";
+    _progress.hidden = !running || fraction < 0;
+    if (!_progress.hidden) _progress.progress = (float)fmax(0, fmin(1, fraction));
+    if (_downloader.running && _downloader.cancellationRequested) {
+        _status.text = @"Cancelling…";
+        _detail.text = @"Finishing the current step.";
+    } else if (receiving) {
+        if (_downloader.phase == VMFirmwareDownloadResolving) {
+            _status.text = @"Finding firmware";
+            _detail.text = @"Connecting to ipsw.me…";
+        } else if (_downloader.phase == VMFirmwareDownloadVerifying) {
+            _status.text = @"Verifying download";
+            _detail.text = @"Checking the firmware checksum…";
+        } else {
+            _status.text = @"Downloading firmware";
+            _detail.text = [NSString stringWithFormat:@"From Apple · %.0f%%", fmax(0, fraction) * 100];
+        }
+    } else if (running) {
         _status.text = @"Preparing firmware";
         NSString *stage = [NSString stringWithUTF8String:vm_fw_stage_name(_importer.stage)];
         NSString *part = [NSString stringWithUTF8String:vm_fw_artefact_title(_importer.stageArtefact)];
@@ -276,11 +321,11 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
             : [NSString stringWithFormat:@"%@ — %@%@",
                 part, stage, _importer.fraction < 0 ? @"" : [NSString stringWithFormat:@" · %.0f%%", _importer.fraction * 100]];
     } else if (failed) {
-        _status.text = report.status == VM_FW_ERR_CANCELLED ? @"Import cancelled" : @"Couldn’t prepare firmware";
+        BOOL cancelled = downloadFailed ? _downloader.phase == VMFirmwareDownloadCancelled : report.status == VM_FW_ERR_CANCELLED;
+        _status.text = cancelled ? @"Setup cancelled" : @"Couldn’t prepare firmware";
         _statusIcon.image = [UIImage systemImageNamed:@"exclamationmark.circle"];
         _statusIcon.tintColor = UIColor.systemOrangeColor;
-        _detail.text = SetupFailureDetail(&report);
-        if (_ready) _detail.text = [_detail.text stringByAppendingString:@"\nYour previously configured firmware is still available."];
+        _detail.text = downloadFailed ? (_downloader.error.localizedDescription ?: @"Try again to continue setup.") : SetupFailureDetail(&report);
     } else if (_ready) {
         _status.text = @"Firmware ready";
         _statusIcon.image = [UIImage systemImageNamed:@"checkmark.circle.fill"];
@@ -294,14 +339,16 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
     }
 }
 - (void)primaryTapped {
-    if (_importer.isRunning) return;
+    if (_importer.isRunning || _downloader.running) return;
     if (_ready) { if (self.completion) self.completion(YES); return; }
-    if (_importer.selectedURL) [_importer importIPSWAtURL:_importer.selectedURL];
-    else [self presentPicker];
+    _manualAttempt = NO;
+    _importer.delegate = self;
+    [_downloader start];
     [self refresh];
 }
 - (void)closeTapped {
-    if (_importer.isRunning) { [_importer cancelImport]; _detail.text = @"Cancelling safely…"; return; }
+    if (_downloader.running) { [_downloader cancel]; [self refresh]; return; }
+    if (_importer.isRunning) { [_importer cancelImport]; _detail.text = @"Cancelling…"; return; }
     if (self.completion) self.completion(NO);
 }
 - (void)settingsTapped {
@@ -310,7 +357,7 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
         animated:YES completion:nil];
 }
 - (void)presentPicker {
-    if (_importer.isRunning || self.presentedViewController) return;
+    if (_importer.isRunning || _downloader.running || self.presentedViewController) return;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     UIDocumentPickerViewController *picker = [[UIDocumentPickerViewController alloc]
@@ -321,7 +368,8 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
     [self presentViewController:picker animated:YES completion:nil];
 }
 - (void)documentPicker:(UIDocumentPickerViewController *)controller didPickDocumentsAtURLs:(NSArray<NSURL *> *)urls {
-    if (!urls.firstObject || _importer.isRunning) return;
+    if (!urls.firstObject || _importer.isRunning || _downloader.running) return;
+    _manualAttempt = YES;
     _importer.delegate = self;
     [_importer importIPSWAtURL:urls.firstObject]; // Take security scope before dismissal.
     [controller dismissViewControllerAnimated:YES completion:^{ [self refresh]; }];

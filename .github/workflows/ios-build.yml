@@ -106,6 +106,12 @@ jobs:
             app/Sources/VMFirmwareImporter.m app/Sources/VMFirmwareStore.m app/Sources/VMSettings.m \
             app/Tests/test_vmfirmwarestore.m work/firmware-tests/*.o -o work/firmware-tests/test_firmware
           work/firmware-tests/test_firmware "$GITHUB_WORKSPACE/work/firmware-tests"
+          xcrun clang -fobjc-arc -Wall -Wextra -Werror -framework Foundation \
+            -I app/Sources -I core/include -I tools \
+            app/Sources/VMFirmwareDownloader.m app/Sources/VMFirmwareImporter.m \
+            app/Sources/VMFirmwareStore.m app/Sources/VMSettings.m \
+            app/Tests/test_vmfirmwaredownload.m work/firmware-tests/*.o -o work/firmware-tests/test_download
+          work/firmware-tests/test_download "$GITHUB_WORKSPACE/work/firmware-tests"
 
       - name: Test Files-visible IPA library
         run: |
@@ -217,7 +223,8 @@ jobs:
             app/Sources/EmulatorViewController.m app/Sources/VMHardwareButton.m \
             app/Sources/VMDeviceControlsViewController.m app/Sources/VMSettingsViewController.m \
             app/Sources/VMSetupViewController.m app/Sources/VMFirmwareImportViewController.m \
-            app/Sources/VMFirmwareImporter.m app/Sources/VMFirmwareStore.m
+            app/Sources/VMFirmwareImporter.m app/Sources/VMFirmwareStore.m \
+            app/Sources/VMFirmwareDownloader.m
 
       - name: Compile-check every JIT source for iphoneos
         # The app deliberately excludes jit/** until the run loop owns a code

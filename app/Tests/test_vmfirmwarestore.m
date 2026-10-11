@@ -76,6 +76,8 @@ int main(int argc, const char *argv[]) {
         [importer importIPSWAtURL:url];
         [importer importIPSWAtURL:url]; // Duplicate delivery is a no-op.
         assert(importer.isRunning && [importer.selectedURL isEqual:url]);
+        [importer forgetSelectedURL:url]; // A running import keeps its source.
+        assert([importer.selectedURL isEqual:url]);
         NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:15];
         while (importer.isRunning && deadline.timeIntervalSinceNow > 0)
             [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
@@ -110,6 +112,11 @@ int main(int argc, const char *argv[]) {
         assert(!importer.isRunning && importer.completions == 4);
         assert(![importer importDetectedIPSWIfNeeded]);
         assert([fm contentsOfDirectoryAtPath:testRoot error:NULL].count == 0);
+        [importer forgetSelectedURL:[NSURL fileURLWithPath:@"/unrelated.ipsw"]];
+        assert([importer.selectedURL isEqual:url]);
+        [importer forgetSelectedURL:url];
+        assert(!importer.selectedURL);
+        assert([fm fileExistsAtPath:url.path]); // Forgetting never deletes a manual archive.
         testRoot = fixtureRoot;
         assert([fm removeItemAtPath:testRoot error:NULL]); // Only this test's UUID root.
         puts("firmware store: publication, rollback, legacy paths, cancellation and retained importer state passed");

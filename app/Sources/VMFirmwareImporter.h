@@ -85,6 +85,9 @@ FOUNDATION_EXPORT NSNotificationName const VMFirmwareImportDidChangeNotification
 - (BOOL)isRunning;
 + (BOOL)hasConfiguredFirmware;
 @property (nonatomic, readonly, nullable) NSURL *selectedURL;
+/* Clear only a matching, finished download owned by the downloader. Manual
+ * selections and any active import remain retained for retry. Main queue. */
+- (void)forgetSelectedURL:(NSURL *)url;
 @property (nonatomic, readonly) vm_fw_stage_t stage;
 @property (nonatomic, readonly) vm_fw_artefact_t stageArtefact;
 @property (nonatomic, readonly) double fraction;

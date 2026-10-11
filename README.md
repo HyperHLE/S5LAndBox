@@ -3,9 +3,9 @@
 Run real **iPhone OS 3.1.3** inside an app on a modern iPhone.
 
 S5LBox emulates the S5L8900 hardware used by the iPhone 3G. It runs Apple's
-actual operating system—not a recreation of its interface. You supply the
-firmware; no Apple firmware is included. Public decryption keys for the
-supported build are bundled, so importing an IPSW requires no key entry.
+actual operating system—not a recreation of its interface. Setup downloads
+firmware directly from Apple or imports your IPSW. No Apple firmware is bundled.
+Public decryption keys for the supported build are included, so no key entry is needed.
 
 [![core-tests](https://github.com/j0shua-SYSON/S5LBox/actions/workflows/core-tests.yml/badge.svg)](https://github.com/j0shua-SYSON/S5LBox/actions/workflows/core-tests.yml)
 [![ios-build](https://github.com/j0shua-SYSON/S5LBox/actions/workflows/ios-build.yml/badge.svg)](https://github.com/j0shua-SYSON/S5LBox/actions/workflows/ios-build.yml)
@@ -27,8 +27,8 @@ Old websites and package repositories may also be unavailable or incompatible.
 
 ## Get started
 
-You need an ARM64 iPhone running **iOS 13 or later**, your own supported
-**iPhone 3G / iPhone1,2, iPhone OS 3.1.3 (7E18)** IPSW.
+You need an ARM64 iPhone running **iOS 13 or later**. Setup supports
+**iPhone 3G / iPhone1,2, iPhone OS 3.1.3 (7E18)** firmware.
 The deployment target is not a guarantee that every device/version has been
 tested. Keep several gigabytes of storage free for import, guest disks and
 temporary installation copies.
@@ -38,10 +38,12 @@ temporary installation copies.
    for the branch you intend to test. The Actions artifact is only ad-hoc signed:
    **re-sign it with your own valid provisioning profile before installing on
    stock iOS**.
-2. Open S5LBox and tap **Import IPSW** on the setup screen. Select your firmware;
-   S5LBox identifies, decrypts and verifies it automatically. Then tap
+2. Open S5LBox and tap **Download iPhone OS**. Setup uses ipsw.me to find the
+   Apple download, checks its SHA-256, and prepares it automatically.
+   You can also choose **Import IPSW** to select a file. Then tap
    **Start iPhone OS**. Configured installations skip setup on later launches.
    Firmware import and manual key overrides remain available in App Settings.
+   Keep the app open during setup; cancellation removes temporary downloads.
 3. New machines default to **MBX** graphics (experimental), with the CPU
    software-renderer override off. **CPU software** remains a compatibility
    option. Initial disk preparation continues into a cold boot automatically;
