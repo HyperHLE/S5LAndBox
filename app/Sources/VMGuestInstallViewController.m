@@ -258,6 +258,7 @@ static void VMGuestInstallBuildProgress(
     if (fraction < 0) [_spinner startAnimating]; else [_spinner stopAnimating];
     if (fraction >= 0) [_progressBar setProgress:(float)fraction animated:NO];
     if (stage.length) _headline.text = stage;
+    _detail.textAlignment = NSTextAlignmentCenter;
     _detail.text = fraction >= 0 ? [NSString stringWithFormat:@"%.0f%%", fraction * 100] : @"";
     _detail.hidden = !_detail.text.length;
 }
@@ -271,6 +272,7 @@ static void VMGuestInstallBuildProgress(
         self->_headline.text = headline.length ? headline : @"Jailbreak failed";
         self->_headline.textColor = [UIColor systemRedColor];
         self->_detail.hidden = NO;
+        self->_detail.textAlignment = NSTextAlignmentLeft;
         self->_detail.text = description.length ? description
                                                 : @"Try again, or return to Machines.";
         self->_progressBar.hidden = YES;
@@ -331,6 +333,7 @@ static void VMGuestInstallBuildProgress(
             : updated ? @"Finishing Cydia setup"
             : storageUpgraded ? @"Storage expanded" : @"Jailbreak already installed";
         self->_detail.hidden = NO;
+        self->_detail.textAlignment = NSTextAlignmentLeft;
         self->_detail.text = @"Ready to start iPhone OS.";
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
                                      (int64_t)(0.8 * NSEC_PER_SEC)),
