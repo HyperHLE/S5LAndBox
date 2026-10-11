@@ -1041,7 +1041,7 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
 - (void)openRuntimePackages {
     if (![self runtimeCanControlGuest] || [_engine isPaused] || self.presentedViewController) return;
     VMPackageManagerViewController *packages = [[VMPackageManagerViewController alloc]
-        initWithTransport:_engine.usbTransport instanceID:self.instanceID];
+        initWithTransport:_engine.usbTransport instanceID:self.instanceID finishingSetup:self.openPackagesWhenRunning];
     packages.modalPresentationStyle = UIModalPresentationFullScreen;
     __weak EmulatorViewController *weakSelf = self;
     __weak VMPackageManagerViewController *weakPackages = packages;
@@ -1507,8 +1507,8 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
         if (self.openPackagesWhenRunning && self.view.window &&
             self.navigationController.topViewController == self &&
             !self.transitionCoordinator && !self.presentedViewController && [self runtimeCanControlGuest]) {
-            self.openPackagesWhenRunning = NO;
             [self openRuntimePackages];
+            self.openPackagesWhenRunning = NO;
         }
         [self refreshStatusLine];
         // A machine can stop on its own, so the toolbar has to keep asking.
