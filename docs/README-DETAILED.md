@@ -381,7 +381,8 @@ or imports an IPSW you select. Downloads are streamed to a private cache, checke
 against the API's SHA-256, then passed to the existing importer. It resolves the
 bundled public keys and independently verifies all three prepared components
 before activating them. Cancellation, errors and completion remove the temporary
-archive; abandoned download attempts are cleaned on the next setup launch.
+archive; abandoned download attempts are cleaned on the next app launch,
+including launches that skip setup because firmware is already configured.
 Import and manual overrides remain available in Settings. The desktop
 `fwimport --auto` path uses the same key catalog; see
 [`docs/BOOT_CHAIN.md`](BOOT_CHAIN.md). No Apple firmware is committed or bundled.

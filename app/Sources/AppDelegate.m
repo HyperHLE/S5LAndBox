@@ -10,6 +10,7 @@
 #import "VMInstanceListViewController.h"
 #import "VMIPALibrary.h"
 #import "VMFirmwareImporter.h"
+#import "VMFirmwareDownloader.h"
 
 static NSString *const kAutomationOpenFirstMachineArgument =
     @"--s5lbox-automation-open-first-machine";
@@ -133,6 +134,9 @@ static UIGestureRecognizer *VMNavigationContentPopGestureRecognizer(
     VMSettings *settings = [VMSettings sharedSettings];
     [settings ensureUserVisibleDirectories];
     [VMIPALibrary directoryWithError:NULL]; // Files-visible even before opening the library.
+    // Reap abandoned downloads even when configured firmware skips setup.
+    // Initialization performs local cleanup only; downloads always require a tap.
+    [VMFirmwareDownloader sharedDownloader];
 
     (void)launchOptions;
     BOOL launchAutomationRequested = VMLaunchRequestsFirstMachine();
@@ -160,6 +164,8 @@ static UIGestureRecognizer *VMNavigationContentPopGestureRecognizer(
     machines.showsSetupWhenNeeded = !automationRequested;
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(firmwareImportChanged)
         name:VMFirmwareImportDidChangeNotification object:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(firmwareImportChanged)
+        name:VMFirmwareDownloadDidChangeNotification object:nil];
     UINavigationController *nav = [[VMNavigationController alloc]
         initWithRootViewController:machines];
     nav.navigationBar.prefersLargeTitles = YES;
@@ -223,7 +229,7 @@ static UIGestureRecognizer *VMNavigationContentPopGestureRecognizer(
 }
 
 - (void)firmwareImportChanged {
-    BOOL running = VMFirmwareImporter.sharedImporter.isRunning;
+    BOOL running = VMFirmwareImporter.sharedImporter.isRunning || VMFirmwareDownloader.sharedDownloader.running;
     UIApplication *application = UIApplication.sharedApplication;
     if (running && !self.importKeepsAwake) {
         self.previousIdleTimerDisabled = application.idleTimerDisabled;
