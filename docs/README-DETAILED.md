@@ -375,12 +375,16 @@ debug, increased-memory or jailbreak entitlement and needs only the normal app
 sandbox. A jailbroken development phone makes testing easier; it is not a
 product dependency.
 
-**Supply firmware:** first-run setup imports your **own iPhone1,2 / iPhone OS
-3.1.3 / 7E18 IPSW**, resolves the bundled public keys, and verifies all three
-prepared components before activating them. Import and manual overrides also
-remain available in Settings. The desktop `fwimport --auto` path uses the same
-catalog; see [`docs/BOOT_CHAIN.md`](BOOT_CHAIN.md). Nothing is downloaded, and
-no Apple firmware is committed or shipped.
+**Prepare firmware:** first-run setup downloads **iPhone1,2 / iPhone OS 3.1.3 /
+7E18** directly from Apple's HTTPS servers using metadata from the ipsw.me API,
+or imports an IPSW you select. Downloads are streamed to a private cache, checked
+against the API's SHA-256, then passed to the existing importer. It resolves the
+bundled public keys and independently verifies all three prepared components
+before activating them. Cancellation, errors and completion remove the temporary
+archive; abandoned download attempts are cleaned on the next setup launch.
+Import and manual overrides remain available in Settings. The desktop
+`fwimport --auto` path uses the same key catalog; see
+[`docs/BOOT_CHAIN.md`](BOOT_CHAIN.md). No Apple firmware is committed or bundled.
 
 For a controlled graphics comparison, choose **Graphics for new machines** in
 Settings *before* opening a newly created machine for the first time.

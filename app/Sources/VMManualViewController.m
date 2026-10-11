@@ -63,7 +63,7 @@ typedef struct {
 
     [e addObject:@{ @"h": @"What this is",
         @"b": @"S5LBox emulates the iPhone 3G to run iPhone OS 3.1.3, "
-              @"including its apps, Home screen and Cydia. Import firmware "
+              @"including its apps, Home screen and Cydia. Download or import firmware "
               @"during setup, then open a machine to get started." }];
 
     [e addObject:@{ @"h": @"What this app does today",
@@ -99,8 +99,9 @@ typedef struct {
               @"Developer Mode exposes delivery diagnostics in Console." }];
 
     [e addObject:@{ @"h": @"Firmware",
-        @"b": @"Use iPhone OS 3.1.3 (7E18) firmware for iPhone 3G. Setup "
-              @"prepares it automatically. Each machine creates its own disk "
+        @"b": @"Setup can download iPhone OS 3.1.3 for iPhone 3G from Apple, "
+              @"or import an IPSW from Files. It verifies and prepares the firmware "
+              @"automatically. Each machine creates its own disk "
               @"from the prepared firmware on first boot." }];
 
     [e addObject:@{ @"h": @"Machine Settings",

@@ -673,6 +673,11 @@ static void vmfw_strip_trailing_slash(char *path) {
     return YES;
 }
 
+- (void)forgetSelectedURL:(NSURL *)url {
+    NSAssert(NSThread.isMainThread, @"Archive selection belongs on main");
+    if (!self.isRunning && [_selectedURL isEqual:url]) _selectedURL = nil;
+}
+
 - (void)replayStateToDelegate {
     id<VMFirmwareImporterDelegate> delegate = self.delegate;
     if ([self isRunning] && [delegate respondsToSelector:@selector(importer:didReachStage:forArtefact:fraction:)])
