@@ -338,7 +338,7 @@ static UIImage *Tile(NSString *symbol) {
             [sections addObject:Section(nil,connectionRows,nil)];
         }
         if (_finishAction) [sections addObject:Section(nil,@[Row(FinishTitle(_finishAction),
-            _finishReady ? @"Required by your package changes. Only affects the emulated guest." : @"Finish or repair the package operation, then refresh Installed.",
+            _finishReady ? @"Apply your package changes." : @"Finish or repair the package operation, then refresh Installed.",
             @"arrow.clockwise",_finishReady && !_busy ? @"finish-guest" : nil)],nil)];
         [sections addObject:Section(@"Discover",@[
             Row(@"All packages",@"Browse your sources",@"square.grid.2x2",@"all"),
@@ -348,8 +348,7 @@ static UIImage *Tile(NSString *symbol) {
         [machineRows addObjectsFromArray:@[
             Row(@"Installed packages",[NSString stringWithFormat:@"%lu packages",(unsigned long)[self installedPackages].count],@"checkmark.seal",@"installed"),
             Row(@"Sources",[NSString stringWithFormat:@"%lu repositories",(unsigned long)_sources.count],@"tray.2",@"sources")]];
-        [sections addObject:Section(@"Your machine",machineRows,
-            @"Browsing and downloads run natively. Installation runs inside your guest.")];
+        [sections addObject:Section(@"Your machine",machineRows,nil)];
         [sections addObject:Section(nil,@[Row(@"About package safety",@"Compatibility, sources and recovery",@"info.circle",@"safety")],nil)];
     } else if ([kind isEqual:@"sources"]) {
         NSMutableArray *rows=[NSMutableArray array];
@@ -413,7 +412,7 @@ static UIImage *Tile(NSString *symbol) {
             Row(@"Required packages",[NSString stringWithFormat:@"%@%@%@",p[@"Pre-Depends"] ?: @"",p[@"Pre-Depends"] && p[@"Depends"] ? @", " : @"",p[@"Depends"] ?: @""],nil,nil)],@"The complete changes will be shown before you confirm.")];
         NSMutableArray *actions=[NSMutableArray arrayWithObject:Row(@"Other versions",@"Choose a release from your sources",@"clock",@"versions")];
         if (old && available && !protected) { NSMutableDictionary *remove=[Row(@"Remove package",@"Keep configuration files",@"trash",@"remove-package") mutableCopy]; remove[@"destructive"]=@YES; [actions addObject:remove]; }
-        [sections addObject:Section(nil,actions,@"Packages may run root scripts inside the guest. Sources are not signature-verified. A successful install does not guarantee tweak compatibility.")];
+        [sections addObject:Section(nil,actions,nil)];
     } else if ([kind isEqual:@"review"]) {
         NSMutableArray *rows=[NSMutableArray array]; unsigned long long bytes=0; BOOL weak=NO;
         for (NSDictionary *p in screen.changes) { NSMutableDictionary *row=[[self packageRow:p] mutableCopy]; row[@"action"]=@""; [rows addObject:row]; bytes+=[p[@"Size"] longLongValue]; weak|=!p[@"SHA256"]; }
@@ -429,7 +428,7 @@ static UIImage *Tile(NSString *symbol) {
         [sections addObject:Section(nil,@[hero],screen.outcome==0 ? @"Keep S5LBox open. Do not run Cydia or power off the guest." : nil)];
         if (screen.outcome>0 && _finishAction && _finishReady && !_busy) {
             NSMutableDictionary *finish=[Row(FinishTitle(_finishAction),@"Apply the finishing action requested by your package changes.",@"arrow.clockwise",@"finish-guest") mutableCopy];
-            finish[@"button"]=@YES; [sections addObject:Section(nil,@[finish],@"Only the emulated guest is restarted, never this iPhone.")];
+            finish[@"button"]=@YES; [sections addObject:Section(nil,@[finish],nil)];
         }
         NSMutableArray *rows=[NSMutableArray array];
         for (NSDictionary *p in screen.changes) [rows addObject:Row(Name(p),p[@"Version"],Symbol(p[@"Section"]),nil)];

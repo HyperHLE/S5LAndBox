@@ -274,8 +274,7 @@ static BOOL VMProbeFirmware(vm_firmware_boot_state_t *out) {
     _intro.adjustsFontForContentSizeCategory = YES;
     _intro.textColor = [UIColor secondaryLabelColor];
     _intro.text =
-        @"iPhone OS 3.1.3 (7E18) · iPhone 3G\n"
-        @"Decryption keys are automatic. Apple firmware is not included or downloaded.";
+        @"iPhone OS 3.1.3 for iPhone 3G";
     UIView *header = [[UIView alloc] initWithFrame:CGRectZero];
     [header addSubview:_intro];
     self.tableView.tableHeaderView = header;

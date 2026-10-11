@@ -83,8 +83,8 @@
 }
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
     if (section != 0) return nil;
-    if (_liveTransport) return @"Installs over virtual USB while this machine runs. The guest checks signing and compatibility. An existing app with the same ID may be updated.";
-    return @"ARMv6 apps for iPhone OS 3.1.3 or earlier. Adds to /Applications; encrypted apps, updates and App Store-style sandbox installation are not supported.";
+    if (_liveTransport) return @"An existing version of this app may be replaced.";
+    return @"Requires an unencrypted ARMv6 app for iPhone OS 3.1.3 or earlier. Updates require a running machine.";
 }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)path {
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
@@ -101,7 +101,7 @@
         cell.accessibilityIdentifier = @"s5lbox.ipa.package";
     } else if (path.section == 1) {
         BOOL enabled = !_busy && (_installed || _package != nil);
-        cell.textLabel.text = _installed ? (_liveTransport ? @"Return to Guest" : @"Start Machine") : @"Install in Guest";
+        cell.textLabel.text = _installed ? (_liveTransport ? @"Return to machine" : @"Start machine") : @"Install";
         cell.accessibilityIdentifier = @"s5lbox.ipa.install";
         cell.textLabel.textColor = enabled ? UIColor.systemBlueColor : UIColor.tertiaryLabelColor;
         cell.userInteractionEnabled = enabled;
@@ -140,7 +140,7 @@
         if (scoped) [url stopAccessingSecurityScopedResource];
         dispatch_async(dispatch_get_main_queue(), ^{
             self->_package = package;
-            [self setBusy:NO message:package ? (self->_liveTransport ? @"Ready. The guest stays running during installation." : @"Ready to install. The guest disk has not been changed.")
+            [self setBusy:NO message:package ? @"Ready to install."
                 : error.localizedDescription ?: @"The selected file could not be read."];
         });
     });
@@ -148,7 +148,7 @@
 - (void)confirmInstall {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:
         [NSString stringWithFormat:@"Install %@?", _package.displayName]
-        message:_liveTransport ? [NSString stringWithFormat:@"Install in %@ using its built-in installer?", _machineName]
+        message:_liveTransport ? [NSString stringWithFormat:@"Install in %@?", _machineName]
             : [NSString stringWithFormat:@"%@ will shut down first. Existing apps will not be replaced.", _machineName]
         preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
@@ -195,7 +195,7 @@
         dispatch_async(dispatch_get_main_queue(), ^{
             self->_installed = result;
             if (result) self->_package = nil; // release the inspection's extracted cache
-            [self setBusy:NO message:result ? @"The guest reports installation complete. Return to its Home screen to open the app."
+            [self setBusy:NO message:result ? @"Installed. Open the app from the Home screen."
                 : error.localizedDescription ?: @"Installation did not finish."];
             self->_usbInstaller = nil;
             if (self->_backgroundTask != UIBackgroundTaskInvalid) {
@@ -206,7 +206,7 @@
 }
 - (void)installPackage {
     if (!_package || _busy) return;
-    [self setBusy:YES message:@"Preparing a recoverable disk copy and installing the app…"];
+    [self setBusy:YES message:@"Installing…"];
     UIApplication *app = UIApplication.sharedApplication;
     _backgroundTask = [app beginBackgroundTaskWithExpirationHandler:^{
         if (self->_backgroundTask != UIBackgroundTaskInvalid) {

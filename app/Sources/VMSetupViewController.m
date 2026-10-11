@@ -10,7 +10,7 @@
 
 @implementation VMSetupViewController {
     VMFirmwareImporter *_importer;
-    UILabel *_status, *_detail, *_file;
+    UILabel *_status, *_detail, *_file, *_hint;
     UIImageView *_statusIcon;
     UIProgressView *_progress;
     UIActivityIndicatorView *_spinner;
@@ -30,24 +30,24 @@ static UILabel *SetupLabel(NSString *text, UIFontTextStyle style) {
 static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
     switch (report->status) {
         case VM_FW_ERR_CANCELLED:
-            return @"Nothing was changed. Tap Try again to restart preparation.";
+            return @"Try again to continue setup.";
         case VM_FW_ERR_NOT_AN_ARCHIVE:
         case VM_FW_ERR_ARCHIVE_MALFORMED:
-            return @"This file isn’t a valid IPSW archive. Choose the original, complete IPSW and try again.";
+            return @"This isn’t a valid IPSW. Choose a different file.";
         case VM_FW_ERR_ARCHIVE_UNREADABLE:
-            return @"S5LBox couldn’t read this file. Make sure it has finished downloading in Files, then choose it again.";
+            return @"Couldn’t open this file. Download it in Files, then try again.";
         case VM_FW_ERR_NO_MANIFEST:
         case VM_FW_ERR_MANIFEST_TOO_BIG:
         case VM_FW_ERR_MANIFEST_MALFORMED:
         case VM_FW_ERR_MANIFEST_INCOMPLETE:
-            return @"The firmware information is missing or damaged. Choose an unmodified IPSW for iPhone 3G, iPhone OS 3.1.3 (7E18).";
+            return @"This IPSW is incomplete. Choose iPhone OS 3.1.3 firmware for iPhone 3G.";
         case VM_FW_ERR_UNSUPPORTED_DEVICE:
         case VM_FW_ERR_UNSUPPORTED_BUILD:
-            return @"This firmware isn’t supported. Choose iPhone1,2_3.1.3_7E18_Restore.ipsw for iPhone 3G.";
+            return @"Choose iPhone OS 3.1.3 (7E18) firmware for iPhone 3G.";
         case VM_FW_ERR_VERIFICATION:
-            return @"The extracted firmware didn’t pass verification. Use an unmodified IPSW. If you entered manual keys, reset them in Settings.";
+            return @"The firmware failed verification. Try an unmodified IPSW, or clear manual key overrides in Settings.";
         case VM_FW_ERR_OUT_OF_MEMORY:
-            return @"There wasn’t enough memory to prepare the firmware. Close other apps and try again.";
+            return @"Not enough memory. Close other apps and try again.";
         default: {
             NSString *detail = [NSString stringWithUTF8String:report->detail];
             return detail.length ? detail : @"Choose the supported IPSW and try again. Details are available in Settings.";
@@ -57,95 +57,159 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"Welcome";
+    self.title = @"Setup";
     self.navigationItem.largeTitleDisplayMode = UINavigationItemLargeTitleDisplayModeNever;
     self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
     self.view.accessibilityIdentifier = @"s5lbox.setup";
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc]
-        initWithTitle:@"Not now" style:UIBarButtonItemStylePlain target:self action:@selector(closeTapped)];
+        initWithTitle:@"Later" style:UIBarButtonItemStylePlain target:self action:@selector(closeTapped)];
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
-        initWithTitle:@"Settings" style:UIBarButtonItemStylePlain target:self action:@selector(settingsTapped)];
+        initWithImage:([UIImage systemImageNamed:@"gearshape"] ?: [UIImage systemImageNamed:@"gear"])
+        style:UIBarButtonItemStylePlain target:self action:@selector(settingsTapped)];
+    self.navigationItem.rightBarButtonItem.accessibilityLabel = @"Settings";
     _importer = VMFirmwareImporter.sharedImporter;
 
     UIScrollView *scroll = [UIScrollView new];
     scroll.translatesAutoresizingMaskIntoConstraints = NO;
-    scroll.alwaysBounceVertical = YES;
+    scroll.alwaysBounceVertical = NO;
     [self.view addSubview:scroll];
     UIStackView *actions = [UIStackView new];
     actions.axis = UILayoutConstraintAxisVertical;
-    actions.spacing = 4;
+    actions.spacing = 8;
     actions.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:actions];
+    UIView *canvas = [UIView new];
+    canvas.translatesAutoresizingMaskIntoConstraints = NO;
+    [scroll addSubview:canvas];
     UIStackView *stack = [UIStackView new];
     stack.axis = UILayoutConstraintAxisVertical;
-    stack.spacing = 20;
+    stack.spacing = 28;
     stack.translatesAutoresizingMaskIntoConstraints = NO;
-    [scroll addSubview:stack];
+    [canvas addSubview:stack];
+    // Center the welcome group on roomy screens; allow scrolling on smaller
+    // screens, in landscape, and at accessibility text sizes. The action stays
+    // within the safe area rather than underneath the scrolling content.
+    NSLayoutConstraint *canvasHeight = [canvas.heightAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.heightAnchor];
+    canvasHeight.priority = UILayoutPriorityDefaultLow;
+    NSLayoutConstraint *columnWidth = [stack.widthAnchor constraintEqualToAnchor:canvas.widthAnchor constant:-48];
+    columnWidth.priority = UILayoutPriorityDefaultHigh;
+    NSLayoutConstraint *actionWidth = [actions.widthAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.widthAnchor constant:-48];
+    actionWidth.priority = UILayoutPriorityDefaultHigh;
     [NSLayoutConstraint activateConstraints:@[
         [scroll.topAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.topAnchor],
         [scroll.bottomAnchor constraintEqualToAnchor:actions.topAnchor constant:-12],
         [scroll.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [scroll.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
-        [stack.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor constant:28],
-        [stack.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor constant:-28],
-        [stack.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor constant:24],
-        [stack.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor constant:-24],
-        [stack.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor constant:-48],
-        [actions.leadingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.leadingAnchor constant:24],
-        [actions.trailingAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.trailingAnchor constant:-24],
+        [canvas.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor],
+        [canvas.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor],
+        [canvas.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor],
+        [canvas.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor],
+        [canvas.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor],
+        [canvas.heightAnchor constraintGreaterThanOrEqualToAnchor:scroll.frameLayoutGuide.heightAnchor],
+        canvasHeight,
+        [stack.centerXAnchor constraintEqualToAnchor:canvas.centerXAnchor],
+        [stack.centerYAnchor constraintEqualToAnchor:canvas.centerYAnchor],
+        [stack.topAnchor constraintGreaterThanOrEqualToAnchor:canvas.topAnchor constant:24],
+        [stack.bottomAnchor constraintLessThanOrEqualToAnchor:canvas.bottomAnchor constant:-24],
+        [stack.widthAnchor constraintLessThanOrEqualToConstant:520], columnWidth,
+        [actions.centerXAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerXAnchor],
+        [actions.widthAnchor constraintLessThanOrEqualToConstant:520], actionWidth,
         [actions.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-16]
     ]];
-    UIImageView *phone = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"iphone"]];
-    phone.tintColor = UIColor.systemBlueColor;
-    phone.contentMode = UIViewContentModeScaleAspectFit;
-    phone.isAccessibilityElement = NO;
-    [phone.heightAnchor constraintEqualToConstant:52].active = YES;
-    [stack addArrangedSubview:phone];
-    UILabel *title = SetupLabel(@"Set up S5LBox", UIFontTextStyleTitle1);
+    NSDictionary *primaryIcon = NSBundle.mainBundle.infoDictionary[@"CFBundleIcons"][@"CFBundlePrimaryIcon"];
+    NSString *iconName = [primaryIcon[@"CFBundleIconFiles"] lastObject];
+    UIImage *icon = iconName.length ? [UIImage imageNamed:iconName] : nil;
+    UIImageView *brand = [[UIImageView alloc] initWithImage:icon ?: [UIImage systemImageNamed:@"iphone"]];
+    brand.tintColor = UIColor.systemBlueColor;
+    brand.contentMode = UIViewContentModeScaleAspectFit;
+    brand.layer.cornerRadius = 24;
+    brand.layer.cornerCurve = kCACornerCurveContinuous;
+    brand.clipsToBounds = YES;
+    brand.isAccessibilityElement = NO;
+    UIStackView *hero = [UIStackView new];
+    hero.axis = UILayoutConstraintAxisVertical;
+    hero.alignment = UIStackViewAlignmentCenter;
+    hero.spacing = 24;
+    [hero addArrangedSubview:brand];
+    [brand.widthAnchor constraintEqualToConstant:104].active = YES;
+    [brand.heightAnchor constraintEqualToAnchor:brand.widthAnchor].active = YES;
+    UILabel *title = SetupLabel(@"Welcome to S5LBox", UIFontTextStyleLargeTitle);
+    title.font = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleLargeTitle]
+        scaledFontForFont:[UIFont systemFontOfSize:32 weight:UIFontWeightBold]];
+    title.textAlignment = NSTextAlignmentCenter;
     title.accessibilityTraits |= UIAccessibilityTraitHeader;
-    [stack addArrangedSubview:title];
-    UILabel *intro = SetupLabel(@"Bring your own IPSW. S5LBox prepares it automatically, with no keys to enter.", UIFontTextStyleBody);
-    intro.textColor = UIColor.secondaryLabelColor;
-    [stack addArrangedSubview:intro];
-    UILabel *supported = SetupLabel(@"iPhone 3G · iPhone OS 3.1.3\nBuild 7E18 · iPhone1,2", UIFontTextStyleSubheadline);
-    supported.accessibilityLabel = @"Supported firmware: iPhone 3G, iPhone OS 3.1.3, build 7E18, iPhone1,2.";
-    [stack addArrangedSubview:supported];
+    [hero addArrangedSubview:title];
+    [title.widthAnchor constraintEqualToAnchor:hero.widthAnchor].active = YES;
+    [stack addArrangedSubview:hero];
+
+    UIView *card = [UIView new];
+    card.backgroundColor = UIColor.secondarySystemGroupedBackgroundColor;
+    card.layer.cornerRadius = 20;
+    card.layer.cornerCurve = kCACornerCurveContinuous;
+    UIStackView *contents = [UIStackView new];
+    contents.axis = UILayoutConstraintAxisVertical;
+    contents.spacing = 14;
+    contents.translatesAutoresizingMaskIntoConstraints = NO;
+    [card addSubview:contents];
+    [NSLayoutConstraint activateConstraints:@[
+        [contents.topAnchor constraintEqualToAnchor:card.topAnchor constant:20],
+        [contents.bottomAnchor constraintEqualToAnchor:card.bottomAnchor constant:-20],
+        [contents.leadingAnchor constraintEqualToAnchor:card.leadingAnchor constant:20],
+        [contents.trailingAnchor constraintEqualToAnchor:card.trailingAnchor constant:-20]
+    ]];
 
     UIStackView *state = [UIStackView new];
     state.axis = UILayoutConstraintAxisHorizontal;
     state.alignment = UIStackViewAlignmentCenter;
-    state.spacing = 10;
+    state.spacing = 14;
     _statusIcon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"square.and.arrow.down"]];
     _statusIcon.contentMode = UIViewContentModeScaleAspectFit;
-    [_statusIcon.widthAnchor constraintEqualToConstant:24].active = YES;
+    NSLayoutConstraint *statusWidth = [_statusIcon.widthAnchor constraintEqualToConstant:24];
+    statusWidth.priority = UILayoutPriorityDefaultHigh;
+    statusWidth.active = YES;
+    [_statusIcon.heightAnchor constraintEqualToConstant:28].active = YES;
+    _statusIcon.isAccessibilityElement = NO;
     _spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
     _spinner.hidesWhenStopped = YES;
-    _status = SetupLabel(@"Choose your firmware", UIFontTextStyleHeadline);
+    _status = SetupLabel(@"Firmware", UIFontTextStyleHeadline);
     _status.accessibilityIdentifier = @"s5lbox.setup.status";
     [state addArrangedSubview:_statusIcon];
     [state addArrangedSubview:_spinner];
-    [state addArrangedSubview:_status];
-    [stack addArrangedSubview:state];
-    _file = SetupLabel(@"", UIFontTextStyleCaption1);
-    _file.textColor = UIColor.secondaryLabelColor;
-    [stack addArrangedSubview:_file];
-    _progress = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
-    _progress.accessibilityLabel = @"Firmware preparation progress";
-    [stack addArrangedSubview:_progress];
-    _detail = SetupLabel(@"Choose an IPSW from Files, or place it in S5LBox’s firmware folder and return here.", UIFontTextStyleSubheadline);
+    UIStackView *description = [UIStackView new];
+    description.axis = UILayoutConstraintAxisVertical;
+    description.spacing = 4;
+    [description addArrangedSubview:_status];
+    _detail = SetupLabel(@"", UIFontTextStyleSubheadline);
     _detail.textColor = UIColor.secondaryLabelColor;
     _detail.accessibilityIdentifier = @"s5lbox.setup.detail";
-    [stack addArrangedSubview:_detail];
+    [description addArrangedSubview:_detail];
+    [state addArrangedSubview:description];
+    [contents addArrangedSubview:state];
+    _file = SetupLabel(@"", UIFontTextStyleCaption1);
+    _file.textColor = UIColor.secondaryLabelColor;
+    _file.numberOfLines = 1;
+    _file.lineBreakMode = NSLineBreakByTruncatingMiddle;
+    [contents addArrangedSubview:_file];
+    _progress = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
+    _progress.accessibilityLabel = @"Firmware preparation progress";
+    [contents addArrangedSubview:_progress];
+    [stack addArrangedSubview:card];
+    _hint = SetupLabel(@"Keep S5LBox open while preparing firmware.", UIFontTextStyleFootnote);
+    _hint.textColor = UIColor.secondaryLabelColor;
+    _hint.textAlignment = NSTextAlignmentCenter;
+    [stack addArrangedSubview:_hint];
+    [stack setCustomSpacing:12 afterView:card];
     _primary = [UIButton buttonWithType:UIButtonTypeSystem];
     _primary.backgroundColor = UIColor.systemBlueColor;
-    _primary.layer.cornerRadius = 12;
+    _primary.layer.cornerRadius = 16;
+    _primary.layer.cornerCurve = kCACornerCurveContinuous;
     [_primary setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     _primary.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
     _primary.titleLabel.adjustsFontForContentSizeCategory = YES;
     _primary.titleLabel.numberOfLines = 0;
     _primary.titleLabel.textAlignment = NSTextAlignmentCenter;
     _primary.contentEdgeInsets = UIEdgeInsetsMake(14, 18, 14, 18);
-    [_primary.heightAnchor constraintGreaterThanOrEqualToConstant:50].active = YES;
+    [_primary.heightAnchor constraintGreaterThanOrEqualToConstant:54].active = YES;
     [_primary addTarget:self action:@selector(primaryTapped) forControlEvents:UIControlEventTouchUpInside];
     _primary.accessibilityIdentifier = @"s5lbox.setup.primary";
     [actions addArrangedSubview:_primary];
@@ -153,12 +217,12 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
     [_chooseAnother setTitle:@"Choose another IPSW" forState:UIControlStateNormal];
     _chooseAnother.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
     _chooseAnother.titleLabel.adjustsFontForContentSizeCategory = YES;
+    _chooseAnother.titleLabel.numberOfLines = 0;
+    _chooseAnother.titleLabel.textAlignment = NSTextAlignmentCenter;
+    _chooseAnother.contentEdgeInsets = UIEdgeInsetsMake(10, 12, 10, 12);
     [_chooseAnother.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
     [_chooseAnother addTarget:self action:@selector(presentPicker) forControlEvents:UIControlEventTouchUpInside];
     [actions addArrangedSubview:_chooseAnother];
-    UILabel *notice = SetupLabel(@"Apple firmware isn’t included. Use an IPSW you are entitled to use. Advanced options are in Settings.", UIFontTextStyleFootnote);
-    notice.textColor = UIColor.secondaryLabelColor;
-    [stack addArrangedSubview:notice];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(becameActive)
         name:UIApplicationDidBecomeActiveNotification object:nil];
 }
@@ -188,7 +252,7 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
     BOOL failed = !running && haveReport && !vm_fw_report_is_verified(&report);
     self.modalInPresentation = running;
     self.navigationController.modalInPresentation = running;
-    self.navigationItem.leftBarButtonItem.title = running ? @"Cancel" : @"Not now";
+    self.navigationItem.leftBarButtonItem.title = running ? @"Cancel" : @"Later";
     self.navigationItem.rightBarButtonItem.enabled = !running;
     _primary.enabled = !running;
     _primary.alpha = running ? 0.55 : 1;
@@ -196,7 +260,8 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
         forState:UIControlStateNormal];
     _chooseAnother.hidden = running || !haveReport || _ready;
     _file.text = _importer.selectedURL.lastPathComponent;
-    _file.hidden = !_file.text.length;
+    _file.hidden = !_file.text.length || (!running && !failed);
+    _hint.hidden = !running;
     _statusIcon.hidden = running;
     _spinner.hidden = !running;
     if (running) [_spinner startAnimating]; else [_spinner stopAnimating];
@@ -207,8 +272,8 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
         NSString *stage = [NSString stringWithUTF8String:vm_fw_stage_name(_importer.stage)];
         NSString *part = [NSString stringWithUTF8String:vm_fw_artefact_title(_importer.stageArtefact)];
         _detail.text = _importer.stage <= VM_FW_STAGE_LOCATING
-            ? @"Opening and identifying the IPSW… Keep S5LBox open while it prepares your firmware."
-            : [NSString stringWithFormat:@"%@ — %@%@\nKeep S5LBox open. Your existing firmware stays safe until verification finishes.",
+            ? @"Opening IPSW…"
+            : [NSString stringWithFormat:@"%@ — %@%@",
                 part, stage, _importer.fraction < 0 ? @"" : [NSString stringWithFormat:@" · %.0f%%", _importer.fraction * 100]];
     } else if (failed) {
         _status.text = report.status == VM_FW_ERR_CANCELLED ? @"Import cancelled" : @"Couldn’t prepare firmware";
@@ -217,15 +282,15 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
         _detail.text = SetupFailureDetail(&report);
         if (_ready) _detail.text = [_detail.text stringByAppendingString:@"\nYour previously configured firmware is still available."];
     } else if (_ready) {
-        _status.text = @"Ready to start";
+        _status.text = @"Firmware ready";
         _statusIcon.image = [UIImage systemImageNamed:@"checkmark.circle.fill"];
         _statusIcon.tintColor = UIColor.systemGreenColor;
-        _detail.text = @"Your firmware is prepared. S5LBox will create the machine’s writable disk and start iPhone OS automatically.";
+        _detail.text = @"iPhone OS 3.1.3 for iPhone 3G";
     } else {
-        _status.text = @"Choose your firmware";
+        _status.text = @"Firmware";
         _statusIcon.image = [UIImage systemImageNamed:@"square.and.arrow.down"];
         _statusIcon.tintColor = UIColor.systemBlueColor;
-        _detail.text = @"Choose an IPSW from Files, or place it in S5LBox’s firmware folder and return here.";
+        _detail.text = @"iPhone OS 3.1.3 for iPhone 3G";
     }
 }
 - (void)primaryTapped {

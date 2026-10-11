@@ -514,7 +514,7 @@ titleForFooterInSection:(NSInteger)section {
             cell.textLabel.text = @"Jailbreak";
             cell.accessibilityIdentifier = @"s5lbox.settings.jailbreak";
             cell.detailTextLabel.text = self.guestInstallRequest
-                ? @"Install or repair Cydia in a virtual machine."
+                ? @"Install or repair Cydia."
                 : @"Available from Settings on the Machines screen.";
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             cell.selectionStyle = UITableViewCellSelectionStyleDefault;
@@ -790,7 +790,7 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
             if (request) [self dismissViewControllerAnimated:YES completion:request];
         } else if (row == VMGeneralRowPackageSetup) {
             UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Set up package manager?"
-                message:@"Adds live package installation to a jailbroken machine. Saved running state is discarded; unsaved work may be lost. Guest files are kept."
+                message:@"The machine will power off before setup. Saved running state will be discarded; unsaved work may be lost."
                 preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
             [alert addAction:[UIAlertAction actionWithTitle:@"Force Off & Set Up" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *a) {
@@ -858,15 +858,12 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 
 - (void)confirmGuestInstall {
     NSString *message = self.guestInstallRequest
-        ? @"Install Cydia in the selected virtual machine. This does not "
-           @"jailbreak your iPhone.\n\n"
-           @"Force Power Off discards saved running state, then checks the "
-           @"disk before installing. Unsaved work may be lost. Back up "
-           @"important guest files first."
+        ? @"Install Cydia? The machine will power off and its saved running state "
+           @"will be discarded. Unsaved work may be lost."
         : @"Return to Machines using Back, then open Settings > Jailbreak. "
            @"The guest must be shut down before its disk can be changed.";
     UIAlertController *alert = [UIAlertController
-        alertControllerWithTitle:@"Jailbreak the guest?"
+        alertControllerWithTitle:@"Jailbreak machine?"
                          message:message
                   preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel"

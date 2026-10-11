@@ -208,7 +208,7 @@ static NSString *const kAutomationMachinePrefix = @"s5lbox.machine.";
                    accept:@"Next"
                   handler:^(NSString *name) {
         UIAlertController *sizes = [UIAlertController alertControllerWithTitle:@"Disk Size"
-            message:@"Maximum guest capacity. Host storage grows as files are added. This choice applies only to the new machine."
+            message:@"Storage is used as files are added, up to this limit."
             preferredStyle:UIAlertControllerStyleActionSheet];
         for (NSNumber *value in @[@2, @4, @8]) {
             NSString *title = [NSString stringWithFormat:@"%@ GiB%@", value,
@@ -510,7 +510,7 @@ titleForHeaderInSection:(NSInteger)section {
 - (NSString *)tableView:(UITableView *)tableView
 titleForFooterInSection:(NSInteger)section {
     (void)tableView; (void)section;
-    return @"Touch and hold a machine to rename, duplicate, or delete it. Only one machine runs at a time.";
+    return @"Touch and hold a machine for more options.";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView

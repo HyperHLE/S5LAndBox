@@ -62,31 +62,15 @@ typedef struct {
     NSMutableArray *e = [NSMutableArray array];
 
     [e addObject:@{ @"h": @"What this is",
-        @"b": @"S5LBox emulates the chip inside an iPhone 3G — the Samsung "
-              @"S5L8900 — instruction by instruction, from scratch. The goal "
-              @"is to run a real, unmodified copy of iPhone OS 3 on it.\n\n"
-              @"It is not a simulator and not a skin. Nothing here pretends to "
-              @"be an old iPhone; it runs the same processor instructions the "
-              @"real one did." }];
+        @"b": @"S5LBox emulates the iPhone 3G to run iPhone OS 3.1.3, "
+              @"including its apps, Home screen and Cydia. Import firmware "
+              @"during setup, then open a machine to get started." }];
 
     [e addObject:@{ @"h": @"What this app does today",
-        @"b": @"With no firmware imported, it runs a small built-in test "
-              @"program. That program exercises the parts of the emulator the "
-              @"phone version needs — the processor, the serial port and the "
-              @"screen — and draws to the display so you can see it working."
-              @"\n\nOnce you have imported a kernel, a device tree and a root "
-              @"filesystem, opening a machine boots Apple's own iPhone OS "
-              @"3.1.3 kernel instead: the same segments at the same addresses, "
-              @"the same device tree with the same values written into it, and "
-              @"the same boot arguments the desktop version of this project "
-              @"uses. The developer console says which of the two "
-              @"is running, and it is never a guess — it reports what was "
-              @"actually installed.\n\nOn-device runs have booted Apple's "
-              @"kernel and launchd. The newest complete SpringBoard and MBX "
-              @"graphics evidence still comes from the desktop harness, and "
-              @"no current phone run has demonstrated 30 fps. Those are two "
-              @"open measurements, not accomplishments this manual will "
-              @"borrow from another host." }];
+        @"b": @"You can run multiple saved machines, install compatible IPAs "
+              @"and manage tweaks through Cydia or S5LBox Packages. "
+              @"Compatibility and speed vary by app and device. Without "
+              @"firmware, a machine opens the built-in test program." }];
 
     [e addObject:@{ @"h": @"Machines",
         @"b": @"The first screen is a list of machines. Each one has its own "
@@ -101,34 +85,23 @@ typedef struct {
               @"which is most of the space it uses.\n\n"
               @"The gear on this screen opens App Settings and firmware import "
               @"without starting a machine first. Tap a machine to open it."
-              @"\n\nOnly one machine runs at a time. Each "
-              @"needs 128 MB of memory to itself, and the emulator core runs "
-              @"one machine per thread by design — so this is a limit of how it "
-              @"is built, not a setting." }];
+              @"\n\nOne machine can run at a time." }];
 
     [e addObject:@{ @"h": @"The screen and the buttons",
-        @"b": @"The picture is the guest's own display, copied out of emulated "
-              @"video memory when its pixels change. Nothing inside the guest "
-              @"display is drawn by host iOS.\n\nBelow it are Machine Settings, "
+        @"b": @"Below the display are Machine Settings, "
               @"Home, and Device Controls. Home supports a press or a hold. "
               @"Device Controls contains Sleep / Wake (hold for the guest power "
               @"menu), Silent mode, volume, and session actions. Pause freezes "
               @"emulation; it is different from putting the guest display to sleep. "
               @"App Settings → Emulator interface → Legacy restores the original "
               @"five-button row, diagnostics, and toolbar.\n\n"
-              @"Touching the screen is passed to the guest as a real touch "
-              @"report, in the same format the original digitizer used.\n\n"
               @"The guest must have loaded its input drivers to respond. "
               @"Developer Mode exposes delivery diagnostics in Console." }];
 
-    [e addObject:@{ @"h": @"Why it needs firmware, and why none is included",
-        @"b": @"To run iPhone OS this needs Apple's own software: the kernel, "
-              @"the drivers and the filesystem from a real firmware image.\n\n"
-              @"None of it is shipped, bundled or downloaded by this app, and "
-              @"it never will be — it is Apple's, not ours. You supply your "
-              @"own copy. Whatever you supply is never modified: each machine "
-              @"gets its own writable copy of the filesystem, and every run "
-              @"works on that. Your import is only ever read." }];
+    [e addObject:@{ @"h": @"Firmware",
+        @"b": @"Use iPhone OS 3.1.3 (7E18) firmware for iPhone 3G. Setup "
+              @"prepares it automatically. Each machine creates its own disk "
+              @"from the prepared firmware on first boot." }];
 
     [e addObject:@{ @"h": @"Machine Settings",
         @"b": @"Settings inside an open machine controls that session: pause "
@@ -152,13 +125,10 @@ typedef struct {
               @"Unsigned homebrew needs compatible AppSync inside the guest "
               @"(AppSync for OS 3.1 on iPhone OS 3.1.3). Virtual USB is on for "
               @"fresh boots unless explicitly disabled; older saved sessions "
-              @"may need a full shutdown and fresh boot. A successful install "
-              @"does not guarantee app compatibility or grant jailbreak tools "
-              @"extra privileges in an app sandbox.\n\n"
+              @"may need a full shutdown and fresh boot.\n\n"
               @"From Machines, App Settings → Install IPA retains the offline "
               @"installer for a jailbroken guest: it shuts down first and adds "
-              @"to /Applications without replacing existing apps. Your host "
-              @"iPhone is not modified.\n\n"
+              @"to /Applications without replacing existing apps.\n\n"
               @"If Files cannot provide a selected IPA or IPSW, download it "
               @"in Files first, then choose the local copy." }];
 
