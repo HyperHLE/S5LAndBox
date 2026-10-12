@@ -6916,6 +6916,80 @@ static void test_stopped_directory_counts(void) {
     }
 }
 
+static void test_cold_boot_allocation_protection(void) {
+    for (unsigned mode = 0; mode < 6; mode++) {
+        fixture_t *fx = mode == 5 ? fx_create_depth2(0) : fx_create(FX_DATA_BLOCKS - 1u);
+        char path[256];
+        rootfs_work_result_t probe, result;
+        if (!fx) { CHECK(0, "cold allocation fixture"); return; }
+        if (mode == 5) fx_node(fx, 3u)[1000] = 0xa5; // valid unused index bytes
+        if (mode < 2) fx_bitmap_set(fx, FX_DATA_FIRST, 0);
+        if (mode == 1 || mode == 4) fx_bitmap_set(fx, FX_DATA_FIRST + 1, 1);
+        put_be32(fx->image + VH_OFF + 4, 0u);
+        put_be32(fx->image + VH_OFF + 64, FX_DUP);
+        if (mode == 2 || mode == 3) {
+            uint8_t *node = fx_node(fx, 1u);
+            for (uint16_t i = 0; i < get_be16(node + 10); i++) {
+                uint8_t *record = node + get_be16(node + FX_NODE_SIZE - 2u * (i + 1u));
+                uint8_t *data = record + get_be16(record) + 2;
+                if (get_be16(data) != 2u) continue;
+                if (mode == 2) put_be32(data + 100, 0u);
+                else memcpy(data + 168, data + 88, 80); // colliding resource fork
+            }
+        }
+        memcpy(fx->image + FX_SIZE - VH_OFF, fx->image + VH_OFF, VH_LEN);
+        if (!make_path(path, sizeof path, "cold-allocation") || !write_file(path, fx->image, FX_SIZE)) {
+            CHECK(0, "cold allocation write"); free(fx); return;
+        }
+        bool refused = mode == 2 || mode == 3;
+        CHECK(rootfs_work_probe_cold_boot(path, &probe) ==
+              (refused ? ROOTFS_WORK_PROVISION_CATALOG_CORRUPT : ROOTFS_WORK_OK),
+              "cold preflight mode %u: %s", mode, probe.detail);
+        size_t size = 0;
+        uint8_t *bytes = read_file(path, &size);
+        CHECK(bytes && size == FX_SIZE && !memcmp(bytes, fx->image, FX_SIZE),
+              "cold preflight wrote source");
+        free(bytes);
+        CHECK(rootfs_work_reconcile_cold_boot_clone(path, &result) ==
+              (refused ? ROOTFS_WORK_PROVISION_CATALOG_CORRUPT : ROOTFS_WORK_OK),
+              "cold recovery mode %u: %s", mode, result.detail);
+        bytes = read_file(path, &size);
+        if (refused) {
+            CHECK(bytes && size == FX_SIZE && !memcmp(bytes, fx->image, FX_SIZE),
+                  "cold refusal changed bytes");
+        } else {
+            tr_volume_t vol;
+            CHECK(result.allocation_bits_repaired == (mode < 2 ? 1u : 0u),
+                  "cold allocation wrong change count");
+            CHECK(mode != 5 || (bytes && !memcmp(bytes + (FX_CATALOG_BLOCK + 3u) * FX_BLOCK_SIZE,
+                                                fx_node(fx, 3u), FX_NODE_SIZE)),
+                  "cold recovery canonicalized unrelated index-node padding");
+            if (bytes && tr_open(bytes, size, &vol)) {
+                CHECK(tr_bitmap(&vol, FX_DATA_FIRST) &&
+                      tr_bitmap(&vol, FX_DATA_FIRST + 1) == (mode == 1 || mode == 4),
+                      "cold recovery failed to protect referenced or orphan allocation");
+                CHECK(!memcmp(bytes + FX_DATA_FIRST * FX_BLOCK_SIZE,
+                              fx->image + FX_DATA_FIRST * FX_BLOCK_SIZE, FX_DATA_BLOCKS * FX_BLOCK_SIZE),
+                      "cold recovery touched file payloads");
+                CHECK(get_be32(bytes + VH_OFF + 4) == 0u && !result.published,
+                      "cold recovery claimed clean/publication");
+                tr_close(&vol);
+            }
+            CHECK(rootfs_work_probe_cold_boot(path, &probe) == ROOTFS_WORK_OK &&
+                  !probe.allocation_bits_repairable && !probe.allocation_free_count_repairable &&
+                  !probe.catalog_next_id_stale, "cold postflight not clean");
+            CHECK(rootfs_work_reconcile_cold_boot_clone(path, &result) == ROOTFS_WORK_OK,
+                  "cold repeat failed");
+            size_t again_size = 0;
+            uint8_t *again = read_file(path, &again_size);
+            CHECK(bytes && again && size == again_size && !memcmp(bytes, again, size),
+                  "cold recovery not byte-idempotent");
+            free(again);
+        }
+        free(bytes); free(fx); (void)remove(path);
+    }
+}
+
 static void test_status_and_stage_names(void) {
     static const rootfs_work_status_t statuses[] = {
         ROOTFS_WORK_PROVISION_INVALID, ROOTFS_WORK_PROVISION_UNSUPPORTED,
@@ -6944,6 +7018,7 @@ int main(void) {
     test_provision_unpublished_clone();
     test_stopped_catalog_id_hint();
     test_stopped_directory_counts();
+    test_cold_boot_allocation_protection();
     test_zero_fork_block_count_recovery();
     test_fixture_is_a_valid_volume();
     test_create_directory();

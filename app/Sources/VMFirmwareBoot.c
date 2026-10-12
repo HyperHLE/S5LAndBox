@@ -874,8 +874,8 @@ static bool powered_off_repair_changed(
  * live image: it works on an unpublished same-directory clone, strictly
  * re-audits that clone, and then hands publication to VMGuestInstall's
  * crash-recoverable rename transaction. Running/invalid checkpoints are never
- * changed. A marker-free cold boot can reconcile only derived catalog counts
- * and the allocation-ID hint, not structural or block-allocation damage.
+ * changed. A marker-free cold boot can reconcile derived catalog counts and
+ * protect uniquely referenced blocks, but never free blocks or move extents.
  */
 static bool recover_powered_off_work_image(
         const vm_firmware_boot_paths_t *paths, uint64_t work_size,
@@ -896,15 +896,21 @@ static bool recover_powered_off_work_image(
         rootfs_work_result_t probe;
         if (!join_path(image_path, sizeof image_path, paths->work,
                        VM_FW_BOOT_WORK_FILE)) return false;
-        rootfs_work_status_t status = rootfs_work_probe_catalog_counters(
-            image_path, true, &probe);
-        /* Unsupported/ambiguous images are not permission to perform broader
-         * recovery. Preserve the existing boot path and its original disk. */
+        rootfs_work_status_t status = rootfs_work_probe_cold_boot(image_path, &probe);
+        /* A valid format outside this bounded checker stays on the existing
+         * boot path, unchanged. Recognized damage must not boot into an
+         * allocator that can overwrite a file's still-referenced blocks. */
         if (status != ROOTFS_WORK_OK) {
-            fprintf(stderr, "[rootfs] cold-boot counter check skipped: %s\n", probe.detail);
-            return true;
+            if (status == ROOTFS_WORK_PROVISION_UNSUPPORTED) {
+                fprintf(stderr, "[rootfs] cold-boot check unsupported: %s\n", probe.detail);
+                return true;
+            }
+            if (detail && detail_capacity) (void)snprintf(detail, detail_capacity,
+                "The guest disk needs recovery before it can boot. %.180s", probe.detail);
+            return false;
         }
-        if (!probe.catalog_next_id_stale && !probe.catalog_directory_counts_repairable)
+        if (!probe.catalog_next_id_stale && !probe.catalog_directory_counts_repairable &&
+            !probe.allocation_bits_repairable && !probe.allocation_free_count_repairable)
             return true;
     }
 
@@ -958,7 +964,7 @@ static bool recover_powered_off_work_image(
 
     rootfs_work_result_t repair;
     rootfs_work_status_t repair_status =
-        counters_only ? rootfs_work_reconcile_catalog_clone(stage_path, &repair)
+        counters_only ? rootfs_work_reconcile_cold_boot_clone(stage_path, &repair)
                       : rootfs_work_repair_powered_off_clone(stage_path, &repair);
     if (repair_status != ROOTFS_WORK_OK) {
         char discard_detail[VM_FW_BOOT_DETAIL_CAPACITY] = {0};
@@ -983,6 +989,11 @@ static bool recover_powered_off_work_image(
                 rootfs_work_stage_name(repair.stage),
                 repair.detail[0] ? repair.detail
                                  : "the clone was not provably repairable");
+        if (counters_only) {
+            if (detail && detail_capacity) (void)snprintf(detail, detail_capacity,
+                "The guest disk could not be recovered safely. %.180s", repair.detail);
+            return false;
+        }
         return true;
     }
 
@@ -1062,7 +1073,7 @@ static bool recover_powered_off_work_image(
     fprintf(stderr,
             "[rootfs] %s recovery published: topology=%u, "
             "extents=%u, bitmap=%u, free-count=%u, directory-counts=%u\n",
-            counters_only ? "cold-boot counters" : "powered-off",
+            counters_only ? "cold-boot" : "powered-off",
             repair.catalog_topology_nodes_repaired,
             repair.catalog_extent_records_repaired,
             repair.allocation_bits_repaired,
