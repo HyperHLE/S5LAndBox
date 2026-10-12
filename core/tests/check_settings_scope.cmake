@@ -52,6 +52,15 @@ endforeach()
 message(STATUS "App defaults and current-machine settings ownership passed")
 
 file(READ "${APP_DIR}/Sources/VMGuestInstallViewController.m" jailbreak)
+foreach(required "_includePackages = _packageFlow || [VMSettings sharedSettings].packagesWithJailbreak;"
+        "if (!_includePackages) return YES;"
+        "if (_packageFlow || !_includePackages)"
+        "_openPackagesWhenReady = _packageFlow;")
+    string(FIND "${jailbreak}" "${required}" found)
+    if(found EQUAL -1)
+        message(FATAL_ERROR "Jailbreak lost its optional Packages policy: ${required}")
+    endif()
+endforeach()
 string(FIND "${jailbreak}" "vm_guest_install_build_after_force_off(" force_builder)
 string(FIND "${app}" "Force Off & Jailbreak" force_choice)
 string(FIND "${machines}" "[self_ prepareGuestInstall:install" boot_to_shutdown)
