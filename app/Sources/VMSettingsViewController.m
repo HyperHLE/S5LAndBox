@@ -63,6 +63,7 @@ typedef NS_ENUM(NSInteger, VMGeneralRow) {
     VMGeneralRowInstallIPA,
     VMGeneralRowPackageSetup,
     VMGeneralRowPackagesWithJailbreak,
+    VMGeneralRowGuestMicrophone,
     VMGeneralRowDeveloperMode,
     VMGeneralRowFirmware,
     VMGeneralRowAdvanced,
@@ -127,6 +128,7 @@ static NSString *VMStringFromC(const char *text) {
 - (void)inlineConsoleChanged:(UISwitch *)sender;
 - (void)developerModeToggled:(UISwitch *)sender;
 - (void)packagesWithJailbreakToggled:(UISwitch *)sender;
+- (void)guestMicrophoneToggled:(UISwitch *)sender;
 - (void)chooseGraphicsMode;
 - (void)chooseEmulatorInterface;
 - (NSArray<NSNumber *> *)generalRowsInSection:(NSInteger)section;
@@ -293,6 +295,10 @@ static NSString *VMStringFromC(const char *text) {
     _settings.packagesWithJailbreak = sender.isOn;
 }
 
+- (void)guestMicrophoneToggled:(UISwitch *)sender {
+    _settings.guestMicrophoneEnabled = sender.isOn;
+}
+
 - (void)doneTapped:(id)sender {
     (void)sender;
     [self dismissViewControllerAnimated:YES completion:nil];
@@ -314,6 +320,7 @@ static NSString *VMStringFromC(const char *text) {
         NSMutableArray<NSNumber *> *rows = [NSMutableArray arrayWithArray:
             @[@(VMGeneralRowInterface), @(VMGeneralRowFirmware), @(VMGeneralRowGraphicsMode)]];
         [rows addObject:@(VMGeneralRowPackagesWithJailbreak)];
+        [rows addObject:@(VMGeneralRowGuestMicrophone)];
         if (self.guestPackageSetupRequest) [rows addObject:@(VMGeneralRowPackageSetup)];
         [rows addObject:@(VMGeneralRowDeveloperMode)];
         return rows;
@@ -553,6 +560,18 @@ titleForFooterInSection:(NSInteger)section {
             sw.accessibilityLabel = cell.textLabel.text;
             sw.accessibilityIdentifier = @"s5lbox.settings.packages-with-jailbreak";
             [sw addTarget:self action:@selector(packagesWithJailbreakToggled:)
+                 forControlEvents:UIControlEventValueChanged];
+            cell.accessoryView = sw;
+        } else if (row == VMGeneralRowGuestMicrophone) {
+            cell.textLabel.text = @"Guest microphone";
+            cell.detailTextLabel.text = @"Allow access by default.";
+            cell.accessoryType = UITableViewCellAccessoryNone;
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            UISwitch *sw = [[UISwitch alloc] init];
+            sw.on = _settings.guestMicrophoneEnabled;
+            sw.accessibilityLabel = cell.textLabel.text;
+            sw.accessibilityIdentifier = @"s5lbox.settings.guest-microphone";
+            [sw addTarget:self action:@selector(guestMicrophoneToggled:)
                  forControlEvents:UIControlEventValueChanged];
             cell.accessoryView = sw;
         } else if (row == VMGeneralRowDeveloperMode) {

@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Allow guest apps such as Voice Memos to use the microphone when you enable it in Machine Settings.</string>
+    <string>Allow apps running inside S5LBox, such as Voice Memos, to use your microphone.</string>
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <!-- What the home screen shows under the icon.

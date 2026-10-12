@@ -11,6 +11,7 @@
 #import "VMIPALibrary.h"
 #import "VMFirmwareImporter.h"
 #import "VMFirmwareDownloader.h"
+#import <AVFoundation/AVFoundation.h>
 
 static NSString *const kAutomationOpenFirstMachineArgument =
     @"--s5lbox-automation-open-first-machine";
@@ -119,6 +120,7 @@ static UIGestureRecognizer *VMNavigationContentPopGestureRecognizer(
 @property (strong, nonatomic) VMDeviceAutomation *deviceAutomation;
 @property (nonatomic) BOOL importKeepsAwake;
 @property (nonatomic) BOOL previousIdleTimerDisabled;
+@property (nonatomic) BOOL requestingMicrophonePermission;
 @end
 
 @implementation AppDelegate
@@ -239,6 +241,23 @@ static UIGestureRecognizer *VMNavigationContentPopGestureRecognizer(
         application.idleTimerDisabled = self.previousIdleTimerDisabled;
         self.importKeepsAwake = NO;
     }
+}
+
+- (void)applicationDidBecomeActive:(UIApplication *)application {
+    (void)application;
+    /* Ask once at first foreground launch, without opening an input route or
+     * starting capture. Denial never blocks setup, boot, or audio playback. */
+    if (self.requestingMicrophonePermission ||
+        !VMSettings.sharedSettings.guestMicrophoneEnabled ||
+        AVAudioSession.sharedInstance.recordPermission != AVAudioSessionRecordPermissionUndetermined)
+        return;
+    self.requestingMicrophonePermission = YES;
+    __weak AppDelegate *weakSelf = self;
+    [AVAudioSession.sharedInstance requestRecordPermission:^(__unused BOOL granted) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            weakSelf.requestingMicrophonePermission = NO;
+        });
+    }];
 }
 
 @end

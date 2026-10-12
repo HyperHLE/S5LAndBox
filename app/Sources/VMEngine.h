@@ -183,7 +183,8 @@ typedef void (^VMEngineStopCompletion)(void);
  */
 - (NSString *)modeDescription;
 - (BOOL)isRunningFirmware;
-/* Main-thread session controls; microphone starts off for each engine. */
+/* Main-thread session controls; microphone inherits the app default, subject
+ * to iOS permission. Changing this switch affects this session only. */
 - (BOOL)microphoneEnabled;
 - (NSString *)audioStatus;
 - (void)setMicrophoneEnabled:(BOOL)enabled completion:(void (^)(BOOL, NSString *))completion;
