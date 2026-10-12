@@ -67,6 +67,38 @@ wake/unlock and inspection; this is not a minimum boot-time measurement.
 All 83 local CTests, all nine core CI jobs, and the iOS build/API baseline passed.
 No original user machine was changed; physical host coverage is iOS 15.8.5 only.
 
+The Controls restart path now requests guest shutdown and waits for the PMU
+power-off witness before replacing the machine, instead of resetting a running
+kernel during filesystem writes. Force Power Off remains available if a guest
+cannot complete shutdown; it is not claimed to be a clean unmount.
+
+An interrupted first-boot installation exposed two separate HFS consistency
+problems: a stale nextCatalogID/directory counts, and referenced file blocks
+marked free. A complete, collision-free owner audit can now protect those blocks
+on an unpublished cold-boot clone, retaining every existing allocation. It does
+not free orphan blocks, relocate file content, reconstruct ambiguous forks, or
+mark the disk clean. Saved running checkpoints remain untouched. The same
+protection runs before stopped jailbreak/helper file allocation and before disk
+growth can relocate allocation metadata.
+
+Physical recovery at `462300a` used a preserved copy of the affected Test disk.
+Read-only comparison of a local recovery candidate found 200 changed metadata
+bytes across the 2 GiB image and no changed file content. On the iPhone 6s Plus,
+the restored original disk booted through guest package configuration, published
+the Cydia icon, and connected Packages with 29 installed records and 375 available
+versions. Cydia then completed its first-launch reorganization and reached its
+user-role selection screen. This is recovery evidence, not a first-boot speed
+benchmark. The initial counter-only attempt was insufficient; protecting missing
+allocation bits was also required. Both the original disk and that failed retry
+were retained during testing.
+
+The same device then passed Controls > Restart: console evidence recorded
+`guest power-off confirmed; saving shutdown witness`, followed by a fresh boot
+from that powered-off checkpoint. The guest accepted unlock/Home navigation,
+and Packages reconnected without Save & close or a host-app relaunch, reading
+30 installed packages after Cydia's initial configuration and 375 source versions.
+All 83 local CTests passed at `db9bbd6`; its iOS build and iOS 13 API checks passed.
+
 The machine starts and Packages reopens automatically after setup. The one-time
 post-jailbreak startup can take several minutes on older hosts; that connection
 wait is bounded to ten minutes. Regular connection attempts stop after two
