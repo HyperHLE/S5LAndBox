@@ -303,12 +303,14 @@ static NSString *VMStringFromC(const char *text) {
 // Cell construction and selection use this same mapping. Developer Mode
 // changes only Advanced, never the shape of the everyday settings page.
 - (NSArray<NSNumber *> *)generalRowsInSection:(NSInteger)section {
-    if (section == VMSettingsSectionGeneral)
-        return _advanced
-            ? (self.guestPackageSetupRequest
-                ? @[@(VMGeneralRowGraphicsMode), @(VMGeneralRowPackageSetup), @(VMGeneralRowDeveloperMode)]
-                : @[@(VMGeneralRowGraphicsMode), @(VMGeneralRowDeveloperMode)])
-            : @[@(VMGeneralRowInterface), @(VMGeneralRowFirmware)];
+    if (section == VMSettingsSectionGeneral) {
+        if (!_advanced) return @[];
+        NSMutableArray<NSNumber *> *rows = [NSMutableArray arrayWithArray:
+            @[@(VMGeneralRowInterface), @(VMGeneralRowFirmware), @(VMGeneralRowGraphicsMode)]];
+        if (self.guestPackageSetupRequest) [rows addObject:@(VMGeneralRowPackageSetup)];
+        [rows addObject:@(VMGeneralRowDeveloperMode)];
+        return rows;
+    }
     if (section == VMSettingsSectionApps) {
         NSMutableArray<NSNumber *> *rows = [NSMutableArray array];
         if (self.guestInstallRequest) [rows addObject:@(VMGeneralRowJailbreak)];
@@ -322,7 +324,7 @@ static NSString *VMStringFromC(const char *text) {
 
 - (void)rebuildVisibleSections {
     if (!_advanced) {
-        NSMutableArray<NSNumber *> *sections = [NSMutableArray arrayWithObject:@(VMSettingsSectionGeneral)];
+        NSMutableArray<NSNumber *> *sections = [NSMutableArray array];
         if ([self generalRowsInSection:VMSettingsSectionApps].count) [sections addObject:@(VMSettingsSectionApps)];
         [sections addObject:@(VMSettingsSectionHelp)];
         _visible = sections;
