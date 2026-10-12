@@ -9954,9 +9954,9 @@ rootfs_work_status_t rootfs_work_repair_powered_off_clone(
     return rootfs_work_repair_powered_off_clone_impl(clone_path, true, result);
 }
 
-rootfs_work_status_t rootfs_work_provision_clone(const char *path,
+static rootfs_work_status_t provision_clone(const char *path,
     const rootfs_work_entry_t *entries, size_t count, bool allow_unclean,
-    rootfs_work_result_t *result) {
+    bool counters_only, rootfs_work_result_t *result) {
     host_file_t clone;
     file_stamp_t before, after;
     hfs_volume_t volume, final_volume;
@@ -9966,12 +9966,15 @@ rootfs_work_status_t rootfs_work_provision_clone(const char *path,
     result_reset(result);
     host_file_init(&clone);
     memset(&options, 0, sizeof options);
-    if (!path || !*path || !entries || !count || count > ROOTFS_WORK_MAX_ENTRIES)
+    if (!path || !*path || (!counters_only && (!entries || !count)) ||
+        count > ROOTFS_WORK_MAX_ENTRIES)
         return result_fail(result, ROOTFS_WORK_INVALID_ARGUMENT,
             ROOTFS_WORK_STAGE_ARGUMENTS, 0, "bounded entries and an unpublished clone are required");
     options.entries = entries;
     options.entry_count = count;
     options.allow_unclean_source = allow_unclean;
+    options.reconcile_catalog_counts = counters_only;
+    options.reconcile_next_catalog_id = counters_only;
     options.preserve_fstab = true;
     options.entry_mac_time = ROOTFS_WORK_DEFAULT_MAC_TIME;
     uint8_t *buffer = malloc(ROOTFS_WORK_MAX_IO_BUFFER);
@@ -10011,6 +10014,17 @@ done:
                     error, "could not close the unpublished app disk");
     free(buffer);
     return result->status;
+}
+
+rootfs_work_status_t rootfs_work_provision_clone(const char *path,
+    const rootfs_work_entry_t *entries, size_t count, bool allow_unclean,
+    rootfs_work_result_t *result) {
+    return provision_clone(path, entries, count, allow_unclean, false, result);
+}
+
+rootfs_work_status_t rootfs_work_reconcile_catalog_clone(const char *path,
+    rootfs_work_result_t *result) {
+    return provision_clone(path, NULL, 0, true, true, result);
 }
 
 rootfs_work_status_t rootfs_work_create(const char *source_path,

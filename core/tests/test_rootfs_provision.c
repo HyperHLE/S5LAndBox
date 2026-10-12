@@ -6875,6 +6875,43 @@ static void test_stopped_directory_counts(void) {
         uint8_t *source = read_file(run.source, &source_size);
         CHECK(source && source_size == FX_SIZE && !memcmp(source, fx->image, FX_SIZE),
               "counter preflight/recovery changed immutable source");
+        /* The cold-boot path uses an unpublished APFS clone, not the copying
+         * creator. Exercise the same identity refusals and idempotence there. */
+        char clone_path[256];
+        put_be32(fx->image + VH_OFF + 64, FX_DUP);
+        put_be32(fx->image + VH_OFF + 4,
+                 get_be32(fx->image + VH_OFF + 4) & ~0x100u);
+        memcpy(fx->image + FX_SIZE - VH_OFF, fx->image + VH_OFF, VH_LEN);
+        if (make_path(clone_path, sizeof clone_path, "counter-clone") &&
+            write_file(clone_path, fx->image, FX_SIZE)) {
+            rootfs_work_result_t repaired;
+            status = rootfs_work_reconcile_catalog_clone(clone_path, &repaired);
+            CHECK(status == (ambiguous ? ROOTFS_WORK_PROVISION_CATALOG_CORRUPT : ROOTFS_WORK_OK),
+                  "counter clone mode %u: %s", mode, repaired.detail);
+            size_t clone_size = 0;
+            uint8_t *bytes = read_file(clone_path, &clone_size);
+            if (ambiguous) {
+                CHECK(bytes && clone_size == FX_SIZE && !memcmp(bytes, fx->image, FX_SIZE),
+                      "refused counter clone changed bytes");
+            } else {
+                CHECK(!repaired.published && repaired.final_size == FX_SIZE,
+                      "counter clone publication/geometry contract");
+                CHECK(rootfs_work_probe_catalog_counters(clone_path, true, &probe) == ROOTFS_WORK_OK &&
+                      !probe.catalog_directory_counts_repairable && !probe.catalog_next_id_stale,
+                      "counter clone failed independent postflight");
+                CHECK(bytes && !memcmp(bytes + FX_DATA_FIRST * FX_BLOCK_SIZE, "note\n", 5u) &&
+                      get_be32(bytes + VH_OFF + 4) == get_be32(fx->image + VH_OFF + 4),
+                      "counter clone changed payload or dirty state");
+                CHECK(rootfs_work_reconcile_catalog_clone(clone_path, &repaired) == ROOTFS_WORK_OK,
+                      "counter clone repeat failed");
+                size_t again_size = 0;
+                uint8_t *again = read_file(clone_path, &again_size);
+                CHECK(bytes && again && clone_size == again_size && !memcmp(bytes, again, clone_size),
+                      "counter clone was not byte-idempotent");
+                free(again);
+            }
+            free(bytes); (void)remove(clone_path);
+        } else CHECK(0, "counter clone fixture write");
         free(source); run_release(&run); free(fx);
     }
 }

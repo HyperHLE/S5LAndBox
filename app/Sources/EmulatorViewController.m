@@ -122,6 +122,7 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
 - (void)backTapped:(id)sender;
 - (void)saveAndCloseTapped:(id)sender;
 - (void)shutDownTapped:(id)sender;
+- (void)shutDownGuestAndRestart:(BOOL)restart;
 - (void)forcePowerOffTapped:(id)sender;
 - (void)forcePowerOff;
 - (void)buildModernControls;
@@ -623,6 +624,10 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
 
 - (void)shutDownTapped:(id)sender {
     (void)sender;
+    [self shutDownGuestAndRestart:NO];
+}
+
+- (void)shutDownGuestAndRestart:(BOOL)restart {
     if (_savingCheckpoint || _restarting || _shuttingDown || _forcePowerOffRequested) return;
     _shuttingDown = YES;
     _userPaused = NO;
@@ -644,6 +649,16 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
             screen->_shuttingDown = NO;
             [screen setCheckpointSaving:NO];
             if (finished) {
+                if (restart) {
+                    /* The shutdown completion owns no disk or CPU anymore.
+                     * Keep its powered-off witness for cold-boot recovery. */
+                    [screen appendConsole:[screen->_engine takePendingConsoleText]];
+                    screen->_engine = nil;
+                    screen->_lastBringUpNote = nil;
+                    [screen launchEngine];
+                    [screen refreshStatusLine];
+                    return;
+                }
                 void (^afterShutdown)(void) = [screen.guestShutdownCompletion copy];
                 screen.guestShutdownCompletion = nil;
                 [screen.navigationController popViewControllerAnimated:!afterShutdown];
@@ -655,7 +670,7 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
                 return;
             }
             UIAlertController *alert = [UIAlertController
-                alertControllerWithTitle:@"Shutdown not completed"
+                alertControllerWithTitle:restart ? @"Restart not completed" : @"Shutdown not completed"
                                  message:message
                           preferredStyle:UIAlertControllerStyleAlert];
             [alert addAction:[UIAlertAction actionWithTitle:@"OK"
@@ -971,6 +986,15 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
 - (void)resetTapped:(id)sender {
     (void)sender;
     if (!_frame || _savingCheckpoint || _restarting || _shuttingDown || _forcePowerOffRequested) return;
+
+    /* A user restart must let iPhone OS flush its filesystem. Tearing down a
+     * running kernel here lost catalog updates during first-boot installation.
+     * Keep the existing immediate path only for the demo or an already halted
+     * engine, including the automatic transition after firmware preparation. */
+    if ([_engine isRunningFirmware] && [_engine isRunning]) {
+        [self shutDownGuestAndRestart:YES];
+        return;
+    }
 
     /* Take what the outgoing machine has already said before letting go of it.
      * Its final publication — the last of the guest's output, and the engine's

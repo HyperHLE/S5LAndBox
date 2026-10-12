@@ -807,6 +807,14 @@ rootfs_work_status_t rootfs_work_provision_clone(const char *clone_path,
     const rootfs_work_entry_t *entries, size_t count, bool allow_unclean,
     rootfs_work_result_t *result);
 
+/* Reconstruct only directory counts and the next object-ID hint on a stopped,
+ * unpublished clone. Requires complete, unambiguous catalog identities and
+ * rooted parent relationships. Does not repair allocation/topology, mark the
+ * volume clean, change file contents, or publish. Never pair a repaired disk
+ * with a running CPU checkpoint; discard the clone on any failure. */
+rootfs_work_status_t rootfs_work_reconcile_catalog_clone(const char *clone_path,
+    rootfs_work_result_t *result);
+
 /*
  * Create destination_path.  The destination must not exist.  On success the
  * exact published size is in result->final_size.  Once result->published is
