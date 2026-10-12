@@ -51,6 +51,26 @@ foreach(required "[_engine setInstructionCap:_sessionInstructionCap]"
 endforeach()
 message(STATUS "App defaults and current-machine settings ownership passed")
 
+file(READ "${APP_DIR}/Sources/VMEngine.m" engine)
+file(READ "${APP_DIR}/Sources/AppDelegate.m" delegate)
+foreach(required "setMicrophoneEnabled:[VMSettings sharedSettings].guestMicrophoneEnabled")
+    string(FIND "${engine}" "${required}" found)
+    if(found EQUAL -1)
+        message(FATAL_ERROR "New sessions must inherit the microphone default")
+    endif()
+endforeach()
+foreach(required "!VMSettings.sharedSettings.guestMicrophoneEnabled"
+        "AVAudioSessionRecordPermissionUndetermined" "requestRecordPermission:")
+    string(FIND "${delegate}" "${required}" found)
+    if(found EQUAL -1)
+        message(FATAL_ERROR "Initial microphone permission lost its opt-out/authorization gate")
+    endif()
+endforeach()
+string(FIND "${app}" "[rows addObject:@(VMGeneralRowGuestMicrophone)]" microphone_row)
+if(microphone_row EQUAL -1)
+    message(FATAL_ERROR "Advanced settings lost the guest microphone default")
+endif()
+
 file(READ "${APP_DIR}/Sources/VMGuestInstallViewController.m" jailbreak)
 foreach(required "_includePackages = _packageFlow || [VMSettings sharedSettings].packagesWithJailbreak;"
         "if (!_includePackages) return YES;"

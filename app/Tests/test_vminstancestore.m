@@ -80,6 +80,39 @@ static void testPackagesWithJailbreakChoice(void) {
     puts("Packages with jailbreak: default on, opt-out persistence, notifications and reset passed");
 }
 
+static void testGuestMicrophoneChoice(void) {
+    NSString *suite = [@"S5LBox.MicrophoneSettingsTests." stringByAppendingString:NSUUID.UUID.UUIDString];
+    NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
+    TestInterfaceSettings *settings = [TestInterfaceSettings new];
+    settings.testDefaults = defaults;
+    assert(settings.guestMicrophoneEnabled);
+    [defaults setObject:@"invalid" forKey:@"VMGuestMicrophoneEnabled"];
+    assert(settings.guestMicrophoneEnabled);
+    [defaults removeObjectForKey:@"VMGuestMicrophoneEnabled"];
+    settings.packagesWithJailbreak = NO;
+    NSDictionary *before = [defaults persistentDomainForName:suite];
+    __block NSUInteger changes = 0;
+    id observer = [NSNotificationCenter.defaultCenter addObserverForName:VMSettingsDidChangeNotification
+        object:settings queue:nil usingBlock:^(__unused NSNotification *note) { ++changes; }];
+    settings.guestMicrophoneEnabled = NO;
+    assert(!settings.guestMicrophoneEnabled && changes == 1);
+    TestInterfaceSettings *reopened = [TestInterfaceSettings new];
+    reopened.testDefaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
+    assert(!reopened.guestMicrophoneEnabled);
+    NSMutableDictionary *after = [[defaults persistentDomainForName:suite] mutableCopy];
+    [after removeObjectForKey:@"VMGuestMicrophoneEnabled"];
+    assert([before isEqual:after]);
+    settings.guestMicrophoneEnabled = YES;
+    assert(reopened.guestMicrophoneEnabled && changes == 2);
+    settings.guestMicrophoneEnabled = NO;
+    [settings resetToDefaults];
+    assert(reopened.guestMicrophoneEnabled && changes == 4);
+    assert(![defaults objectForKey:@"VMGuestMicrophoneEnabled"]);
+    [NSNotificationCenter.defaultCenter removeObserver:observer];
+    [defaults removePersistentDomainForName:suite];
+    puts("Guest microphone: default on, opt-out persistence, notifications and reset passed");
+}
+
 @interface VMInstanceStore (PersistenceTest)
 - (NSString *)containerDirectory;
 - (NSString *)storePath;
@@ -118,6 +151,7 @@ int main(int argc, const char *argv[]) {
     @autoreleasepool {
         testInterfaceChoice();
         testPackagesWithJailbreakChoice();
+        testGuestMicrophoneChoice();
         assert(argc == 2);
         testRoot = [[NSString stringWithUTF8String:argv[1]]
             stringByAppendingPathComponent:NSUUID.UUID.UUIDString];

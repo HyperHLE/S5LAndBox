@@ -35,6 +35,7 @@ static NSString *const kVMDeveloperMode = @"VMDeveloperMode";
 static NSString *const kVMInlineConsole = @"VMInlineConsole";
 static NSString *const kVMLegacyEmulatorUI = @"VMLegacyEmulatorUI";
 static NSString *const kVMPackagesWithJailbreak = @"VMPackagesWithJailbreak";
+static NSString *const kVMGuestMicrophoneEnabled = @"VMGuestMicrophoneEnabled";
 
 /*
  * The instruction caps the screen cycles through. 0 first because no limit is
@@ -97,6 +98,16 @@ static const uint64_t kVMInstructionCaps[] = {
 
 - (void)setPackagesWithJailbreak:(BOOL)enabled {
     [[self defaults] setBool:enabled forKey:kVMPackagesWithJailbreak];
+    [self publishChange];
+}
+
+- (BOOL)guestMicrophoneEnabled {
+    NSNumber *stored = [[self defaults] objectForKey:kVMGuestMicrophoneEnabled];
+    return [stored isKindOfClass:NSNumber.class] ? stored.boolValue : YES;
+}
+
+- (void)setGuestMicrophoneEnabled:(BOOL)enabled {
+    [[self defaults] setBool:enabled forKey:kVMGuestMicrophoneEnabled];
     [self publishChange];
 }
 
@@ -501,6 +512,7 @@ static const uint64_t kVMInstructionCaps[] = {
     [defaults removeObjectForKey:kVMPauseInBackground];
     [defaults removeObjectForKey:kVMLegacyEmulatorUI];
     [defaults removeObjectForKey:kVMPackagesWithJailbreak];
+    [defaults removeObjectForKey:kVMGuestMicrophoneEnabled];
     [self publishChange];
 }
 

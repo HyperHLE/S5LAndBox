@@ -301,6 +301,8 @@ static double vm_engine_now_seconds(void) {
     _instanceID = [identifier copy];
     _usbTransport = [[VMUSBTransport alloc] init];
     _audio = [VMAudioOutput new];
+    [_audio setMicrophoneEnabled:[VMSettings sharedSettings].guestMicrophoneEnabled
+                     completion:nil];
     return self;
 }
 

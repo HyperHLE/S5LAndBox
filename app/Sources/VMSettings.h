@@ -78,6 +78,10 @@ typedef NS_ENUM(NSInteger, VMGraphicsMode) {
  * never removes an installed helper or blocks an explicit Packages setup. */
 @property(nonatomic) BOOL packagesWithJailbreak;
 
+/* Default for new sessions. Actual input still requires iOS permission;
+ * the running machine retains its separate session switch. */
+@property(nonatomic) BOOL guestMicrophoneEnabled;
+
 #pragma mark - Recorded only (see the file note)
 
 /* `index` is an index into VMOptions.c's table. This is the effective launch
