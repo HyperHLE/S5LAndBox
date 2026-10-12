@@ -16,7 +16,7 @@ foreach(forbidden "sharedSettings" "NSUserDefaults" "resetToDefaults"
     endif()
 endforeach()
 foreach(required "Machine Settings" "runtimeDelegate" "snapshotsDirectory"
-        "setRuntimePaused:" "setRuntimePausesInBackground:"
+        "setRuntimePausesInBackground:" "setRuntimeMicrophoneEnabled:"
         "setRuntimeInlineConsole:" "setRuntimeInstructionCap:"
         "performAfterDismiss:" "UIAlertActionStyleCancel"
         "VMRuntimeActionForcePowerOff" "runtimeCanForcePowerOff"
@@ -51,6 +51,31 @@ foreach(required "[_engine setInstructionCap:_sessionInstructionCap]"
 endforeach()
 message(STATUS "App defaults and current-machine settings ownership passed")
 
+# Keep the everyday machine page free of duplicate Pause/microphone/background
+# switches. Only Controls owns Pause; session preferences belong to Advanced.
+foreach(forbidden "pauseChanged:" "s5lbox.machine-settings.pause" "@\"Pause guest\"")
+    string(FIND "${runtime}" "${forbidden}" found)
+    if(NOT found EQUAL -1)
+        message(FATAL_ERROR "Machine settings duplicated the Controls Pause action: ${forbidden}")
+    endif()
+endforeach()
+foreach(required "const VMRuntimeSection sections[] = { VMRuntimeSectionApps, VMRuntimeSectionSnapshots,\n        VMRuntimeSectionPower, VMRuntimeSectionAdvanced };"
+        "return section == 0 ? VMRuntimeSectionSession : VMRuntimeSectionDeveloper;"
+        "case VMRuntimeSectionSession: return 2;"
+        "advanced.advanced = YES;" "advanced.runtimeDelegate = self.runtimeDelegate;"
+        "advanced.showsDeveloperControls = self.showsDeveloperControls;"
+        "s5lbox.machine-settings.open-advanced")
+    string(FIND "${runtime}" "${required}" found)
+    if(found EQUAL -1)
+        message(FATAL_ERROR "Machine settings lost its Advanced-only session preferences: ${required}")
+    endif()
+endforeach()
+file(READ "${APP_DIR}/Sources/VMDeviceControlsViewController.m" controls)
+string(FIND "${controls}" "setRuntimePaused:" controls_pause)
+if(controls_pause EQUAL -1)
+    message(FATAL_ERROR "Controls must retain Pause/Resume")
+endif()
+
 file(READ "${APP_DIR}/Sources/VMEngine.m" engine)
 file(READ "${APP_DIR}/Sources/AppDelegate.m" delegate)
 foreach(required "setMicrophoneEnabled:[VMSettings sharedSettings].guestMicrophoneEnabled")
@@ -69,6 +94,11 @@ endforeach()
 string(FIND "${app}" "[rows addObject:@(VMGeneralRowGuestMicrophone)]" microphone_row)
 if(microphone_row EQUAL -1)
     message(FATAL_ERROR "Advanced settings lost the guest microphone default")
+endif()
+string(FIND "${app}" "[rows addObject:@(VMGeneralRowPauseInBackground)]" background_row)
+string(FIND "${app}" "VMDiagnosticsRowPauseInBackground" old_background_row)
+if(background_row EQUAL -1 OR NOT old_background_row EQUAL -1)
+    message(FATAL_ERROR "Background pause must be available in Advanced without Developer Mode")
 endif()
 
 file(READ "${APP_DIR}/Sources/VMGuestInstallViewController.m" jailbreak)

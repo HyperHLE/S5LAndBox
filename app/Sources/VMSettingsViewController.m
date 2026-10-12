@@ -64,6 +64,7 @@ typedef NS_ENUM(NSInteger, VMGeneralRow) {
     VMGeneralRowPackageSetup,
     VMGeneralRowPackagesWithJailbreak,
     VMGeneralRowGuestMicrophone,
+    VMGeneralRowPauseInBackground,
     VMGeneralRowDeveloperMode,
     VMGeneralRowFirmware,
     VMGeneralRowAdvanced,
@@ -82,7 +83,6 @@ typedef NS_ENUM(NSInteger, VMFirmwareRow) {
 
 typedef NS_ENUM(NSInteger, VMDiagnosticsRow) {
     VMDiagnosticsRowInstructionCap = 0,
-    VMDiagnosticsRowPauseInBackground,
     VMDiagnosticsRowInlineConsole,
     /* Explicit, never automatic. See VMJitProbe.h -- this is the one control in
      * the app that can legitimately take the process down, so it may only ever
@@ -321,6 +321,7 @@ static NSString *VMStringFromC(const char *text) {
             @[@(VMGeneralRowInterface), @(VMGeneralRowFirmware), @(VMGeneralRowGraphicsMode)]];
         [rows addObject:@(VMGeneralRowPackagesWithJailbreak)];
         [rows addObject:@(VMGeneralRowGuestMicrophone)];
+        [rows addObject:@(VMGeneralRowPauseInBackground)];
         if (self.guestPackageSetupRequest) [rows addObject:@(VMGeneralRowPackageSetup)];
         [rows addObject:@(VMGeneralRowDeveloperMode)];
         return rows;
@@ -562,16 +563,19 @@ titleForFooterInSection:(NSInteger)section {
             [sw addTarget:self action:@selector(packagesWithJailbreakToggled:)
                  forControlEvents:UIControlEventValueChanged];
             cell.accessoryView = sw;
-        } else if (row == VMGeneralRowGuestMicrophone) {
-            cell.textLabel.text = @"Guest microphone";
-            cell.detailTextLabel.text = @"Allow access by default.";
+        } else if (row == VMGeneralRowGuestMicrophone || row == VMGeneralRowPauseInBackground) {
+            BOOL microphone = row == VMGeneralRowGuestMicrophone;
+            cell.textLabel.text = microphone ? @"Guest microphone" : @"Pause in background";
+            cell.detailTextLabel.text = microphone ? @"Allow access by default."
+                : @"Recommended. iOS may terminate the app if disabled.";
             cell.accessoryType = UITableViewCellAccessoryNone;
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
             UISwitch *sw = [[UISwitch alloc] init];
-            sw.on = _settings.guestMicrophoneEnabled;
+            sw.on = microphone ? _settings.guestMicrophoneEnabled : _settings.pausesInBackground;
             sw.accessibilityLabel = cell.textLabel.text;
-            sw.accessibilityIdentifier = @"s5lbox.settings.guest-microphone";
-            [sw addTarget:self action:@selector(guestMicrophoneToggled:)
+            sw.accessibilityIdentifier = microphone ? @"s5lbox.settings.guest-microphone"
+                : @"s5lbox.settings.background";
+            [sw addTarget:self action:microphone ? @selector(guestMicrophoneToggled:) : @selector(pauseSwitchChanged:)
                  forControlEvents:UIControlEventValueChanged];
             cell.accessoryView = sw;
         } else if (row == VMGeneralRowDeveloperMode) {
@@ -733,18 +737,7 @@ titleForFooterInSection:(NSInteger)section {
                 return cell;
             }
 
-            UITableViewCell *cell = [self cellWithIdentifier:kVMSwitchCell
-                                                       style:UITableViewCellStyleSubtitle];
-            cell.textLabel.text = @"Pause in background";
-            cell.detailTextLabel.text =
-                @"Recommended. iOS may terminate the app if disabled.";
-            UISwitch *toggle = [[UISwitch alloc] initWithFrame:CGRectZero];
-            toggle.on = [_settings pausesInBackground];
-            [toggle addTarget:self
-                       action:@selector(pauseSwitchChanged:)
-             forControlEvents:UIControlEventValueChanged];
-            cell.accessoryView = toggle;
-            return cell;
+            return [self cellWithIdentifier:kVMPlainCell style:UITableViewCellStyleSubtitle];
         }
 
         case VMSettingsSectionCommandLine: {
