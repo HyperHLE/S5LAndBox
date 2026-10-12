@@ -10121,6 +10121,8 @@ rootfs_work_status_t rootfs_work_create(const char *source_path,
     uint8_t *buffer = NULL;
     ios3_sha256_context_t source_sha256;
     uint64_t work_size = 0;
+    uint32_t pre_growth_allocation_bits = 0;
+    uint32_t pre_growth_allocation_count = 0;
     bool temporary_created = false;
     bool success = false;
     int error = 0;
@@ -10278,6 +10280,24 @@ rootfs_work_status_t rootfs_work_create(const char *source_path,
         goto done;
     }
     work_size = source_before.size;
+    if (selected.protect_referenced_allocations &&
+        (selected.growth_bytes || selected.minimum_volume_bytes > work_size)) {
+        /* Growth can allocate/relocate the bitmap itself. Protect existing
+         * owners BEFORE that allocator runs, not just before inserting files. */
+        rootfs_work_options_t protection = {0};
+        protection.allow_unclean_source = true;
+        protection.protect_referenced_allocations = true;
+        protection.preserve_fstab = true;
+        if (!provision_volume(&temporary, work_size, &copied_volume, &protection,
+                              buffer, selected.io_buffer_bytes, result))
+            goto done;
+        pre_growth_allocation_bits = result->allocation_bits_repaired;
+        pre_growth_allocation_count = result->allocation_free_count_repaired;
+        if (!hfs_validate(&temporary, work_size, &copied_volume, buffer,
+                          selected.io_buffer_bytes, true,
+                          ROOTFS_WORK_STAGE_PROVISION_WRITE, result))
+            goto done;
+    }
     if (!selected.preserve_fstab &&
         !fstab_rewrite(&temporary, work_size, selected.fstab_line, buffer,
                        selected.io_buffer_bytes, result))
@@ -10342,6 +10362,8 @@ rootfs_work_status_t rootfs_work_create(const char *source_path,
         goto done;
     }
     result->final_size = work_size;
+    result->allocation_bits_repaired += pre_growth_allocation_bits;
+    result->allocation_free_count_repaired += pre_growth_allocation_count;
     if (!host_file_sync(&temporary, &error)) {
         result_fail(result, ROOTFS_WORK_SYNC_FAILED,
                     ROOTFS_WORK_STAGE_FLUSH, error,
