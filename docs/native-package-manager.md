@@ -27,6 +27,32 @@ validates the stopped disk, and uses the crash-safe disk-publication transaction
 Helper-only setup does not rerun Cydia repair. Historical snapshots still block
 setup, and strict filesystem errors are not ignored.
 
+An interrupted boot can leave the volume's next catalog ID behind records
+already written to disk. Stopped-disk setup now advances that hint above every
+observed catalog identity in the unpublished copy, after the full catalog
+audit. It does not reuse IDs, repair tree structure, or mark the disk clean.
+Both volume headers are updated together; the source disk stays unchanged until
+the transaction commits. Invalid structure or exhausted IDs still stop setup.
+The distinction between a catalog ID and its allocation hint follows
+[Apple's HFS Plus format specification](https://developer.apple.com/library/archive/technotes/tn/tn1150.html).
+
+Stopped-disk setup also rebuilds stale directory child counts from the complete
+catalog. This addresses the interrupted-create case where `/var/run/utmpx`
+exists but `/var/run` still claims to be empty: iPhone OS 3 then loops between
+"not found" and "already exists" during startup. Apple's later
+[HFS lookup implementation](https://raw.githubusercontent.com/apple-oss-distributions/hfs/main/core/hfs_lookup.c)
+documents that same failure. Recovery requires unique IDs, exact object/thread
+pairs, valid directory parents and a tree rooted at the volume root. It changes
+only derived counts in the private transaction, re-audits after writing, and
+never deletes the existing file. A read-only preflight keeps repeated helper
+setup fast when neither files nor counters need changing. This is stopped setup
+recovery, not a general filesystem repair tool or a clean-shutdown substitute.
+
+A pending marker keeps interrupted helper setup from appearing ready merely
+because a credential was created. Retries retain the same private credential;
+only exact verification or successful disk publication clears the marker.
+Existing completed installations without a marker remain compatible.
+
 The machine starts and Packages reopens automatically after setup. The one-time
 post-jailbreak startup can take several minutes on older hosts; that connection
 wait is bounded to ten minutes. Regular connection attempts stop after two

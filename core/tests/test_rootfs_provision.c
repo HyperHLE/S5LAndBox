@@ -6766,6 +6766,119 @@ static void test_stopped_catalog_id_hint(void) {
     }
 }
 
+static void test_stopped_directory_counts(void) {
+    for (unsigned mode = 0; mode < 15; mode++) {
+        fixture_t *fx = fx_create(FX_DATA_BLOCKS - 1u);
+        run_t run = {0};
+        rootfs_work_entry_t entry;
+        rootfs_work_result_t probe;
+        if (!fx) { CHECK(0, "counter fixture allocation"); return; }
+        if (mode >= 13) {
+            // Complete object/thread pairs, but an orphan or directory cycle.
+            fx->count = 0;
+            fx_folder(fx, 1u, "TestVol", FX_ROOT, 0u, 0x10u, 0u);
+            fx_thread(fx, FX_ROOT, 3u, 1u, "TestVol");
+            fx_thread(fx, FX_ALPHA, 3u, mode == 13 ? 99u : FX_BETA, "alpha");
+            if (mode == 14) {
+                fx_folder(fx, FX_ALPHA, "beta", FX_BETA, 1u, 0x10u, 1u);
+                fx_thread(fx, FX_BETA, 3u, FX_ALPHA, "beta");
+            }
+            fx_folder(fx, mode == 13 ? 99u : FX_BETA, "alpha", FX_ALPHA, 0u, 0x10u, 0u);
+            (void)fx_emit_leaf(fx, 1u, 0u, fx->count, 0u, 0u);
+            fx_emit_header(fx, 1u, 1u, 1u, 1u, (uint32_t)fx->count, 2u, NULL);
+        }
+        uint8_t *node = fx_node(fx, 1u);
+        for (uint16_t i = 0; i < get_be16(node + 10); i++) {
+            uint8_t *record = node + get_be16(node + FX_NODE_SIZE - 2u * (i + 1u));
+            uint8_t *data = record + get_be16(record) + 2u;
+            uint16_t kind = get_be16(data);
+            if (kind == 1u && get_be32(data + 8) == FX_BETA) {
+                // Existing first child with zero valence: the utmpx boot loop.
+                if (mode != 0) put_be32(data + 4, mode == 2 ? 99u : 0u);
+                if (mode == 3 || mode == 4) put_be32(data + 84, 99u);
+                if (mode == 4) put_be16(data + 2, 0u); // reserved count preserved
+            }
+            if (kind == 2u && mode == 6) put_be32(data + 8, FX_DUP);
+            if (kind == 4u) {
+                if (mode == 7) put_be16(data, 3u);
+                if (mode == 8) put_be32(data + 4, FX_ALPHA);
+                if (mode == 9) put_be16(data + 10, 'X');
+                if (mode == 10) put_be32(record + 2, FX_NEXT_CNID);
+            }
+        }
+        if (mode == 1 || mode == 3) {
+            put_be32(fx->image + VH_OFF + 4, get_be32(fx->image + VH_OFF + 4) & ~0x100u);
+            memcpy(fx->image + FX_SIZE - VH_OFF, fx->image + VH_OFF, VH_LEN);
+        }
+        if (!make_path(run.source, sizeof run.source, "counts") ||
+            !make_path(run.destination, sizeof run.destination, "counts") ||
+            !write_file(run.source, fx->image, FX_SIZE)) {
+            CHECK(0, "counter fixture write"); free(fx); return;
+        }
+        rootfs_work_status_t status = rootfs_work_probe_catalog_counters(run.source, true, &probe);
+        bool ambiguous = (mode >= 6 && mode <= 10) || mode >= 13;
+        CHECK(status == (ambiguous ? ROOTFS_WORK_PROVISION_CATALOG_CORRUPT : ROOTFS_WORK_OK),
+              "counter preflight mode %u: %s", mode, probe.detail);
+        if (!ambiguous)
+            CHECK(probe.catalog_directory_counts_repairable == (mode ? 1u : 0u),
+                  "counter preflight mode %u missed stale directory", mode);
+        run.options.preserve_fstab = true;
+        run.options.allow_unclean_source = mode != 11;
+        run.options.reconcile_catalog_counts = true;
+        run.options.repair_catalog_topology = mode == 12;
+        if (mode == 5) {
+            entry_file(&entry, "/beta/second", "data", 4u, 0644u);
+            run.options.entries = &entry; run.options.entry_count = 1;
+        }
+        run.status = rootfs_work_create(run.source, run.destination, &run.options, &run.result);
+        if (mode >= 6) {
+            expect_refusal(&run, fx, ambiguous ? ROOTFS_WORK_PROVISION_CATALOG_CORRUPT :
+                           ROOTFS_WORK_INVALID_ARGUMENT, "unsafe counter reconciliation");
+        } else {
+            run.output = read_file(run.destination, &run.output_size);
+            expect_success(&run, "stopped directory counts");
+            CHECK(run.result.catalog_directory_counts_repaired == (mode ? 1u : 0u),
+                  "counter repair mode %u reporting", mode);
+            tr_volume_t vol;
+            if (run.output && tr_open(run.output, run.output_size, &vol)) {
+                tr_record_t folder = {0}, file = {0};
+                CHECK(tr_find(&vol, FX_ROOT, "beta", &folder) &&
+                      get_be32(folder.data + 4) == (mode == 5 ? 2u : 1u) &&
+                      get_be32(folder.data + 84) == (mode == 4 ? 99u : 0u),
+                      "counter recovery/insertion did not restore directory counts");
+                CHECK(tr_find(&vol, FX_BETA, "note.txt", &file) &&
+                      get_be32(file.data + 8) == FX_NOTE &&
+                      get_be64(file.data + 88) == 5u &&
+                      !memcmp(run.output + FX_DATA_FIRST * FX_BLOCK_SIZE, "note\n", 5u),
+                      "counter recovery changed the existing file");
+                tr_close(&vol);
+            }
+            CHECK(rootfs_work_probe_catalog_counters(run.destination, true, &probe) == ROOTFS_WORK_OK &&
+                  !probe.catalog_directory_counts_repairable && !probe.catalog_next_id_stale,
+                  "counter recovery was not idempotent: %s", probe.detail);
+            if (mode != 5 && run.output) {
+                // Only the requested count fields may differ; retain all metadata.
+                uint8_t *originalNode = fx_node(fx, 1u);
+                for (uint16_t i = 0; i < get_be16(originalNode + 10); i++) {
+                    uint8_t *record = originalNode + get_be16(originalNode + FX_NODE_SIZE - 2u * (i + 1u));
+                    uint8_t *data = record + get_be16(record) + 2u;
+                    if (get_be16(data) == 1u && get_be32(data + 8) == FX_BETA) {
+                        size_t offset = (size_t)(data - fx->image);
+                        memcpy(run.output + offset + 4, data + 4, 4);
+                        memcpy(run.output + offset + 84, data + 84, 4);
+                    }
+                }
+                CHECK(!memcmp(run.output, fx->image, FX_SIZE), "counter recovery changed unrelated bytes");
+            }
+        }
+        size_t source_size = 0;
+        uint8_t *source = read_file(run.source, &source_size);
+        CHECK(source && source_size == FX_SIZE && !memcmp(source, fx->image, FX_SIZE),
+              "counter preflight/recovery changed immutable source");
+        free(source); run_release(&run); free(fx);
+    }
+}
+
 static void test_status_and_stage_names(void) {
     static const rootfs_work_status_t statuses[] = {
         ROOTFS_WORK_PROVISION_INVALID, ROOTFS_WORK_PROVISION_UNSUPPORTED,
@@ -6793,6 +6906,7 @@ int main(void) {
     test_status_and_stage_names();
     test_provision_unpublished_clone();
     test_stopped_catalog_id_hint();
+    test_stopped_directory_counts();
     test_zero_fork_block_count_recovery();
     test_fixture_is_a_valid_volume();
     test_create_directory();
