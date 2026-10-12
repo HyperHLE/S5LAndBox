@@ -1,122 +1,51 @@
 # S5LBox
 
-Run real **iPhone OS 3.1.3** inside an app on a modern iPhone.
+**Classic iPhone OS. On your iPhone.**
 
-S5LBox emulates the S5L8900 hardware used by the iPhone 3G. It runs Apple's
-actual operating system—not a recreation of its interface. Setup downloads
-firmware directly from Apple or imports your IPSW. No Apple firmware is bundled.
-Public decryption keys for the supported build are included, so no key entry is needed.
+S5LBox runs real iPhone OS 3.1.3 by emulating the iPhone 3G's hardware.
+Rediscover its home screen, apps, and tweaks inside an app on your iPhone—no
+host jailbreak or JIT setup required.
 
-[![core-tests](https://github.com/j0shua-SYSON/S5LBox/actions/workflows/core-tests.yml/badge.svg)](https://github.com/j0shua-SYSON/S5LBox/actions/workflows/core-tests.yml)
-[![ios-build](https://github.com/j0shua-SYSON/S5LBox/actions/workflows/ios-build.yml/badge.svg)](https://github.com/j0shua-SYSON/S5LBox/actions/workflows/ios-build.yml)
+## What you can do
 
-## Status
-
-An initial release candidate is being prepared. This is still experimental.
-
-- Boots the real guest OS, including its lock screen, home screen and apps.
-- Supports touch, physical-button controls and saving/resuming the last session.
-- Includes optional guest networking and a Cydia installation flow.
-- Uses a build-time-generated ARM64 engine with interpreter fallback. No runtime
-  code generation or host jailbreak is required.
-
-Animations, keyboard input and heavier tasks can still be slow. Original-device
-responsiveness and consistent 30 fps are **not** established. Audio playback is
-not available, MBX graphics remain experimental, and not every app or tweak works.
-Old websites and package repositories may also be unavailable or incompatible.
+- Create separate machines, choose their storage size, and save and resume sessions.
+- Install compatible IPA apps without shutting down the machine.
+- Add Cydia and manage tweaks with the built-in Packages browser.
+- Use guest networking, experimental audio playback, and optional microphone input.
 
 ## Get started
 
-You need an ARM64 iPhone running **iOS 13 or later**. Setup supports
-**iPhone 3G / iPhone1,2, iPhone OS 3.1.3 (7E18)** firmware.
-The deployment target is not a guarantee that every device/version has been
-tested. Keep several gigabytes of storage free for import, guest disks and
-temporary installation copies.
+You'll need a 64-bit iPhone running **iOS 13 or later** and several gigabytes
+of free storage.
 
-1. Obtain `S5LBox.ipa` from a successful
-   [ios-build workflow run](https://github.com/j0shua-SYSON/S5LBox/actions/workflows/ios-build.yml)
-   for the branch you intend to test. The Actions artifact is only ad-hoc signed:
-   **re-sign it with your own valid provisioning profile before installing on
-   stock iOS**.
-2. Open S5LBox and tap **Download iPhone OS**. Setup uses ipsw.me to find the
-   Apple download, checks its SHA-256, and prepares it automatically.
-   You can also choose **Import IPSW** to select a file. Then tap
-   **Start iPhone OS**. Configured installations skip setup on later launches.
-   Firmware import and manual key overrides remain available in App Settings.
-   Keep the app open during setup; cancellation removes temporary downloads.
-3. New machines default to **MBX** graphics (experimental), with the CPU
-   software-renderer override off. **CPU software** remains a compatibility
-   option. Initial disk preparation continues into a cold boot automatically;
-   it takes longer than reopening a saved session.
-4. Use **Back** and choose **Save & close** to resume later, or **Shut down** to
-   power off iPhone OS and cold-boot next time. Keep S5LBox open until it returns
-   to Machines before force-quitting or copying machine files.
+1. Get `S5LBox.ipa` from a successful **main** run of the
+   [iOS build workflow](https://github.com/j0shua-SYSON/S5LBox/actions/workflows/ios-build.yml?query=branch%3Amain).
+   Development builds must be signed for your device before installing on stock iOS.
+2. Open S5LBox and choose **Download iPhone OS**, or **Import IPSW** to use your
+   own iPhone 3G / iPhone OS 3.1.3 firmware.
+3. Keep the app open while setup validates and prepares the firmware, then tap
+   **Start iPhone OS**. No decryption keys to enter.
 
-If a guest is stuck booting or cannot shut down, use **Back → Force Power Off**
-(also in Machine Settings). Back stays available during shutdown. This stops
-without guest input or saving; unsaved work may be lost and the guest disk may
-need repair. The next launch starts from disk, and a pending jailbreak is cancelled.
+Use **Save & close** to pick up where you left off. Advanced options live in
+Settings. Firmware downloads come directly from Apple; no Apple firmware is
+bundled with S5LBox.
 
-Without supported firmware, the app runs a built-in test program—not iPhone OS.
+## Before you try it
 
-The Machines gear opens **App Settings** for defaults, firmware and jailbreak.
-Inside a machine, **Settings** opens **Machine Settings** for that session's
-pause behavior, snapshots and power controls. Session changes do not alter
-defaults for other machines; Developer Mode adds session diagnostics.
+S5LBox is experimental and preparing for its first release. Performance varies
+by device, and some apps, tweaks, and hardware features are not yet fully
+supported. Older online services may no longer work. Back up important guest
+data before experimenting.
 
-### Networking and Cydia
+## Explore further
 
-Guest networking and internet routing are **on by default for new machines**.
-To opt out before the first open, disable **Guest networking (PPP over uart4)**
-under **App Settings → Developer Mode**. Explicit saved choices are preserved;
-these defaults do not retrofit an existing offline disk.
+- [Installing apps](docs/live-ipa-usb.md) · [Packages and tweaks](docs/native-package-manager.md)
+- [Audio](docs/audio.md) · [Storage options](docs/DISK-SIZE-PRESETS.md)
+- [Architecture](docs/ARCHITECTURE.md) · [Detailed technical reference](docs/README-DETAILED.md)
 
-To install Cydia, prepare a machine first, return to Machines, then open
-**Settings → Jailbreak** and follow its prompts. This affects the **guest only**,
-not your host iPhone. Packages are downloaded separately; they are not bundled.
-**Force Off & Jailbreak** discards saved running state and checks the stopped
-disk without waiting for guest touch or shutdown. Unsaved work may be lost.
-Structural disk errors still block installation; force-off does not mark a
-damaged filesystem clean.
-Back up guest data first: a new installation replaces the selected guest disk,
-while supported upgrades use a separate migration path.
+### Build the core
 
-Put `.ipa` files in **Files → On My iPhone → S5LBox → IPAs**, or use **Import**
-in the IPA Library. Inside a running machine, open **Settings → Install IPA**
-and choose one app. The guest's built-in installer receives it over virtual
-USB, registers its icon, and can update an existing app without shutting down.
-Adding files to the library never installs them automatically.
-
-Use compatible, unencrypted ARMv6 apps for iPhone OS 3.1.3 or earlier. The guest
-still checks signing; unsigned homebrew needs a compatible guest setup such as
-**AppSync for OS 3.1**, installed through guest Cydia. Virtual USB defaults on
-for fresh boots unless explicitly disabled. Older saved sessions may need a
-full shutdown and fresh boot. Successful installation does not guarantee that
-an app runs; jailbreak utilities may not work inside a normal app sandbox.
-
-**App Settings → Install IPA** on Machines retains the older offline path:
-it shuts down the selected jailbroken guest and adds to `/Applications`, with
-no replacement of existing apps. Neither path installs apps on your host iPhone.
-
-On the package-manager feature branch, **Machine Settings → Packages** browses
-sources and installs/removes guest packages with native-host dependency planning
-and downloads. Existing jailbroken machines need **App Settings → Set up package
-manager** once. See [package-manager scope and trust limits](docs/native-package-manager.md)
-before using third-party repositories; repository signatures are not yet verified.
-
-### Keep your data safe
-
-Each machine has its own writable disk. **Duplicate copies configuration, not
-guest data.** Deleting a machine also deletes its files. Cydia machines use a
-2 GiB guest volume, and installation/migration backups can require additional
-host storage. Copy a stopped machine's complete folder from
-**Files → On My iPhone → S5LBox → Machines** before experimenting; do not mix a
-saved state from one moment with a disk from another. Named snapshots are not
-yet a supported replacement for this backup.
-
-## Build and test
-
-The portable core needs a C compiler and CMake:
+The emulator core is portable C. Its public tests do not need Apple firmware.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -124,23 +53,12 @@ cmake --build build --config Release
 ctest --test-dir build -C Release --output-on-failure
 ```
 
-Public tests do not require Apple firmware. The iOS app is built with Xcode;
-the [iOS workflow](.github/workflows/ios-build.yml) contains the build and
-packaging steps.
-
-## More detail
-
-- [Detailed README](docs/README-DETAILED.md) — the previous long-form overview,
-  technical explanations and historical measurements.
-- [Architecture](docs/ARCHITECTURE.md) and [firmware preparation](docs/BOOT_CHAIN.md).
-- [Validation](docs/QUALITY.md), [development history](docs/BOOTLOG.md) and
-  [performance notes](docs/hotpath.md). These include historical results, not
-  blanket compatibility guarantees.
+The iOS app uses Xcode. See the [build workflow](.github/workflows/ios-build.yml)
+for the app build and packaging steps.
 
 ## License
 
 [MIT](LICENSE). Created by [j0shua-SYSON](https://github.com/j0shua-SYSON).
-The optional guest package helper includes Apple Csu startup code under
-[APSL; notices and source links](app/Resources/GuestPackages/GuestPackageNotices.txt).
-Supply only firmware you are entitled to use. S5LBox is independent of Apple
-and is not affiliated with or endorsed by Apple.
+The guest package helper includes Apple Csu code under
+[APSL](app/Resources/GuestPackages/GuestPackageNotices.txt).
+S5LBox is an independent project, not affiliated with or endorsed by Apple.
