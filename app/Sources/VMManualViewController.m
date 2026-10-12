@@ -83,8 +83,8 @@ typedef struct {
               @"copies the settings, not the disk: the copy builds its own the "
               @"first time you open it. Delete removes that machine's disk too, "
               @"which is most of the space it uses.\n\n"
-              @"The gear on this screen opens App Settings and firmware import "
-              @"without starting a machine first. Tap a machine to open it."
+              @"The gear on this screen opens App Settings. Firmware import is "
+              @"under Advanced. Tap a machine to open it."
               @"\n\nOne machine can run at a time." }];
 
     [e addObject:@{ @"h": @"The screen and the buttons",
@@ -93,7 +93,7 @@ typedef struct {
               @"Device Controls contains Sleep / Wake (hold for the guest power "
               @"menu), Silent mode, volume, and session actions. Pause freezes "
               @"emulation; it is different from putting the guest display to sleep. "
-              @"App Settings → Emulator interface → Legacy restores the original "
+              @"App Settings → Advanced → Emulator interface → Legacy restores the original "
               @"five-button row, diagnostics, and toolbar.\n\n"
               @"The guest must have loaded its input drivers to respond. "
               @"Developer Mode exposes delivery diagnostics in Console." }];
@@ -134,8 +134,8 @@ typedef struct {
               @"in Files first, then choose the local copy." }];
 
     [e addObject:@{ @"h": @"App Settings",
-        @"b": @"App Settings contains the emulator interface, firmware import, "
-              @"jailbreak and IPA installation. Firmware import selects the public "
+        @"b": @"App Settings contains jailbreak and IPA installation. Advanced "
+              @"contains the emulator interface and firmware import. Firmware import selects the public "
               @"keys automatically for iPhone OS 3.1.3 (7E18), iPhone 3G. "
               @"Manual keys remain available on the Firmware screen.\n\n"
               @"Advanced contains graphics defaults, package-manager setup and "
