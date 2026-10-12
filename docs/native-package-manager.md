@@ -53,6 +53,20 @@ because a credential was created. Retries retain the same private credential;
 only exact verification or successful disk publication clears the marker.
 Existing completed installations without a marker remain compatible.
 
+Validation on 2026-10-12: the default-on jailbreak, explicit setup with the
+preference off, and ordinary opt-out paths were exercised in the isolated
+SetupTest app on an iPhone 6s Plus (iOS 15.8.5). At `46410b0`, the previously
+stalled disposable machine completed recovery and its first post-jailbreak
+boot without an extra restart. Independent catalog readback found `/var/run`
+valence corrected from zero to one, with the same `utmpx` identity and no
+mismatched object/thread pairs. Packages read 29 installed packages, including
+Cydia Installer, and refreshed both default sources (375 available versions).
+Normal guest shutdown returned to the machine list. First-start service
+availability was observed after roughly eight minutes, including manual
+wake/unlock and inspection; this is not a minimum boot-time measurement.
+All 83 local CTests, all nine core CI jobs, and the iOS build/API baseline passed.
+No original user machine was changed; physical host coverage is iOS 15.8.5 only.
+
 The machine starts and Packages reopens automatically after setup. The one-time
 post-jailbreak startup can take several minutes on older hosts; that connection
 wait is bounded to ten minutes. Regular connection attempts stop after two
