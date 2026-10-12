@@ -706,6 +706,11 @@ rootfs_work_status_t rootfs_work_probe_catalog_counters(
     const char *source_path, bool allow_unclean_source,
     rootfs_work_result_t *result);
 
+/* Cold-boot preflight adds a complete allocation-owner audit. Refuses overlap,
+ * incomplete forks, nonempty overflow trees and unknown attribute storage. */
+rootfs_work_status_t rootfs_work_probe_cold_boot(const char *source_path,
+    rootfs_work_result_t *result);
+
 /*
  * Read-only preflight for one exact file repair. The same HFS validation,
  * catalog audit, path resolution, data-fork identity and BSD metadata checks
@@ -813,6 +818,15 @@ rootfs_work_status_t rootfs_work_provision_clone(const char *clone_path,
  * volume clean, change file contents, or publish. Never pair a repaired disk
  * with a running CPU checkpoint; discard the clone on any failure. */
 rootfs_work_status_t rootfs_work_reconcile_catalog_clone(const char *clone_path,
+    rootfs_work_result_t *result);
+
+/* Cold-boot recovery on an unpublished clone after saved-state invalidation.
+ * In addition to catalog counters, marks uniquely referenced blocks allocated
+ * and derives freeBlocks. NEVER frees existing allocations, relocates extents,
+ * reconstructs incomplete forks, modifies payloads/topology, or marks clean.
+ * Complete identity/parent and allocation-owner audits must pass first.
+ * Discard on any error; only the caller's transaction may publish success. */
+rootfs_work_status_t rootfs_work_reconcile_cold_boot_clone(const char *clone_path,
     rootfs_work_result_t *result);
 
 /*

@@ -5782,7 +5782,7 @@ done:
 }
 
 static bool catalog_repair_powered_off_allocation(
-    catalog_ctx_t *ctx, bool repair, recovery_allocation_plan_t *plan,
+    catalog_ctx_t *ctx, bool repair, bool additive_only, recovery_allocation_plan_t *plan,
     rootfs_work_stage_t stage, rootfs_work_result_t *result) {
     static const uint16_t FORK_OFFSETS[HFS_SPECIAL_FORK_COUNT] = {
         112u, 192u, 272u, 352u, 432u
@@ -5815,9 +5815,20 @@ static bool catalog_repair_powered_off_allocation(
                 result))
             goto done;
     if (!recovery_extents_tree_is_empty(ctx, stage, result) ||
-        !recovery_attributes_are_inline(ctx, stage, result) ||
-        !recovery_plan_catalog_forks(ctx, repair, plan, stage, result))
+        !recovery_attributes_are_inline(ctx, stage, result))
         goto done;
+    if (!recovery_plan_catalog_forks(ctx, repair && !additive_only, plan, stage, result)) {
+        /* With an empty overflow tree, incomplete inline forks are damage,
+         * not simply a valid format our cold-boot checker does not support. */
+        if (additive_only && result->status == ROOTFS_WORK_PROVISION_UNSUPPORTED)
+            result->status = ROOTFS_WORK_PROVISION_CATALOG_CORRUPT;
+        goto done;
+    }
+    if (additive_only && plan->collision_count) {
+        result_fail(result, ROOTFS_WORK_PROVISION_CATALOG_CORRUPT, stage, 0,
+                    "cold-boot recovery refuses overlapping file extents");
+        goto done;
+    }
     if (plan->fork_count_changes && plan->collision_count) {
         result_fail(result, ROOTFS_WORK_PROVISION_CATALOG_CORRUPT, stage, 0,
                     "zero fork block count cannot be repaired alongside allocation collisions");
@@ -5838,7 +5849,7 @@ static bool catalog_repair_powered_off_allocation(
     plan->missing_count = initial_missing;
     plan->orphan_count = initial_orphan;
     if (!repair && (plan->collision_count != 0u || initial_missing != 0u ||
-                    initial_orphan != 0u)) {
+                    (!additive_only && initial_orphan != 0u))) {
         result_fail(result, ROOTFS_WORK_PROVISION_CATALOG_CORRUPT, stage, 0,
                     "strict allocation audit found %u missing, %u orphan, and "
                     "%u collided blocks", initial_missing, initial_orphan,
@@ -5853,6 +5864,13 @@ static bool catalog_repair_powered_off_allocation(
         bool target = recovery_bitmap_test(plan->target_bitmap, block);
         bool current = recovery_bitmap_test(ctx->bitmap, block);
 
+        /* An interrupted boot is not proof that an unreferenced allocation is
+         * disposable. Protect every existing allocation; only add missing
+         * bits after a complete collision-free owner audit. */
+        if (additive_only && current && !target) {
+            recovery_bitmap_set(plan->target_bitmap, block);
+            target = true;
+        }
         if (target)
             target_used++;
         if (target != current)
@@ -9445,12 +9463,13 @@ static bool publish(destination_dir_t *destination,
 
 static rootfs_work_status_t rootfs_work_validate_source_impl(
     const char *source_path, bool allow_unclean_source, bool check_counters,
-    rootfs_work_result_t *result) {
+    bool check_allocation, rootfs_work_result_t *result) {
     host_file_t source;
     file_stamp_t source_before;
     file_stamp_t source_after;
     hfs_volume_t source_volume;
     catalog_ctx_t catalog;
+    recovery_allocation_plan_t plan = {0};
     uint8_t *buffer = NULL;
     int error = 0;
 
@@ -9479,8 +9498,8 @@ static rootfs_work_status_t rootfs_work_validate_source_impl(
         goto done;
 #endif
     result->source_size = source_before.size;
-    if (!hfs_validate(&source, source_before.size, &source_volume, buffer,
-                      ROOTFS_WORK_MAX_IO_BUFFER, allow_unclean_source,
+    if (!hfs_validate_policy(&source, source_before.size, &source_volume, buffer,
+                      ROOTFS_WORK_MAX_IO_BUFFER, allow_unclean_source, check_allocation, NULL,
                       ROOTFS_WORK_STAGE_SOURCE_VALIDATE, result))
         goto done;
     if (check_counters) {
@@ -9493,6 +9512,9 @@ static rootfs_work_status_t rootfs_work_validate_source_impl(
                                       ROOTFS_WORK_STAGE_SOURCE_VALIDATE, result))
             goto done;
         result->catalog_next_id_stale = catalog.next_cnid <= catalog.highest_catalog_id;
+        if (check_allocation && !catalog_repair_powered_off_allocation(
+                &catalog, true, true, &plan, ROOTFS_WORK_STAGE_SOURCE_VALIDATE, result))
+            goto done;
     }
     if (!host_file_stamp(&source, &source_after, &error)) {
         result_fail(result, ROOTFS_WORK_SOURCE_CHANGED,
@@ -9520,6 +9542,7 @@ done:
             result->cleanup_system_error = error;
     }
     free(buffer);
+    recovery_plan_close(&plan);
     catalog_close(&catalog);
     return result->status;
 }
@@ -9527,13 +9550,18 @@ done:
 rootfs_work_status_t rootfs_work_validate_source_ex(
     const char *source_path, bool allow_unclean_source,
     rootfs_work_result_t *result) {
-    return rootfs_work_validate_source_impl(source_path, allow_unclean_source, false, result);
+    return rootfs_work_validate_source_impl(source_path, allow_unclean_source, false, false, result);
 }
 
 rootfs_work_status_t rootfs_work_probe_catalog_counters(
     const char *source_path, bool allow_unclean_source,
     rootfs_work_result_t *result) {
-    return rootfs_work_validate_source_impl(source_path, allow_unclean_source, true, result);
+    return rootfs_work_validate_source_impl(source_path, allow_unclean_source, true, false, result);
+}
+
+rootfs_work_status_t rootfs_work_probe_cold_boot(const char *source_path,
+    rootfs_work_result_t *result) {
+    return rootfs_work_validate_source_impl(source_path, true, true, true, result);
 }
 
 rootfs_work_status_t rootfs_work_validate_source(
@@ -9754,7 +9782,7 @@ rootfs_work_status_t rootfs_work_probe_file_rewrite(
 }
 
 static rootfs_work_status_t rootfs_work_repair_powered_off_clone_impl(
-    const char *clone_path, bool repair_allocation,
+    const char *clone_path, bool repair_allocation, bool additive_only,
     rootfs_work_result_t *result) {
     host_file_t clone;
     file_stamp_t before;
@@ -9810,12 +9838,14 @@ static rootfs_work_status_t rootfs_work_repair_powered_off_clone_impl(
                              ROOTFS_WORK_STAGE_SOURCE_VALIDATE, result)) ||
         !catalog_open(&catalog, &clone, before.size, &volume,
                        ROOTFS_WORK_DEFAULT_MAC_TIME, result) ||
-        !catalog_repair_powered_off_topology(
+        !(additive_only ? catalog_audit(&catalog, catalog.leaf_records, false, false, NULL,
+                                      ROOTFS_WORK_STAGE_PROVISION_PLAN, result)
+                       : catalog_repair_powered_off_topology(
             &catalog, true, &changed_nodes, &stale_refs,
-            ROOTFS_WORK_STAGE_PROVISION_PLAN, result) ||
+            ROOTFS_WORK_STAGE_PROVISION_PLAN, result)) ||
         (repair_allocation &&
          !catalog_repair_powered_off_allocation(
-             &catalog, true, &allocation_plan,
+             &catalog, true, additive_only, &allocation_plan,
              ROOTFS_WORK_STAGE_PROVISION_PLAN, result)) ||
         !catalog_audit(&catalog, catalog.leaf_records, true, false,
                        &residual_backlinks,
@@ -9875,15 +9905,15 @@ static rootfs_work_status_t rootfs_work_repair_powered_off_clone_impl(
     }
     if (!catalog_open(&catalog, &clone, before.size, &final_volume,
                       ROOTFS_WORK_DEFAULT_MAC_TIME, result) ||
-        !catalog_repair_powered_off_topology(
+        (!additive_only && !catalog_repair_powered_off_topology(
             &catalog, false, &verify_changed, &verify_stale,
-            ROOTFS_WORK_STAGE_FINAL_VALIDATE, result) ||
+            ROOTFS_WORK_STAGE_FINAL_VALIDATE, result)) ||
         verify_changed != 0u || verify_stale != 0u ||
         !catalog_audit(&catalog, catalog.leaf_records, false, false, NULL,
                        ROOTFS_WORK_STAGE_FINAL_VALIDATE, result) ||
         (repair_allocation &&
          !catalog_repair_powered_off_allocation(
-             &catalog, false, &verify_plan,
+             &catalog, false, additive_only, &verify_plan,
              ROOTFS_WORK_STAGE_FINAL_VALIDATE, result))) {
         if (result->status == ROOTFS_WORK_OK)
             result_fail(result, ROOTFS_WORK_PROVISION_CATALOG_CORRUPT,
@@ -9945,13 +9975,13 @@ done:
 
 rootfs_work_status_t rootfs_work_repair_powered_off_catalog_clone(
     const char *clone_path, rootfs_work_result_t *result) {
-    return rootfs_work_repair_powered_off_clone_impl(clone_path, false,
+    return rootfs_work_repair_powered_off_clone_impl(clone_path, false, false,
                                                      result);
 }
 
 rootfs_work_status_t rootfs_work_repair_powered_off_clone(
     const char *clone_path, rootfs_work_result_t *result) {
-    return rootfs_work_repair_powered_off_clone_impl(clone_path, true, result);
+    return rootfs_work_repair_powered_off_clone_impl(clone_path, true, false, result);
 }
 
 static rootfs_work_status_t provision_clone(const char *path,
@@ -10025,6 +10055,20 @@ rootfs_work_status_t rootfs_work_provision_clone(const char *path,
 rootfs_work_status_t rootfs_work_reconcile_catalog_clone(const char *path,
     rootfs_work_result_t *result) {
     return provision_clone(path, NULL, 0, true, true, result);
+}
+
+rootfs_work_status_t rootfs_work_reconcile_cold_boot_clone(const char *path,
+    rootfs_work_result_t *result) {
+    if (!result) return ROOTFS_WORK_INVALID_ARGUMENT;
+    rootfs_work_status_t status = rootfs_work_probe_cold_boot(path, result);
+    if (status != ROOTFS_WORK_OK) return status;
+    rootfs_work_result_t allocation;
+    status = rootfs_work_repair_powered_off_clone_impl(path, true, true, &allocation);
+    if (status != ROOTFS_WORK_OK) { *result = allocation; return status; }
+    status = rootfs_work_reconcile_catalog_clone(path, result);
+    result->allocation_bits_repaired = allocation.allocation_bits_repaired;
+    result->allocation_free_count_repaired = allocation.allocation_free_count_repaired;
+    return status;
 }
 
 rootfs_work_status_t rootfs_work_create(const char *source_path,
