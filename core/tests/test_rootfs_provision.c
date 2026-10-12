@@ -6991,7 +6991,7 @@ static void test_cold_boot_allocation_protection(void) {
 }
 
 static void test_stopped_provision_allocation_protection(void) {
-    for (unsigned mode = 0; mode < 4; ++mode) {
+    for (unsigned mode = 0; mode < 5; ++mode) {
         fixture_t *fx = fx_create(FX_DATA_BLOCKS - 1u);
         run_t run = {0};
         rootfs_work_entry_t entry;
@@ -7019,6 +7019,7 @@ static void test_stopped_provision_allocation_protection(void) {
         run.options.protect_referenced_allocations = true;
         run.options.entries = &entry;
         run.options.entry_count = mode == 3 ? 0u : 1u;
+        if (mode == 4) run.options.growth_bytes = 1024u * 1024u;
         run.status = rootfs_work_create(run.source, run.destination, &run.options, &run.result);
         if (mode == 1 || mode == 2) {
             expect_refusal(&run, fx, mode == 1 ? ROOTFS_WORK_INVALID_ARGUMENT :
