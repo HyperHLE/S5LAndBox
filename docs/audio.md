@@ -16,11 +16,11 @@ do not describe the current emulator.
 - `VMAudioBuffer.c`: two bounded single-producer/single-consumer queues and
   rate conversion to/from a 48 kHz host stream. No callback allocation or locks.
 - `VMAudioOutput.m`: route/interruption handling, foreground-only host audio,
-  and explicit microphone permission. Machine Settings has a session-only
+  and explicit microphone permission. Machine Settings > Advanced has a session-only
   microphone switch, initialized from the default-on Guest microphone option
   in Settings > Advanced. First foreground launch asks for iOS permission once;
   declining does not block setup, boot, or playback. The Advanced opt-out applies
-  to later sessions, while Machine Settings changes only the current session.
+  to later sessions, while Machine Settings > Advanced changes only the current session.
   Denial feeds silence, not fabricated input.
 - Snapshot v34 stores unread guest FIFO bytes and clock phases. Tested v32/v33
   migration starts empty FIFOs, since those versions had no PCM transport.
