@@ -2067,6 +2067,7 @@ static vm_guest_install_build_status_t build_maintain_install(
         options.entries = maintenance_entries;
         options.entry_count = maintenance_entry_count;
     }
+    options.reconcile_next_catalog_id = allow_unclean_source && options.entry_count != 0u;
     build_progress_adapter_t adapter = {progress, progress_context};
     options.progress = build_rootfs_progress;
     options.progress_ctx = &adapter;
@@ -2504,6 +2505,7 @@ build_from_directory(
     memset(&options, 0, sizeof options);
     options.preserve_fstab = true;
     options.allow_unclean_source = allow_unclean_source;
+    options.reconcile_next_catalog_id = allow_unclean_source;
     options.minimum_volume_bytes = chosen_capacity > VM_GUEST_INSTALL_MINIMUM_VOLUME_BYTES
         ? chosen_capacity : VM_GUEST_INSTALL_MINIMUM_VOLUME_BYTES;
     options.entries = vm_guest_rootfs_plan_entries(plan);

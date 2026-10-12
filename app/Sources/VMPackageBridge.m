@@ -22,13 +22,17 @@ static void PackageCopy(void *context, uint64_t done, uint64_t total) {
     state->progress(@"Preparing package files", total ? (double)done / total : -1);
 }
 
-static NSData *Capability(NSString *identifier, BOOL create, NSError **error) {
+static NSURL *CapabilityURL(NSString *identifier, NSError **error) {
     if (identifier.length != 16 || [identifier rangeOfCharacterFromSet:[[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet]].location != NSNotFound) {
         if (error) *error = VMPackageError(@"Invalid machine identity."); return nil;
     }
     NSURL *base = [NSFileManager.defaultManager URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject;
     NSURL *folder = [base URLByAppendingPathComponent:@"PackageCapabilities" isDirectory:YES];
-    NSURL *path = [folder URLByAppendingPathComponent:identifier];
+    return [folder URLByAppendingPathComponent:identifier];
+}
+static NSData *Capability(NSString *identifier, BOOL create, NSError **error) {
+    NSURL *path = CapabilityURL(identifier,error); if (!path) return nil;
+    NSURL *folder = path.URLByDeletingLastPathComponent;
     NSData *data = [NSData dataWithContentsOfURL:path options:0 error:NULL];
     if (data.length == 32) return data;
     if (!create || [NSFileManager.defaultManager fileExistsAtPath:path.path]) {
@@ -44,12 +48,25 @@ static NSData *Capability(NSString *identifier, BOOL create, NSError **error) {
         ![NSFileManager.defaultManager setAttributes:@{NSFilePosixPermissions:@0600} ofItemAtPath:path.path error:error]) return nil;
     return data;
 }
+static BOOL PackageSetupPending(NSString *identifier, BOOL pending, NSError **error) {
+    NSURL *token = CapabilityURL(identifier,error); if (!token) return NO;
+    NSURL *marker = [token URLByAppendingPathExtension:@"pending"];
+    if (!pending) {
+        if (![NSFileManager.defaultManager fileExistsAtPath:marker.path]) return YES;
+        return [NSFileManager.defaultManager removeItemAtURL:marker error:error];
+    }
+    return [NSFileManager.defaultManager createDirectoryAtURL:token.URLByDeletingLastPathComponent
+        withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:error] &&
+        [[NSData data] writeToURL:marker options:NSDataWritingAtomic error:error];
+}
 @implementation VMPackageBridge {
     VMUSBTransport *_transport;
     NSString *_identifier;
 }
 + (BOOL)hasCapabilityForInstance:(NSString *)identifier {
-    return Capability(identifier, NO, NULL).length == 32;
+    NSURL *token = CapabilityURL(identifier,NULL);
+    return token && ![NSFileManager.defaultManager fileExistsAtPath:
+        [token URLByAppendingPathExtension:@"pending"].path] && Capability(identifier, NO, NULL).length == 32;
 }
 - (instancetype)initWithTransport:(VMUSBTransport *)transport instanceID:(NSString *)identifier {
     self = [super init]; if (self) { _transport = transport; _identifier = [identifier copy]; } return self;
@@ -208,6 +225,10 @@ static NSData *Capability(NSString *identifier, BOOL create, NSError **error) {
     if (rootfs_work_validate_source_ex(live.fileSystemRepresentation,true,&check) != ROOTFS_WORK_OK) {
         if (error) *error = VMPackageError([NSString stringWithUTF8String:check.detail]); return NO;
     }
+    // Keep the credential stable across retries/crashes, but never advertise
+    // a half-finished setup as ready. Clear this only after verified publication
+    // (or exact verification of a previously completed installation).
+    if (!PackageSetupPending(identifier,YES,error)) return NO;
     NSData *token = Capability(identifier,YES,error); if (!token) return NO;
     NSArray *files = @[@[program,binary,@0755],@[[root stringByAppendingPathComponent:@"capability"],token,@0600],
         @[@"/System/Library/LaunchDaemons/com.j0shua.s5lbox.packages-v1.plist",plist,@0644]];
@@ -237,6 +258,7 @@ static NSData *Capability(NSString *identifier, BOOL create, NSError **error) {
         }
     }
     if (count == 1 && !needsRewrite) {
+        if (!PackageSetupPending(identifier,NO,error)) return NO;
         if (progress) progress(@"Package files verified", 1);
         return YES;
     }
@@ -251,6 +273,7 @@ static NSData *Capability(NSString *identifier, BOOL create, NSError **error) {
         if (error) *error = VMPackageError([NSString stringWithUTF8String:detail]); return NO;
     }
     rootfs_work_options_t options={0}; options.preserve_fstab=true; options.allow_unclean_source=true;
+    options.reconcile_next_catalog_id=true;
     options.entries=entries; options.entry_count=count;
     __attribute__((objc_precise_lifetime)) VMPackageSetupProgress copyProgress = [progress copy];
     PackageCopyProgress progressState = {copyProgress, 0};
@@ -266,6 +289,7 @@ static NSData *Capability(NSString *identifier, BOOL create, NSError **error) {
     if (vm_guest_app_publish(work,identity,&transaction,detail,sizeof detail) != VM_GUEST_INSTALL_OK || !transaction.committed) {
         if (error) *error = VMPackageError([NSString stringWithUTF8String:detail]); return NO;
     }
+    if (!PackageSetupPending(identifier,NO,error)) return NO;
     if (progress) progress(@"Package files verified", 1);
     return YES;
 }

@@ -452,12 +452,21 @@ typedef struct rootfs_work_options {
      * separate, durable proof that the guest completed full power-off and the
      * backing file was flushed afterwards; or explicit user consent to discard
      * saved running state after host teardown, with strict source validation
-     * and ALL catalog/allocation recovery disabled. All geometry, alternate-header,
+     * and topology/allocation recovery disabled. All geometry, alternate-header,
      * allocation-bitmap and catalog checks still run, and the dirty/inconsistent
      * attributes are preserved in the output so the next guest boot can fsck;
      * this option never lies by stamping a volume clean.
      */
     bool allow_unclean_source;
+
+    /* A stopped disk may have persisted catalog records ahead of nextCatalogID.
+     * After the full strict catalog audit, advance only this allocation hint
+     * above every object, thread and parent ID observed. Never reuse an ID,
+     * wrap, change a catalog record, or mark the volume clean. This opt-in is
+     * allowed after host teardown and saved-state invalidation; it does not
+     * authorize topology/allocation repair. The source remains immutable.
+     * Requires allow_unclean_source; off by default. */
+    bool reconcile_next_catalog_id;
 
     /*
      * Opt-in, OFF by default, and valid only with allow_unclean_source.  An
