@@ -80,6 +80,28 @@ static void testPackagesWithJailbreakChoice(void) {
     puts("Packages with jailbreak: default on, opt-out persistence, notifications and reset passed");
 }
 
+static void testBackgroundPauseChoice(void) {
+    NSString *suite = [@"S5LBox.BackgroundSettingsTests." stringByAppendingString:NSUUID.UUID.UUIDString];
+    NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
+    TestInterfaceSettings *settings = [TestInterfaceSettings new];
+    settings.testDefaults = defaults;
+    assert(settings.pausesInBackground);
+    [defaults setObject:@"invalid" forKey:@"vm.diag.pauseInBackground"];
+    assert(settings.pausesInBackground);
+    settings.pausesInBackground = NO;
+    TestInterfaceSettings *reopened = [TestInterfaceSettings new];
+    reopened.testDefaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
+    assert(!reopened.pausesInBackground);
+    assert(reopened.guestMicrophoneEnabled); // Session defaults are independent.
+    reopened.pausesInBackground = YES;
+    assert(settings.pausesInBackground);
+    settings.pausesInBackground = NO;
+    [settings resetToDefaults];
+    assert(reopened.pausesInBackground && reopened.guestMicrophoneEnabled);
+    [defaults removePersistentDomainForName:suite];
+    puts("Background pause: default on, invalid preference, opt-out persistence and reset passed");
+}
+
 static void testGuestMicrophoneChoice(void) {
     NSString *suite = [@"S5LBox.MicrophoneSettingsTests." stringByAppendingString:NSUUID.UUID.UUIDString];
     NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
@@ -152,6 +174,7 @@ int main(int argc, const char *argv[]) {
         testInterfaceChoice();
         testPackagesWithJailbreakChoice();
         testGuestMicrophoneChoice();
+        testBackgroundPauseChoice();
         assert(argc == 2);
         testRoot = [[NSString stringWithUTF8String:argv[1]]
             stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
