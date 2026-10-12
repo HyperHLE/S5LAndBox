@@ -195,7 +195,7 @@ static UILabel *ControlLabel(NSString *text, UIFontTextStyle style) {
 - (void)saveTapped { [self performAfterDismiss:VMRuntimeActionSaveAndClose]; }
 - (void)restartTapped {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Restart this guest?"
-        message:@"This starts a fresh boot. Unsaved guest work may be lost." preferredStyle:UIAlertControllerStyleAlert];
+        message:@"Shut down iPhone OS and start it again." preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     __weak VMDeviceControlsViewController *weakSelf = self;
     [alert addAction:[UIAlertAction actionWithTitle:@"Restart" style:UIAlertActionStyleDestructive

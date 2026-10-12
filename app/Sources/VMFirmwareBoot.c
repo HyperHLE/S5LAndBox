@@ -873,8 +873,9 @@ static bool powered_off_repair_changed(
  * proves that iPhone OS has stopped touching its disk. Repair never opens the
  * live image: it works on an unpublished same-directory clone, strictly
  * re-audits that clone, and then hands publication to VMGuestInstall's
- * crash-recoverable rename transaction. Ordinary running checkpoints and
- * marker-free boots do no filesystem maintenance here.
+ * crash-recoverable rename transaction. Running/invalid checkpoints are never
+ * changed. A marker-free cold boot can reconcile only derived catalog counts
+ * and the allocation-ID hint, not structural or block-allocation damage.
  */
 static bool recover_powered_off_work_image(
         const vm_firmware_boot_paths_t *paths, uint64_t work_size,
@@ -886,8 +887,26 @@ static bool recover_powered_off_work_image(
             paths->work, work_size, ram_base, ram_size,
             checkpoint_detail, sizeof checkpoint_detail);
     if (published) *published = false;
-    if (checkpoint != VM_RESUME_CHECKPOINT_POWERED_OFF)
+    bool counters_only = checkpoint == VM_RESUME_CHECKPOINT_ABSENT;
+    if (checkpoint != VM_RESUME_CHECKPOINT_POWERED_OFF && !counters_only)
         return true;
+
+    if (counters_only) {
+        char image_path[VM_FW_BOOT_PATH_CAPACITY];
+        rootfs_work_result_t probe;
+        if (!join_path(image_path, sizeof image_path, paths->work,
+                       VM_FW_BOOT_WORK_FILE)) return false;
+        rootfs_work_status_t status = rootfs_work_probe_catalog_counters(
+            image_path, true, &probe);
+        /* Unsupported/ambiguous images are not permission to perform broader
+         * recovery. Preserve the existing boot path and its original disk. */
+        if (status != ROOTFS_WORK_OK) {
+            fprintf(stderr, "[rootfs] cold-boot counter check skipped: %s\n", probe.detail);
+            return true;
+        }
+        if (!probe.catalog_next_id_stale && !probe.catalog_directory_counts_repairable)
+            return true;
+    }
 
     char stage_path[VM_FW_BOOT_PATH_CAPACITY + 128u];
     if (!vm_guest_recovery_stage_image_path(
@@ -939,7 +958,8 @@ static bool recover_powered_off_work_image(
 
     rootfs_work_result_t repair;
     rootfs_work_status_t repair_status =
-        rootfs_work_repair_powered_off_clone(stage_path, &repair);
+        counters_only ? rootfs_work_reconcile_catalog_clone(stage_path, &repair)
+                      : rootfs_work_repair_powered_off_clone(stage_path, &repair);
     if (repair_status != ROOTFS_WORK_OK) {
         char discard_detail[VM_FW_BOOT_DETAIL_CAPACITY] = {0};
         vm_guest_install_status_t discarded =
@@ -984,7 +1004,7 @@ static bool recover_powered_off_work_image(
         return false;
     }
 
-    if (!powered_off_repair_changed(&repair)) {
+    if (!counters_only && !powered_off_repair_changed(&repair)) {
         transaction_status = vm_guest_recovery_discard_stage(
             paths->work, transaction_detail, sizeof transaction_detail);
         if (transaction_status != VM_GUEST_INSTALL_OK) {
@@ -1036,14 +1056,18 @@ static bool recover_powered_off_work_image(
         }
     }
 
-    if (published) *published = true;
+    /* This flag describes a clean-shutdown fallback, not merely publication.
+     * Counter reconciliation must never claim a full power-off witness. */
+    if (published) *published = !counters_only;
     fprintf(stderr,
-            "[rootfs] powered-off recovery published: topology=%u, "
-            "extents=%u, bitmap=%u, free-count=%u\n",
+            "[rootfs] %s recovery published: topology=%u, "
+            "extents=%u, bitmap=%u, free-count=%u, directory-counts=%u\n",
+            counters_only ? "cold-boot counters" : "powered-off",
             repair.catalog_topology_nodes_repaired,
             repair.catalog_extent_records_repaired,
             repair.allocation_bits_repaired,
-            repair.allocation_free_count_repaired);
+            repair.allocation_free_count_repaired,
+            repair.catalog_directory_counts_repaired);
     return true;
 }
 

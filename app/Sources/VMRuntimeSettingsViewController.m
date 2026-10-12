@@ -267,7 +267,7 @@ typedef NS_ENUM(NSInteger, VMRuntimeSection) {
             return;
         }
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Restart this guest?"
-            message:@"This forces a fresh boot. Unsaved guest work may be lost."
+            message:@"Shut down iPhone OS and start it again."
             preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
         __weak VMRuntimeSettingsViewController *weakSelf = self;
