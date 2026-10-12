@@ -387,8 +387,8 @@ static void VMGuestInstallBuildProgress(
         if (ready) ready();
         return;
     }
-    UIAlertController *offer = [UIAlertController alertControllerWithTitle:@"Packages is set up"
-        message:@"Open Packages to browse and install tweaks."
+    UIAlertController *offer = [UIAlertController alertControllerWithTitle:@"Ready to start"
+        message:@"Start iPhone OS to finish installing Cydia and Packages."
         preferredStyle:UIAlertControllerStyleAlert];
     [offer addAction:[UIAlertAction actionWithTitle:@"Open iPhone OS" style:UIAlertActionStyleCancel
         handler:^(__unused UIAlertAction *action) {

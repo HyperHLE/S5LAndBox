@@ -276,6 +276,7 @@ static BOOL PackageSetupPending(NSString *identifier, BOOL pending, NSError **er
     rootfs_work_options_t options={0}; options.preserve_fstab=true; options.allow_unclean_source=true;
     options.reconcile_next_catalog_id=true;
     options.reconcile_catalog_counts=true;
+    options.protect_referenced_allocations=true;
     options.entries=entries; options.entry_count=count;
     __attribute__((objc_precise_lifetime)) VMPackageSetupProgress copyProgress = [progress copy];
     PackageCopyProgress progressState = {copyProgress, 0};
