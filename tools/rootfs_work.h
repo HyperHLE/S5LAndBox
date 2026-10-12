@@ -474,6 +474,12 @@ typedef struct rootfs_work_options {
      * state authorization through allow_unclean_source; off by default. */
     bool reconcile_catalog_counts;
 
+    /* Before allocating files in a stopped disk, protect every referenced
+     * block using the strict cold-boot ownership audit. Adds missing bits only;
+     * retains unreferenced allocations and refuses ambiguous/incomplete forks.
+     * Requires allow_unclean_source; never marks the volume clean. */
+    bool protect_referenced_allocations;
+
     /*
      * Opt-in, OFF by default, and valid only with allow_unclean_source.  An
      * unjournaled guest disk can be stopped between the two writes that splice

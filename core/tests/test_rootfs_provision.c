@@ -6990,6 +6990,68 @@ static void test_cold_boot_allocation_protection(void) {
     }
 }
 
+static void test_stopped_provision_allocation_protection(void) {
+    for (unsigned mode = 0; mode < 4; ++mode) {
+        fixture_t *fx = fx_create(FX_DATA_BLOCKS - 1u);
+        run_t run = {0};
+        rootfs_work_entry_t entry;
+        if (!fx) { CHECK(0, "stopped provision fixture"); return; }
+        fx_bitmap_set(fx, FX_DATA_FIRST, 0); // existing note.txt still owns this
+        fx_bitmap_set(fx, FX_DATA_FIRST + 1u, 1); // retain an unreferenced block
+        put_be32(fx->image + VH_OFF + 4, 0);
+        if (mode == 2) {
+            uint8_t *node = fx_node(fx, 1u);
+            for (uint16_t i = 0; i < get_be16(node + 10); ++i) {
+                uint8_t *record = node + get_be16(node + FX_NODE_SIZE - 2u * (i + 1u));
+                uint8_t *data = record + get_be16(record) + 2u;
+                if (get_be16(data) == 2u) memcpy(data + 168, data + 88, 80);
+            }
+        }
+        memcpy(fx->image + FX_SIZE - VH_OFF, fx->image + VH_OFF, VH_LEN);
+        if (!make_path(run.source, sizeof run.source, "stoppedalloc") ||
+            !make_path(run.destination, sizeof run.destination, "stoppedalloc") ||
+            !write_file(run.source, fx->image, FX_SIZE)) {
+            CHECK(0, "stopped provision write"); free(fx); return;
+        }
+        entry_file(&entry, "/beta/second", "data", 4u, 0644u);
+        run.options.preserve_fstab = true;
+        run.options.allow_unclean_source = mode != 1;
+        run.options.protect_referenced_allocations = true;
+        run.options.entries = &entry;
+        run.options.entry_count = mode == 3 ? 0u : 1u;
+        run.status = rootfs_work_create(run.source, run.destination, &run.options, &run.result);
+        if (mode == 1 || mode == 2) {
+            expect_refusal(&run, fx, mode == 1 ? ROOTFS_WORK_INVALID_ARGUMENT :
+                ROOTFS_WORK_PROVISION_CATALOG_CORRUPT, "unsafe stopped allocation");
+        } else {
+            run.output = read_file(run.destination, &run.output_size);
+            expect_success(&run, "stopped allocation and insertion");
+            tr_volume_t vol;
+            if (run.output && tr_open(run.output, run.output_size, &vol)) {
+                tr_record_t file = {0};
+                CHECK(tr_bitmap(&vol, FX_DATA_FIRST) && tr_bitmap(&vol, FX_DATA_FIRST + 1u),
+                      "stopped provisioning lost protected allocations");
+                CHECK(!memcmp(run.output + FX_DATA_FIRST * FX_BLOCK_SIZE, "note\n", 5u),
+                      "provisioning overwrote existing file contents");
+                CHECK(mode == 3 || (tr_find(&vol, FX_BETA, "second", &file) &&
+                      get_be32(file.data + 104) > FX_DATA_FIRST + 1u),
+                      "new file reused a protected block");
+                CHECK(get_be32(run.output + VH_OFF + 4) == 0u,
+                      "stopped provisioning marked the volume clean");
+                tr_close(&vol);
+            }
+            CHECK(run.result.allocation_bits_repaired == 1u,
+                  "stopped provisioning did not report protected block");
+            size_t size = 0;
+            uint8_t *source = read_file(run.source, &size);
+            CHECK(source && size == FX_SIZE && !memcmp(source, fx->image, FX_SIZE),
+                  "stopped provisioning changed source");
+            free(source);
+        }
+        run_release(&run); free(fx);
+    }
+}
+
 static void test_status_and_stage_names(void) {
     static const rootfs_work_status_t statuses[] = {
         ROOTFS_WORK_PROVISION_INVALID, ROOTFS_WORK_PROVISION_UNSUPPORTED,
@@ -7019,6 +7081,7 @@ int main(void) {
     test_stopped_catalog_id_hint();
     test_stopped_directory_counts();
     test_cold_boot_allocation_protection();
+    test_stopped_provision_allocation_protection();
     test_zero_fork_block_count_recovery();
     test_fixture_is_a_valid_volume();
     test_create_directory();

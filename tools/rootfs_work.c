@@ -8726,6 +8726,8 @@ static bool provision_volume(host_file_t *file, uint64_t file_size,
     uint32_t count_repairs = 0;
     uint32_t topology_repairs = 0;
     uint32_t topology_stale_refs = 0;
+    recovery_allocation_plan_t allocation_plan = {0};
+    uint32_t allocation_count_repair = 0;
     size_t index;
     bool okay = false;
 
@@ -8811,6 +8813,14 @@ static bool provision_volume(host_file_t *file, uint64_t file_size,
         goto done;
     }
     result->catalog_backlinks_repairable = backlink_repairs;
+    if (options->protect_referenced_allocations) {
+        if (!catalog_repair_powered_off_allocation(&ctx, true, true,
+                &allocation_plan, ROOTFS_WORK_STAGE_PROVISION_PLAN, result))
+            goto done;
+        allocation_count_repair = ctx.free_blocks != allocation_plan.final_free_blocks;
+        ctx.free_blocks = allocation_plan.final_free_blocks;
+        ctx.vh_dirty = allocation_count_repair != 0u;
+    }
     if (options->reconcile_catalog_counts &&
         !catalog_reconcile_counts(&ctx, true, &count_repairs,
                                   ROOTFS_WORK_STAGE_PROVISION_PLAN, result))
@@ -8903,11 +8913,33 @@ static bool provision_volume(host_file_t *file, uint64_t file_size,
     }
     result->catalog_backlinks_repaired = backlink_repairs;
     result->catalog_topology_nodes_repaired = topology_repairs;
+    if (options->protect_referenced_allocations) {
+        /* Reopen raw bytes, including the committed bitmap and volume header,
+         * so postflight cannot validate only the writer's in-memory plan. */
+        hfs_volume_t verified_volume;
+        recovery_allocation_plan_t verified_plan = {0};
+        catalog_close(&ctx);
+        if (!hfs_validate(file, file_size, &verified_volume, buffer, buffer_size,
+                          true, ROOTFS_WORK_STAGE_PROVISION_WRITE, result) ||
+            !catalog_open(&ctx, file, file_size, &verified_volume,
+                          ROOTFS_WORK_DEFAULT_MAC_TIME, result) ||
+            !catalog_audit(&ctx, ctx.leaf_records, false, false, NULL,
+                           ROOTFS_WORK_STAGE_PROVISION_WRITE, result) ||
+            !catalog_repair_powered_off_allocation(&ctx, false, true,
+                &verified_plan, ROOTFS_WORK_STAGE_PROVISION_WRITE, result)) {
+            recovery_plan_close(&verified_plan);
+            goto done;
+        }
+        recovery_plan_close(&verified_plan);
+        result->allocation_bits_repaired = allocation_plan.bitmap_changes;
+        result->allocation_free_count_repaired = allocation_count_repair;
+    }
     okay = true;
 
 done:
     free(rewrites);
     free(contents);
+    recovery_plan_close(&allocation_plan);
     catalog_close(&ctx);
     return okay;
 }
@@ -10109,7 +10141,8 @@ rootfs_work_status_t rootfs_work_create(const char *source_path,
                            "exclusive");
     if ((selected.repair_catalog_backlinks ||
          selected.repair_catalog_topology ||
-         selected.reconcile_next_catalog_id || selected.reconcile_catalog_counts) &&
+         selected.reconcile_next_catalog_id || selected.reconcile_catalog_counts ||
+         selected.protect_referenced_allocations) &&
         !selected.allow_unclean_source)
         return result_fail(result, ROOTFS_WORK_INVALID_ARGUMENT,
                            ROOTFS_WORK_STAGE_ARGUMENTS, 0,
@@ -10278,7 +10311,7 @@ rootfs_work_status_t rootfs_work_create(const char *source_path,
         selected.file_rewrite_count != 0u ||
         selected.repair_catalog_backlinks ||
         selected.repair_catalog_topology || selected.reconcile_next_catalog_id ||
-        selected.reconcile_catalog_counts) {
+        selected.reconcile_catalog_counts || selected.protect_referenced_allocations) {
         if (!hfs_validate(&temporary, work_size, &grown_volume, buffer,
                           selected.io_buffer_bytes,
                           selected.allow_unclean_source,
