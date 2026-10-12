@@ -468,6 +468,12 @@ typedef struct rootfs_work_options {
      * Requires allow_unclean_source; off by default. */
     bool reconcile_next_catalog_id;
 
+    /* Rebuild directory valence/folderCount from a complete, strictly audited
+     * catalog with unique IDs, matching object/thread pairs and valid parents.
+     * Only redundant counts in the unpublished copy change. Requires stopped
+     * state authorization through allow_unclean_source; off by default. */
+    bool reconcile_catalog_counts;
+
     /*
      * Opt-in, OFF by default, and valid only with allow_unclean_source.  An
      * unjournaled guest disk can be stopped between the two writes that splice
@@ -622,6 +628,10 @@ typedef struct rootfs_work_result {
     uint32_t catalog_backlinks_repairable;
     /* Populated only after those repairs are committed and strictly re-read. */
     uint32_t catalog_backlinks_repaired;
+    /* Read-only counter probe; populated only after a complete identity audit. */
+    uint32_t catalog_directory_counts_repairable;
+    bool catalog_next_id_stale;
+    uint32_t catalog_directory_counts_repaired;
     /* Allocated nodes whose derived topology differs in the recovery plan. */
     uint32_t catalog_topology_nodes_repairable;
     /* Populated only after the topology commit passes a strict raw re-audit. */
@@ -685,6 +695,14 @@ rootfs_work_status_t rootfs_work_validate_source(
  * does not bypass any structural check or modify the source.
  */
 rootfs_work_status_t rootfs_work_validate_source_ex(
+    const char *source_path, bool allow_unclean_source,
+    rootfs_work_result_t *result);
+
+/* Read-only validation plus complete catalog identity/parent audit. Reports
+ * stale directory counts and nextCatalogID without altering the source. A
+ * stopped-disk caller can skip an otherwise unnecessary recovery transaction.
+ * Never use on a running guest's image. */
+rootfs_work_status_t rootfs_work_probe_catalog_counters(
     const char *source_path, bool allow_unclean_source,
     rootfs_work_result_t *result);
 

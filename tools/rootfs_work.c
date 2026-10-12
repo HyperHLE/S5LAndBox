@@ -4085,6 +4085,152 @@ done:
     return okay;
 }
 
+typedef struct catalog_count_object {
+    uint32_t cnid, parent, node, children, folders;
+    uint32_t stored_children, stored_folders;
+    uint16_t slot, kind, flags, name_length;
+    bool thread_seen;
+    uint8_t name[HFS_NAME_MAX_UNITS * 2u];
+} catalog_count_object_t;
+
+static int catalog_count_compare(const void *a, const void *b) {
+    uint32_t left = ((const catalog_count_object_t *)a)->cnid;
+    uint32_t right = ((const catalog_count_object_t *)b)->cnid;
+    return left < right ? -1 : left > right ? 1 : 0;
+}
+
+static catalog_count_object_t *catalog_count_find(
+    catalog_count_object_t *objects, size_t count, uint32_t cnid) {
+    catalog_count_object_t key = {0};
+    key.cnid = cnid;
+    return bsearch(&key, objects, count, sizeof(*objects), catalog_count_compare);
+}
+
+/* Interrupted creates can publish the object/thread before their parent's
+ * valence. iPhone OS 3 treats zero valence as an empty directory; open(O_CREAT)
+ * then alternates ENOENT/EEXIST forever. Derive counts, never delete the file.
+ * Raw streaming reads keep the node cache bounded to changed directory nodes.
+ * No writes are planned until every identity and parent has been verified. */
+static bool catalog_reconcile_counts(catalog_ctx_t *ctx, bool apply,
+                                      uint32_t *changed,
+                                      rootfs_work_stage_t stage,
+                                      rootfs_work_result_t *result) {
+    size_t capacity = (size_t)ctx->leaf_records / 2u;
+    size_t count = 0u;
+    catalog_count_object_t *objects = NULL;
+    bool okay = false;
+    uint32_t repairs = 0u;
+    if (!capacity || capacity > SIZE_MAX / sizeof(*objects)) goto corrupt;
+    objects = calloc(capacity, sizeof(*objects));
+    if (!objects) {
+        result_fail(result, ROOTFS_WORK_NO_MEMORY, stage, 0,
+                    "cannot allocate catalog identity audit");
+        goto done;
+    }
+    for (unsigned pass = 0; pass < 2u; pass++) {
+        uint32_t node_index = ctx->first_leaf;
+        uint32_t visited = 0u;
+        while (node_index) {
+            uint8_t *node = ctx->scratch;
+            if (++visited > ctx->total_nodes) goto corrupt;
+            if (!catalog_node_read_raw(ctx, node_index, node, stage, result) ||
+                !catalog_node_check(ctx, node, node_index, HFS_BT_LEAF_NODE,
+                                    1u, stage, result)) goto done;
+            for (uint16_t slot = 0; slot < catalog_record_count(node); slot++) {
+                uint16_t offset = catalog_slot(node, ctx->node_size, slot);
+                uint16_t end = catalog_slot(node, ctx->node_size, (uint16_t)(slot + 1u));
+                const uint8_t *record = node + offset;
+                const uint8_t *data = record + catalog_record_data_offset(record);
+                uint16_t kind = read_be16(data);
+                if (kind == HFS_CAT_FOLDER_RECORD || kind == HFS_CAT_FILE_RECORD) {
+                    if (pass) continue;
+                    if (count == capacity) goto corrupt;
+                    catalog_count_object_t *object = &objects[count++];
+                    object->cnid = read_be32(data + 8u);
+                    object->parent = read_be32(record + 2u);
+                    object->node = node_index; object->slot = slot;
+                    object->kind = kind; object->flags = read_be16(data + 2u);
+                    object->name_length = read_be16(record + 6u);
+                    if ((object->cnid < HFS_FIRST_USER_CNID &&
+                         object->cnid != HFS_ROOT_FOLDER_CNID) ||
+                        !object->name_length) goto corrupt;
+                    memcpy(object->name, record + 8u, object->name_length * 2u);
+                    if (kind == HFS_CAT_FOLDER_RECORD) {
+                        object->stored_children = read_be32(data + 4u);
+                        object->stored_folders = read_be32(data + 84u);
+                    }
+                } else if (pass) {
+                    catalog_count_object_t *object = catalog_count_find(
+                        objects, count, read_be32(record + 2u));
+                    uint16_t length = read_be16(data + 8u);
+                    if (!object || object->thread_seen ||
+                        read_be16(record + 6u) != 0u ||
+                        kind != object->kind + 2u ||
+                        read_be32(data + 4u) != object->parent ||
+                        length != object->name_length ||
+                        (size_t)(node + end - data) < 10u + length * 2u ||
+                        memcmp(data + 10u, object->name, length * 2u)) goto corrupt;
+                    object->thread_seen = true;
+                }
+            }
+            node_index = read_be32(node);
+        }
+        if (!pass) {
+            if (count != capacity || count * 2u != ctx->leaf_records) goto corrupt;
+            qsort(objects, count, sizeof(*objects), catalog_count_compare);
+            for (size_t i = 1; i < count; i++)
+                if (objects[i-1u].cnid == objects[i].cnid) goto corrupt;
+        }
+    }
+    for (size_t i = 0; i < count; i++) {
+        catalog_count_object_t *object = &objects[i];
+        if (!object->thread_seen) goto corrupt;
+        if (object->cnid == HFS_ROOT_FOLDER_CNID) {
+            if (object->parent != HFS_ROOT_PARENT_CNID ||
+                object->kind != HFS_CAT_FOLDER_RECORD) goto corrupt;
+            continue;
+        }
+        catalog_count_object_t *parent = catalog_count_find(objects, count, object->parent);
+        if (!parent || parent->kind != HFS_CAT_FOLDER_RECORD || parent == object)
+            goto corrupt;
+        parent->children++;
+        if (object->kind == HFS_CAT_FOLDER_RECORD) parent->folders++;
+        /* Every parent chain must reach the real root, not an orphan cycle. */
+        for (size_t depth = 0; parent->cnid != HFS_ROOT_FOLDER_CNID; depth++) {
+            if (depth >= count) goto corrupt;
+            parent = catalog_count_find(objects, count, parent->parent);
+            if (!parent || parent->kind != HFS_CAT_FOLDER_RECORD) goto corrupt;
+        }
+    }
+    if (!catalog_count_find(objects, count, HFS_ROOT_FOLDER_CNID)) goto corrupt;
+    for (size_t i = 0; i < count; i++) {
+        catalog_count_object_t *object = &objects[i];
+        bool folder_count = (object->flags & HFS_FLAG_HAS_FOLDER_COUNT) != 0u;
+        if (object->kind != HFS_CAT_FOLDER_RECORD ||
+            (object->stored_children == object->children &&
+             (!folder_count || object->stored_folders == object->folders))) continue;
+        repairs++;
+        if (apply) {
+            uint8_t *node = NULL;
+            if (!catalog_node_load(ctx, object->node, &node, stage, result)) goto done;
+            uint8_t *record = node + catalog_slot(node, ctx->node_size, object->slot);
+            uint8_t *data = record + catalog_record_data_offset(record);
+            write_be32(data + 4u, object->children);
+            if (folder_count) write_be32(data + 84u, object->folders);
+            catalog_node_dirty(ctx, object->node);
+        }
+    }
+    if (changed) *changed = repairs;
+    okay = true;
+    goto done;
+corrupt:
+    result_fail(result, ROOTFS_WORK_PROVISION_CATALOG_CORRUPT, stage, 0,
+                "catalog counters require unique, complete object/thread identities and a rooted directory tree");
+done:
+    free(objects);
+    return okay;
+}
+
 typedef struct catalog_topology_node {
     uint32_t index;
     uint8_t *bytes;
@@ -8559,6 +8705,7 @@ static bool provision_volume(host_file_t *file, uint64_t file_size,
     catalog_file_rewrite_plan_t *rewrites = NULL;
     uint32_t before_records;
     uint32_t backlink_repairs = 0;
+    uint32_t count_repairs = 0;
     uint32_t topology_repairs = 0;
     uint32_t topology_stale_refs = 0;
     size_t index;
@@ -8646,6 +8793,10 @@ static bool provision_volume(host_file_t *file, uint64_t file_size,
         goto done;
     }
     result->catalog_backlinks_repairable = backlink_repairs;
+    if (options->reconcile_catalog_counts &&
+        !catalog_reconcile_counts(&ctx, true, &count_repairs,
+                                  ROOTFS_WORK_STAGE_PROVISION_PLAN, result))
+        goto done;
     if (options->reconcile_next_catalog_id &&
         ctx.next_cnid <= ctx.highest_catalog_id) {
         /* Only an allocation hint is stale. The complete catalog has already
@@ -8719,6 +8870,19 @@ static bool provision_volume(host_file_t *file, uint64_t file_size,
     if (!catalog_audit(&ctx, ctx.leaf_records, false, false, NULL,
                        ROOTFS_WORK_STAGE_PROVISION_WRITE, result))
         goto done;
+    if (options->reconcile_catalog_counts) {
+        uint32_t residual = 0;
+        if (!catalog_reconcile_counts(&ctx, false, &residual,
+                                      ROOTFS_WORK_STAGE_PROVISION_WRITE, result))
+            goto done;
+        if (residual) {
+            result_fail(result, ROOTFS_WORK_PROVISION_CATALOG_CORRUPT,
+                        ROOTFS_WORK_STAGE_PROVISION_WRITE, 0,
+                        "catalog has %u inconsistent directory counts after commit", residual);
+            goto done;
+        }
+        result->catalog_directory_counts_repaired = count_repairs;
+    }
     result->catalog_backlinks_repaired = backlink_repairs;
     result->catalog_topology_nodes_repaired = topology_repairs;
     okay = true;
@@ -9279,13 +9443,14 @@ static bool publish(destination_dir_t *destination,
 #endif
 }
 
-rootfs_work_status_t rootfs_work_validate_source_ex(
-    const char *source_path, bool allow_unclean_source,
+static rootfs_work_status_t rootfs_work_validate_source_impl(
+    const char *source_path, bool allow_unclean_source, bool check_counters,
     rootfs_work_result_t *result) {
     host_file_t source;
     file_stamp_t source_before;
     file_stamp_t source_after;
     hfs_volume_t source_volume;
+    catalog_ctx_t catalog;
     uint8_t *buffer = NULL;
     int error = 0;
 
@@ -9293,6 +9458,7 @@ rootfs_work_status_t rootfs_work_validate_source_ex(
         return ROOTFS_WORK_INVALID_ARGUMENT;
     result_reset(result);
     host_file_init(&source);
+    memset(&catalog, 0, sizeof(catalog));
     if (!source_path || source_path[0] == '\0')
         return result_fail(result, ROOTFS_WORK_INVALID_ARGUMENT,
                            ROOTFS_WORK_STAGE_ARGUMENTS, 0,
@@ -9317,6 +9483,17 @@ rootfs_work_status_t rootfs_work_validate_source_ex(
                       ROOTFS_WORK_MAX_IO_BUFFER, allow_unclean_source,
                       ROOTFS_WORK_STAGE_SOURCE_VALIDATE, result))
         goto done;
+    if (check_counters) {
+        if (!catalog_open(&catalog, &source, source_before.size, &source_volume,
+                          ROOTFS_WORK_DEFAULT_MAC_TIME, result) ||
+            !catalog_audit(&catalog, catalog.leaf_records, false, false, NULL,
+                           ROOTFS_WORK_STAGE_SOURCE_VALIDATE, result) ||
+            !catalog_reconcile_counts(&catalog, false,
+                                      &result->catalog_directory_counts_repairable,
+                                      ROOTFS_WORK_STAGE_SOURCE_VALIDATE, result))
+            goto done;
+        result->catalog_next_id_stale = catalog.next_cnid <= catalog.highest_catalog_id;
+    }
     if (!host_file_stamp(&source, &source_after, &error)) {
         result_fail(result, ROOTFS_WORK_SOURCE_CHANGED,
                     ROOTFS_WORK_STAGE_SOURCE_VALIDATE, error,
@@ -9343,7 +9520,20 @@ done:
             result->cleanup_system_error = error;
     }
     free(buffer);
+    catalog_close(&catalog);
     return result->status;
+}
+
+rootfs_work_status_t rootfs_work_validate_source_ex(
+    const char *source_path, bool allow_unclean_source,
+    rootfs_work_result_t *result) {
+    return rootfs_work_validate_source_impl(source_path, allow_unclean_source, false, result);
+}
+
+rootfs_work_status_t rootfs_work_probe_catalog_counters(
+    const char *source_path, bool allow_unclean_source,
+    rootfs_work_result_t *result) {
+    return rootfs_work_validate_source_impl(source_path, allow_unclean_source, true, result);
 }
 
 rootfs_work_status_t rootfs_work_validate_source(
@@ -9861,17 +10051,17 @@ rootfs_work_status_t rootfs_work_create(const char *source_path,
                            "exclusive");
     if ((selected.repair_catalog_backlinks ||
          selected.repair_catalog_topology ||
-         selected.reconcile_next_catalog_id) &&
+         selected.reconcile_next_catalog_id || selected.reconcile_catalog_counts) &&
         !selected.allow_unclean_source)
         return result_fail(result, ROOTFS_WORK_INVALID_ARGUMENT,
                            ROOTFS_WORK_STAGE_ARGUMENTS, 0,
                            "catalog repair requires an authorized unclean "
                            "source");
-    if (selected.repair_catalog_backlinks &&
+    if ((selected.repair_catalog_backlinks || selected.reconcile_catalog_counts) &&
         selected.repair_catalog_topology)
         return result_fail(result, ROOTFS_WORK_INVALID_ARGUMENT,
                            ROOTFS_WORK_STAGE_ARGUMENTS, 0,
-                           "catalog backlink and topology repair modes are "
+                           "catalog counter/backlink and topology repair modes are "
                            "mutually exclusive");
     if (!selected.preserve_fstab && !selected.fstab_line)
         selected.fstab_line = ROOTFS_WORK_DEFAULT_FSTAB;
@@ -10029,7 +10219,8 @@ rootfs_work_status_t rootfs_work_create(const char *source_path,
     if (selected.entry_count != 0u || selected.file_repair_count != 0u ||
         selected.file_rewrite_count != 0u ||
         selected.repair_catalog_backlinks ||
-        selected.repair_catalog_topology || selected.reconcile_next_catalog_id) {
+        selected.repair_catalog_topology || selected.reconcile_next_catalog_id ||
+        selected.reconcile_catalog_counts) {
         if (!hfs_validate(&temporary, work_size, &grown_volume, buffer,
                           selected.io_buffer_bytes,
                           selected.allow_unclean_source,

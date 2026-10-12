@@ -220,11 +220,12 @@ static BOOL PackageSetupPending(NSString *identifier, BOOL pending, NSError **er
     }
     rootfs_work_file_rewrite_t rewrite={0}; BOOL needsRewrite=NO;
     NSString *live = [directory stringByAppendingPathComponent:@"rootfs-work.img"];
-    // Strict read-only validation, never the allocation/backlink repair path.
+    // Strict read-only identity/count audit, never allocation/backlink repair.
     rootfs_work_result_t check;
-    if (rootfs_work_validate_source_ex(live.fileSystemRepresentation,true,&check) != ROOTFS_WORK_OK) {
+    if (rootfs_work_probe_catalog_counters(live.fileSystemRepresentation,true,&check) != ROOTFS_WORK_OK) {
         if (error) *error = VMPackageError([NSString stringWithUTF8String:check.detail]); return NO;
     }
+    BOOL needsCounters = check.catalog_directory_counts_repairable || check.catalog_next_id_stale;
     // Keep the credential stable across retries/crashes, but never advertise
     // a half-finished setup as ready. Clear this only after verified publication
     // (or exact verification of a previously completed installation).
@@ -257,7 +258,7 @@ static BOOL PackageSetupPending(NSString *identifier, BOOL pending, NSError **er
             entries[count].content=data.bytes; entries[count].content_size=data.length; entries[count].permissions=mode; count++;
         }
     }
-    if (count == 1 && !needsRewrite) {
+    if (count == 1 && !needsRewrite && !needsCounters) {
         if (!PackageSetupPending(identifier,NO,error)) return NO;
         if (progress) progress(@"Package files verified", 1);
         return YES;
@@ -274,6 +275,7 @@ static BOOL PackageSetupPending(NSString *identifier, BOOL pending, NSError **er
     }
     rootfs_work_options_t options={0}; options.preserve_fstab=true; options.allow_unclean_source=true;
     options.reconcile_next_catalog_id=true;
+    options.reconcile_catalog_counts=true;
     options.entries=entries; options.entry_count=count;
     __attribute__((objc_precise_lifetime)) VMPackageSetupProgress copyProgress = [progress copy];
     PackageCopyProgress progressState = {copyProgress, 0};
