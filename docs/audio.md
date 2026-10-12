@@ -17,10 +17,25 @@ do not describe the current emulator.
   rate conversion to/from a 48 kHz host stream. No callback allocation or locks.
 - `VMAudioOutput.m`: route/interruption handling, foreground-only host audio,
   and explicit microphone permission. Machine Settings has a session-only
-  microphone switch, initially off. Denial feeds silence, not fabricated input.
+  microphone switch, initialized from the default-on Guest microphone option
+  in Settings > Advanced. First foreground launch asks for iOS permission once;
+  declining does not block setup, boot, or playback. The Advanced opt-out applies
+  to later sessions, while Machine Settings changes only the current session.
+  Denial feeds silence, not fabricated input.
 - Snapshot v34 stores unread guest FIFO bytes and clock phases. Tested v32/v33
   migration starts empty FIFOs, since those versions had no PCM transport.
   Host microphone buffers, permission and callback pointers are never saved.
+
+Default-policy validation on 2026-10-12 (`db9bbd6`, isolated SetupTest, iPhone 6s
+Plus / iOS 15.8.5): first launch displayed the native microphone permission prompt.
+Granting permission and resuming an existing machine enabled playback and input
+without touching its session switch. Turning the Advanced default off, relaunching
+the app, and reopening the saved machine left microphone input off while playback
+remained available. The default was restored to on after testing. Persistence,
+invalid stored values, notifications, reset behavior, and unrelated preference
+preservation also passed the native Foundation tests. The iOS 13 API baseline
+passed; permission denial and other host versions were not re-tested physically
+in this default-policy check.
 
 Host tests cover digital samples in both directions, clock ratios, muted/attenuated
 output, full/empty queues, real PL080 transfers, batched-time underrun prevention,
