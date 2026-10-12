@@ -6696,6 +6696,76 @@ static void test_provision_unpublished_clone(void) {
     free(before); free(after); free(fx); (void)remove(path);
 }
 
+static void test_stopped_catalog_id_hint(void) {
+    /* A force-off may leave the header behind the fully written catalog.
+     * Strict default still refuses it (cnidreuse above). The explicit policy
+     * advances above ALL IDs, not merely to the first free thread key. */
+    for (unsigned mode = 0; mode < 7; mode++) {
+        fixture_t *fx = fx_create(FX_DATA_BLOCKS - 1u);
+        rootfs_work_entry_t entry;
+        run_t run = {0};
+        tr_volume_t vol;
+        if (!fx) { CHECK(0, "CNID fixture allocation"); return; }
+        put_be32(fx->image + VH_OFF + 64, mode == 5 ? 0u : FX_DUP);
+        /* Preserve the dirty state through successful publication. */
+        put_be32(fx->image + VH_OFF + 4,
+                 get_be32(fx->image + VH_OFF + 4) & ~0x100u);
+        if (mode == 1 || mode == 4) {
+            /* A file body has an ID absent from the thread keys. Never
+             * allocate that ID, even though lookup alone would say free. */
+            uint8_t *node = fx_node(fx, 1u);
+            for (uint16_t i = 0; i < get_be16(node + 10); i++) {
+                uint8_t *record = node + get_be16(node + FX_NODE_SIZE - 2u * (i + 1u));
+                uint8_t *data = record + get_be16(record) + 2u;
+                if (get_be16(data) == 2u)
+                    put_be32(data + 8, mode == 1 ? 100u : UINT32_MAX);
+            }
+        }
+        if (mode == 2) put_be32(fx_node(fx, 1u), 1u); /* cyclic chain */
+        memcpy(fx->image + FX_SIZE - VH_OFF, fx->image + VH_OFF, VH_LEN);
+        entry_directory(&entry, "/gamma", 0750u);
+        if (!make_path(run.source, sizeof run.source, "cnidhint") ||
+            !make_path(run.destination, sizeof run.destination, "cnidhint") ||
+            !write_file(run.source, fx->image, FX_SIZE)) {
+            CHECK(0, "CNID fixture write"); free(fx); return;
+        }
+        run.options.preserve_fstab = true;
+        run.options.allow_unclean_source = mode != 3;
+        run.options.reconcile_next_catalog_id = true;
+        run.options.entries = &entry;
+        run.options.entry_count = mode == 6 ? 0u : 1u;
+        run.status = rootfs_work_create(run.source, run.destination,
+                                       &run.options, &run.result);
+        if (mode == 2 || mode == 3 || mode == 4 || mode == 5) {
+            expect_refusal(&run, fx, mode == 2 ? ROOTFS_WORK_PROVISION_CATALOG_CORRUPT :
+                mode == 3 ? ROOTFS_WORK_INVALID_ARGUMENT : ROOTFS_WORK_PROVISION_NO_SPACE,
+                "unsafe CNID reconciliation");
+        } else {
+            run.output = read_file(run.destination, &run.output_size);
+            expect_success(&run, "stopped catalog allocation hint");
+            if (run.output && tr_open(run.output, run.output_size, &vol)) {
+                uint32_t expected = mode == 1 ? 101u : FX_NEXT_CNID;
+                CHECK(vol.next_cnid == expected + (mode == 6 ? 0u : 1u),
+                      "wrong reconciled nextCatalogID %u", vol.next_cnid);
+                CHECK(mode == 6 || run.result.provision_first_cnid == expected,
+                      "reused an existing object identity");
+                CHECK(get_be32(run.output + VH_OFF + 4) == get_be32(fx->image + VH_OFF + 4),
+                      "CNID repair changed volume cleanliness");
+                CHECK(!memcmp(run.output + VH_OFF, run.output + run.output_size - VH_OFF, VH_LEN),
+                      "CNID repair did not update both headers");
+                tr_close(&vol);
+            }
+            size_t size = 0;
+            uint8_t *source = read_file(run.source, &size);
+            CHECK(source && size == FX_SIZE && !memcmp(source, fx->image, FX_SIZE),
+                  "CNID reconciliation changed the source");
+            free(source);
+        }
+        run_release(&run);
+        free(fx);
+    }
+}
+
 static void test_status_and_stage_names(void) {
     static const rootfs_work_status_t statuses[] = {
         ROOTFS_WORK_PROVISION_INVALID, ROOTFS_WORK_PROVISION_UNSUPPORTED,
@@ -6722,6 +6792,7 @@ int main(void) {
     printf("HFS+ catalog provisioning tests\n");
     test_status_and_stage_names();
     test_provision_unpublished_clone();
+    test_stopped_catalog_id_hint();
     test_zero_fork_block_count_recovery();
     test_fixture_is_a_valid_volume();
     test_create_directory();

@@ -3352,6 +3352,7 @@ typedef struct catalog_ctx {
     uint32_t file_count;
     uint32_t folder_count;
     uint32_t next_cnid;
+    uint32_t highest_catalog_id;
     uint32_t free_blocks;
     uint32_t next_alloc;
     uint32_t mac_time;
@@ -3956,6 +3957,7 @@ static bool catalog_audit(catalog_ctx_t *ctx, uint32_t expect_records,
     uint32_t previous_node = 0;
     uint32_t *leaf_chain = NULL;
     uint32_t observed_backlink_mismatches = 0;
+    uint32_t highest_id = HFS_FIRST_USER_CNID - 1u;
     bool okay = false;
 
     if (repair_backlinks && !permit_backlink_recovery) {
@@ -4037,6 +4039,15 @@ static bool catalog_audit(catalog_ctx_t *ctx, uint32_t expect_records,
                 }
             }
             previous_parent = read_be32(record + 2);
+            if (previous_parent > highest_id)
+                highest_id = previous_parent;
+            const uint8_t *data = record + catalog_record_data_offset(record);
+            uint16_t type = read_be16(data);
+            uint32_t id = read_be32(data +
+                ((type == HFS_CAT_FILE_RECORD || type == HFS_CAT_FOLDER_RECORD)
+                    ? 8u : 4u));
+            if (id > highest_id)
+                highest_id = id;
             previous_length = length;
             for (unit = 0; unit < length; unit++)
                 previous_units[unit] = read_be16(record + 8u +
@@ -4066,6 +4077,8 @@ static bool catalog_audit(catalog_ctx_t *ctx, uint32_t expect_records,
         &observed_backlink_mismatches, stage, result);
     if (okay && backlink_mismatches)
         *backlink_mismatches = observed_backlink_mismatches;
+    if (okay)
+        ctx->highest_catalog_id = highest_id;
 
 done:
     free(leaf_chain);
@@ -8633,6 +8646,22 @@ static bool provision_volume(host_file_t *file, uint64_t file_size,
         goto done;
     }
     result->catalog_backlinks_repairable = backlink_repairs;
+    if (options->reconcile_next_catalog_id &&
+        ctx.next_cnid <= ctx.highest_catalog_id) {
+        /* Only an allocation hint is stale. The complete catalog has already
+         * passed the normal audit; taking its maximum also covers IDs in
+         * records whose thread is missing. Do not pick a hole or wrap and risk
+         * reusing an identity. Both headers are committed in the private copy. */
+        if (ctx.next_cnid < HFS_FIRST_USER_CNID ||
+            ctx.highest_catalog_id >= UINT32_MAX - 1u) {
+            result_fail(result, ROOTFS_WORK_PROVISION_NO_SPACE,
+                        ROOTFS_WORK_STAGE_PROVISION_PLAN, 0,
+                        "catalog IDs leave no safe sequential allocation");
+            goto done;
+        }
+        ctx.next_cnid = ctx.highest_catalog_id + 1u;
+        ctx.vh_dirty = true;
+    }
     if (options->entry_count != 0u) {
         contents = (catalog_content_t *)calloc(options->entry_count,
                                                sizeof(*contents));
@@ -8674,7 +8703,7 @@ static bool provision_volume(host_file_t *file, uint64_t file_size,
                                   &state, &rewrites[index], result))
             goto done;
     }
-    ctx.vh_dirty = options->entry_count != 0u;
+    ctx.vh_dirty = ctx.vh_dirty || options->entry_count != 0u;
     /* Report the shape change before the commit can fail, so a caller reading
      * a failed result still learns that a split was required. */
     result->provision_leaf_splits = ctx.leaf_splits;
@@ -9831,7 +9860,8 @@ rootfs_work_status_t rootfs_work_create(const char *source_path,
                            "preserve_fstab and fstab_line are mutually "
                            "exclusive");
     if ((selected.repair_catalog_backlinks ||
-         selected.repair_catalog_topology) &&
+         selected.repair_catalog_topology ||
+         selected.reconcile_next_catalog_id) &&
         !selected.allow_unclean_source)
         return result_fail(result, ROOTFS_WORK_INVALID_ARGUMENT,
                            ROOTFS_WORK_STAGE_ARGUMENTS, 0,
@@ -9999,7 +10029,7 @@ rootfs_work_status_t rootfs_work_create(const char *source_path,
     if (selected.entry_count != 0u || selected.file_repair_count != 0u ||
         selected.file_rewrite_count != 0u ||
         selected.repair_catalog_backlinks ||
-        selected.repair_catalog_topology) {
+        selected.repair_catalog_topology || selected.reconcile_next_catalog_id) {
         if (!hfs_validate(&temporary, work_size, &grown_volume, buffer,
                           selected.io_buffer_bytes,
                           selected.allow_unclean_source,

@@ -144,6 +144,15 @@ jobs:
             -I app/Sources app/Sources/VMPackageCatalog.m app/Sources/VMPackageRepository.m app/Tests/test_vmpackagecatalog.m -lz -lbz2 \
             -o work/package-tests/test_catalog
           work/package-tests/test_catalog
+          for source in app/Sources/VMGuestInstall.c app/Sources/VMSnapshotStore.c tools/rootfs_work.c tools/sha256.c; do
+            xcrun clang -std=c11 -Wall -Wextra -Werror -I app/Sources -I core/include -I tools \
+              -c "$source" -o "work/package-tests/$(basename "$source" .c).o"
+          done
+          xcrun clang -fobjc-arc -Wall -Wextra -Werror -Wno-deprecated-declarations \
+            -framework Foundation -framework Security -I app/Sources -I core/include -I tools \
+            app/Sources/VMUSBService.m app/Sources/VMPackageCatalog.m app/Tests/test_vmpackagebridge.m \
+            work/package-tests/*.o -o work/package-tests/test_bridge
+          work/package-tests/test_bridge "$GITHUB_WORKSPACE/work/package-tests/credentials"
           clang -Wall -Wextra -Werror -DS5LBOX_PACKAGE_TEST -I tools \
             tools/guest_package_service.c tools/sha256.c -o work/package-tests/test_service
           python3 tools/test_guest_package_service.py work/package-tests/test_service
