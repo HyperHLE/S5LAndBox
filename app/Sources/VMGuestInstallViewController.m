@@ -10,6 +10,7 @@
 #import "VMGuestPackageDownloader.h"
 #import "VMInstanceStore.h"
 #import "VMResumeCheckpoint.h"
+#import "VMSettings.h"
 #include <string.h>
 
 @interface VMGuestInstallViewController ()
@@ -47,6 +48,7 @@ static void VMGuestInstallBuildProgress(
     BOOL _started;
     BOOL _finished;
     BOOL _packageFlow, _jailbreakNeeded, _openForShutdown, _keepsAwake, _previousIdle;
+    BOOL _includePackages;
 }
 
 - (instancetype)initWithInstanceID:(NSString *)instanceID
@@ -333,6 +335,8 @@ static void VMGuestInstallBuildProgress(
 }
 
 - (BOOL)preparePackages:(NSError **)error {
+    // Explicit package setup always wins; an ordinary jailbreak may opt out.
+    if (!_includePackages) return YES;
     __weak VMGuestInstallViewController *weakSelf = self;
     return [VMPackageBridge prepareStoppedMachine:_machineDirectory instanceID:_instanceID
         progress:^(NSString *stage, double fraction) {
@@ -378,15 +382,15 @@ static void VMGuestInstallBuildProgress(
         self.navigationController.topViewController != self) return;
     _packageOfferPending = NO;
     void (^ready)(void) = [self.readyHandler copy];
-    if (_packageFlow) {
-        _openPackagesWhenReady = YES;
+    if (_packageFlow || !_includePackages) {
+        _openPackagesWhenReady = _packageFlow;
         if (ready) ready();
         return;
     }
-    UIAlertController *offer = [UIAlertController alertControllerWithTitle:@"Use S5LBox Packages?"
-        message:@"Browse and install tweaks from S5LBox."
+    UIAlertController *offer = [UIAlertController alertControllerWithTitle:@"Packages is set up"
+        message:@"Open Packages to browse and install tweaks."
         preferredStyle:UIAlertControllerStyleAlert];
-    [offer addAction:[UIAlertAction actionWithTitle:@"Not now" style:UIAlertActionStyleCancel
+    [offer addAction:[UIAlertAction actionWithTitle:@"Open iPhone OS" style:UIAlertActionStyleCancel
         handler:^(__unused UIAlertAction *action) {
             [self dismissViewControllerAnimated:YES completion:ready];
         }]];
@@ -400,6 +404,11 @@ static void VMGuestInstallBuildProgress(
 
 - (void)startInstall {
     _finished = NO;
+    // Capture once on the main thread; retries get a fresh choice, but an
+    // in-flight disk transaction never changes policy halfway through.
+    _includePackages = _packageFlow || [VMSettings sharedSettings].packagesWithJailbreak;
+    _packageOfferPending = NO;
+    _openPackagesWhenReady = NO;
     _openForShutdown = NO;
     _retry.hidden = YES;
     _hint.hidden = NO;

@@ -47,6 +47,39 @@ static void testInterfaceChoice(void) {
     [defaults removePersistentDomainForName:suite];
     puts("interface settings: Modern default, Legacy persistence, notifications, reset and unrelated values passed");
 }
+static void testPackagesWithJailbreakChoice(void) {
+    NSString *suite = [@"S5LBox.PackageSettingsTests." stringByAppendingString:NSUUID.UUID.UUIDString];
+    NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
+    TestInterfaceSettings *settings = [TestInterfaceSettings new];
+    settings.testDefaults = defaults;
+    assert(settings.packagesWithJailbreak); // No saved choice means enabled.
+    [defaults setObject:@"invalid" forKey:@"VMPackagesWithJailbreak"];
+    assert(settings.packagesWithJailbreak);
+    [defaults removeObjectForKey:@"VMPackagesWithJailbreak"];
+    settings.legacyEmulatorUI = YES;
+    NSDictionary *before = [defaults persistentDomainForName:suite];
+    __block NSUInteger changes = 0;
+    id observer = [NSNotificationCenter.defaultCenter addObserverForName:VMSettingsDidChangeNotification
+        object:settings queue:nil usingBlock:^(__unused NSNotification *note) { ++changes; }];
+    settings.packagesWithJailbreak = NO;
+    assert(!settings.packagesWithJailbreak && changes == 1);
+    TestInterfaceSettings *reopened = [TestInterfaceSettings new];
+    reopened.testDefaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
+    assert(!reopened.packagesWithJailbreak);
+    NSMutableDictionary *after = [[defaults persistentDomainForName:suite] mutableCopy];
+    [after removeObjectForKey:@"VMPackagesWithJailbreak"];
+    assert([before isEqual:after]);
+    settings.packagesWithJailbreak = YES;
+    assert(reopened.packagesWithJailbreak && changes == 2);
+    settings.packagesWithJailbreak = NO;
+    [settings resetToDefaults];
+    assert(reopened.packagesWithJailbreak && changes == 4);
+    assert(![defaults objectForKey:@"VMPackagesWithJailbreak"]);
+    [NSNotificationCenter.defaultCenter removeObserver:observer];
+    [defaults removePersistentDomainForName:suite];
+    puts("Packages with jailbreak: default on, opt-out persistence, notifications and reset passed");
+}
+
 @interface VMInstanceStore (PersistenceTest)
 - (NSString *)containerDirectory;
 - (NSString *)storePath;
@@ -84,6 +117,7 @@ static NSSet *files(void) {
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         testInterfaceChoice();
+        testPackagesWithJailbreakChoice();
         assert(argc == 2);
         testRoot = [[NSString stringWithUTF8String:argv[1]]
             stringByAppendingPathComponent:NSUUID.UUID.UUIDString];

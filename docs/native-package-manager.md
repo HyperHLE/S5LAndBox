@@ -9,8 +9,14 @@ emulator without pretending that arbitrary guest scripts can run on the host.
 
 Open **Machine Settings > Packages**. If setup is needed, choose **Set Up
 Packages**; confirm the restart before the running guest is powered off. A stock
-machine offers **Jailbreak & Set Up**, with a separate confirmation. New jailbreak
-preparations already include the helper. For a stopped machine, the same setup
+machine offers **Jailbreak & Set Up**, with a separate confirmation. Jailbreak
+includes helper setup by default. Turn off **App Settings > Advanced > Packages
+with jailbreak** to skip it on subsequent jailbreak preparations. This does not
+remove an existing helper. Explicit **Set Up Packages** (including **Jailbreak &
+Set Up**) still installs it regardless of that preference. After an ordinary
+jailbreak with Packages enabled, choose **Open Packages** or **Open iPhone OS**;
+setup has already completed, so this is not another installation prompt.
+For a stopped machine, the same setup
 is available under **App Settings > Advanced > Set up package manager**.
 
 Setup shows the current step and real, centered copy progress. Keep S5LBox open

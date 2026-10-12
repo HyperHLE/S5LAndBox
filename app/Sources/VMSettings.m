@@ -34,6 +34,7 @@ static NSString *const kVMPauseInBackground = @"vm.diag.pauseInBackground";
 static NSString *const kVMDeveloperMode = @"VMDeveloperMode";
 static NSString *const kVMInlineConsole = @"VMInlineConsole";
 static NSString *const kVMLegacyEmulatorUI = @"VMLegacyEmulatorUI";
+static NSString *const kVMPackagesWithJailbreak = @"VMPackagesWithJailbreak";
 
 /*
  * The instruction caps the screen cycles through. 0 first because no limit is
@@ -86,6 +87,16 @@ static const uint64_t kVMInstructionCaps[] = {
 - (BOOL)legacyEmulatorUI { return [[self defaults] boolForKey:kVMLegacyEmulatorUI]; }
 - (void)setLegacyEmulatorUI:(BOOL)legacy {
     [[self defaults] setBool:legacy forKey:kVMLegacyEmulatorUI];
+    [self publishChange];
+}
+
+- (BOOL)packagesWithJailbreak {
+    NSNumber *stored = [[self defaults] objectForKey:kVMPackagesWithJailbreak];
+    return [stored isKindOfClass:NSNumber.class] ? stored.boolValue : YES;
+}
+
+- (void)setPackagesWithJailbreak:(BOOL)enabled {
+    [[self defaults] setBool:enabled forKey:kVMPackagesWithJailbreak];
     [self publishChange];
 }
 
@@ -489,6 +500,7 @@ static const uint64_t kVMInstructionCaps[] = {
     [defaults removeObjectForKey:kVMInstructionCapKey];
     [defaults removeObjectForKey:kVMPauseInBackground];
     [defaults removeObjectForKey:kVMLegacyEmulatorUI];
+    [defaults removeObjectForKey:kVMPackagesWithJailbreak];
     [self publishChange];
 }
 

@@ -62,6 +62,7 @@ typedef NS_ENUM(NSInteger, VMGeneralRow) {
     VMGeneralRowJailbreak,
     VMGeneralRowInstallIPA,
     VMGeneralRowPackageSetup,
+    VMGeneralRowPackagesWithJailbreak,
     VMGeneralRowDeveloperMode,
     VMGeneralRowFirmware,
     VMGeneralRowAdvanced,
@@ -125,6 +126,7 @@ static NSString *VMStringFromC(const char *text) {
 - (void)chooseMachineWithRequest:(void (^)(NSString *, NSString *))request;
 - (void)inlineConsoleChanged:(UISwitch *)sender;
 - (void)developerModeToggled:(UISwitch *)sender;
+- (void)packagesWithJailbreakToggled:(UISwitch *)sender;
 - (void)chooseGraphicsMode;
 - (void)chooseEmulatorInterface;
 - (NSArray<NSNumber *> *)generalRowsInSection:(NSInteger)section;
@@ -287,6 +289,10 @@ static NSString *VMStringFromC(const char *text) {
     [self.tableView reloadData];
 }
 
+- (void)packagesWithJailbreakToggled:(UISwitch *)sender {
+    _settings.packagesWithJailbreak = sender.isOn;
+}
+
 - (void)doneTapped:(id)sender {
     (void)sender;
     [self dismissViewControllerAnimated:YES completion:nil];
@@ -307,6 +313,7 @@ static NSString *VMStringFromC(const char *text) {
         if (!_advanced) return @[];
         NSMutableArray<NSNumber *> *rows = [NSMutableArray arrayWithArray:
             @[@(VMGeneralRowInterface), @(VMGeneralRowFirmware), @(VMGeneralRowGraphicsMode)]];
+        [rows addObject:@(VMGeneralRowPackagesWithJailbreak)];
         if (self.guestPackageSetupRequest) [rows addObject:@(VMGeneralRowPackageSetup)];
         [rows addObject:@(VMGeneralRowDeveloperMode)];
         return rows;
@@ -524,7 +531,8 @@ titleForFooterInSection:(NSInteger)section {
         } else if (row == VMGeneralRowJailbreak) {
             cell.textLabel.text = @"Jailbreak";
             cell.accessibilityIdentifier = @"s5lbox.settings.jailbreak";
-            cell.detailTextLabel.text = @"Install or repair Cydia.";
+            cell.detailTextLabel.text = _settings.packagesWithJailbreak
+                ? @"Install Cydia and set up Packages." : @"Install or repair Cydia.";
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             cell.selectionStyle = UITableViewCellSelectionStyleDefault;
         } else if (row == VMGeneralRowInstallIPA) {
@@ -536,6 +544,17 @@ titleForFooterInSection:(NSInteger)section {
             cell.detailTextLabel.text = @"For previously jailbroken machines.";
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             cell.accessibilityIdentifier = @"s5lbox.settings.package-setup";
+        } else if (row == VMGeneralRowPackagesWithJailbreak) {
+            cell.textLabel.text = @"Packages with jailbreak";
+            cell.accessoryType = UITableViewCellAccessoryNone;
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            UISwitch *sw = [[UISwitch alloc] init];
+            sw.on = _settings.packagesWithJailbreak;
+            sw.accessibilityLabel = cell.textLabel.text;
+            sw.accessibilityIdentifier = @"s5lbox.settings.packages-with-jailbreak";
+            [sw addTarget:self action:@selector(packagesWithJailbreakToggled:)
+                 forControlEvents:UIControlEventValueChanged];
+            cell.accessoryView = sw;
         } else if (row == VMGeneralRowDeveloperMode) {
             cell.textLabel.text = @"Developer Mode";
             cell.accessoryType = UITableViewCellAccessoryNone;
@@ -866,9 +885,11 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 }
 
 - (void)confirmGuestInstall {
+    NSString *install = _settings.packagesWithJailbreak
+        ? @"Install Cydia and set up Packages?" : @"Install Cydia?";
     NSString *message = self.guestInstallRequest
-        ? @"Install Cydia? The machine will power off and its saved running state "
-           @"will be discarded. Unsaved work may be lost."
+        ? [install stringByAppendingString:@" The machine will power off and its saved running state "
+           @"will be discarded. Unsaved work may be lost."]
         : @"Return to Machines using Back, then open Settings > Jailbreak. "
            @"The guest must be shut down before its disk can be changed.";
     UIAlertController *alert = [UIAlertController

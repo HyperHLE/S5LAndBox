@@ -74,6 +74,10 @@ typedef NS_ENUM(NSInteger, VMGraphicsMode) {
 /* App-wide presentation only; NO (Modern) by default. */
 @property(nonatomic) BOOL legacyEmulatorUI;
 
+/* On unless explicitly disabled. Applies to future jailbreak preparations;
+ * never removes an installed helper or blocks an explicit Packages setup. */
+@property(nonatomic) BOOL packagesWithJailbreak;
+
 #pragma mark - Recorded only (see the file note)
 
 /* `index` is an index into VMOptions.c's table. This is the effective launch
