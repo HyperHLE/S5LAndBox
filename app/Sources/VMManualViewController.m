@@ -85,6 +85,9 @@ typedef struct {
               @"which is most of the space it uses.\n\n"
               @"The gear on this screen opens App Settings. Firmware import is "
               @"under Advanced. Tap a machine to open it."
+              @"\n\nNew machines have 8 GB of storage, using space as needed. "
+              @"Choose a smaller limit under Advanced before creating a machine. "
+              @"Existing machines keep their size."
               @"\n\nOne machine can run at a time." }];
 
     [e addObject:@{ @"h": @"The screen and the buttons",
@@ -105,9 +108,9 @@ typedef struct {
               @"from the prepared firmware on first boot." }];
 
     [e addObject:@{ @"h": @"Machine Settings",
-        @"b": @"Settings inside an open machine controls that session: pause "
-              @"the guest, choose whether to pause in the background, browse "
-              @"saved states, save and close, shut down, or restart. Restart "
+        @"b": @"Settings inside an open machine lets you browse saved states, "
+              @"save and close, shut down, or restart. Pause is in Device Controls. "
+              @"Microphone and background pause are under Advanced. Restart "
               @"asks first because unsaved guest work may be lost.\n\n"
               @"Developer Mode adds an inline console and instruction limit "
               @"for this session. These changes do not rewrite App Settings; "

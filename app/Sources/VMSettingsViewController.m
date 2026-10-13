@@ -59,6 +59,7 @@ typedef NS_ENUM(NSInteger, VMGeneralRow) {
     VMGeneralRowManual = 0,
     VMGeneralRowInterface,
     VMGeneralRowGraphicsMode,
+    VMGeneralRowDiskSize,
     VMGeneralRowJailbreak,
     VMGeneralRowInstallIPA,
     VMGeneralRowPackageSetup,
@@ -130,6 +131,7 @@ static NSString *VMStringFromC(const char *text) {
 - (void)packagesWithJailbreakToggled:(UISwitch *)sender;
 - (void)guestMicrophoneToggled:(UISwitch *)sender;
 - (void)chooseGraphicsMode;
+- (void)chooseDiskSize;
 - (void)chooseEmulatorInterface;
 - (NSArray<NSNumber *> *)generalRowsInSection:(NSInteger)section;
 /* These two were missing, which the comment above says cannot happen: clang
@@ -319,6 +321,7 @@ static NSString *VMStringFromC(const char *text) {
         if (!_advanced) return @[];
         NSMutableArray<NSNumber *> *rows = [NSMutableArray arrayWithArray:
             @[@(VMGeneralRowInterface), @(VMGeneralRowFirmware), @(VMGeneralRowGraphicsMode)]];
+        [rows addObject:@(VMGeneralRowDiskSize)];
         [rows addObject:@(VMGeneralRowPackagesWithJailbreak)];
         [rows addObject:@(VMGeneralRowGuestMicrophone)];
         [rows addObject:@(VMGeneralRowPauseInBackground)];
@@ -495,7 +498,8 @@ titleForFooterInSection:(NSInteger)section {
     NSArray<NSNumber *> *general = [self generalRowsInSection:section];
     if (general) {
         VMGeneralRow row = (VMGeneralRow)general[(NSUInteger)indexPath.row].integerValue;
-        BOOL valueRow = (row == VMGeneralRowInterface || row == VMGeneralRowFirmware) &&
+        BOOL valueRow = (row == VMGeneralRowInterface || row == VMGeneralRowFirmware ||
+            row == VMGeneralRowDiskSize) &&
             !UIContentSizeCategoryIsAccessibilityCategory(self.traitCollection.preferredContentSizeCategory);
         UITableViewCell *cell = [self cellWithIdentifier:valueRow ? @"general-value" : @"general"
             style:valueRow ? UITableViewCellStyleValue1 : UITableViewCellStyleSubtitle];
@@ -536,6 +540,12 @@ titleForFooterInSection:(NSInteger)section {
                     @"Custom";
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        } else if (row == VMGeneralRowDiskSize) {
+            cell.textLabel.text = @"Storage for new machines";
+            cell.detailTextLabel.text = [NSString stringWithFormat:@"%lu GB",
+                (unsigned long)_settings.newMachineDiskSizeGiB];
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            cell.accessibilityIdentifier = @"s5lbox.settings.new-machine-storage";
         } else if (row == VMGeneralRowJailbreak) {
             cell.textLabel.text = @"Jailbreak";
             cell.accessibilityIdentifier = @"s5lbox.settings.jailbreak";
@@ -821,6 +831,8 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
                 [self.navigationController pushViewController:m animated:YES];
         } else if (row == VMGeneralRowGraphicsMode) {
             [self chooseGraphicsMode];
+        } else if (row == VMGeneralRowDiskSize) {
+            [self chooseDiskSize];
         } else if (row == VMGeneralRowInterface) {
             [self chooseEmulatorInterface];
         } else if (row == VMGeneralRowJailbreak) {
@@ -1008,6 +1020,28 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
                 VMSettingsViewController *controller = weakSelf;
                 if (!controller) return;
                 controller->_settings.legacyEmulatorUI = legacy;
+                [controller.tableView reloadData];
+            }]];
+    }
+    [picker addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:picker animated:YES completion:nil];
+}
+
+- (void)chooseDiskSize {
+    UIAlertController *picker = [UIAlertController alertControllerWithTitle:@"Storage for new machines"
+        message:@"Uses space as needed, up to this limit. Existing machines stay the same."
+        preferredStyle:UIAlertControllerStyleAlert];
+    __weak VMSettingsViewController *weakSelf = self;
+    for (NSNumber *choice in @[@8, @4, @2]) {
+        NSString *title = [NSString stringWithFormat:@"%@ GB%@", choice,
+            choice.unsignedIntegerValue == 8 ? @" (Default)" : @""];
+        if (_settings.newMachineDiskSizeGiB == choice.unsignedIntegerValue)
+            title = [title stringByAppendingString:@" \u2713"];
+        [picker addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault
+            handler:^(__unused UIAlertAction *action) {
+                VMSettingsViewController *controller = weakSelf;
+                if (!controller) return;
+                controller->_settings.newMachineDiskSizeGiB = choice.unsignedIntegerValue;
                 [controller.tableView reloadData];
             }]];
     }

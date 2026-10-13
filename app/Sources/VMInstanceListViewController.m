@@ -205,26 +205,11 @@ static NSString *const kAutomationMachinePrefix = @"s5lbox.machine.";
 - (void)addTapped {
     [self promptWithTitle:@"New Machine"
                      text:@""
-                   accept:@"Next"
+                   accept:@"Create"
                   handler:^(NSString *name) {
-        UIAlertController *sizes = [UIAlertController alertControllerWithTitle:@"Disk Size"
-            message:@"Storage is used as files are added, up to this limit."
-            preferredStyle:UIAlertControllerStyleActionSheet];
-        for (NSNumber *value in @[@2, @4, @8]) {
-            NSString *title = [NSString stringWithFormat:@"%@ GiB%@", value,
-                value.unsignedIntegerValue == 2 ? @" (Default)" : @""];
-            [sizes addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault
-                handler:^(UIAlertAction *action) {
-                    (void)action;
-                    NSError *err = nil;
-                    if (![[VMInstanceStore sharedStore] createInstanceNamed:name
-                        diskSizeGiB:value.unsignedIntegerValue error:&err])
-                        [self showError:err doing:@"Could not create the machine"];
-                }]];
-        }
-        [sizes addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-        sizes.popoverPresentationController.barButtonItem = self.navigationItem.rightBarButtonItems.firstObject;
-        [self presentViewController:sizes animated:YES completion:nil];
+        NSError *err = nil;
+        if (![[VMInstanceStore sharedStore] createInstanceNamed:name error:&err])
+            [self showError:err doing:@"Could not create the machine"];
     }];
 }
 

@@ -95,6 +95,24 @@ string(FIND "${app}" "[rows addObject:@(VMGeneralRowGuestMicrophone)]" microphon
 if(microphone_row EQUAL -1)
     message(FATAL_ERROR "Advanced settings lost the guest microphone default")
 endif()
+
+# Creation uses the app default once; no size picker or preference-driven boot
+# resizing may be introduced on the normal New Machine path.
+file(READ "${APP_DIR}/Sources/VMInstanceStore.m" store)
+foreach(required "[rows addObject:@(VMGeneralRowDiskSize)]"
+        "Storage for new machines" "s5lbox.settings.new-machine-storage"
+        "controller->_settings.newMachineDiskSizeGiB = choice.unsignedIntegerValue;")
+    string(FIND "${app}" "${required}" found)
+    if(found EQUAL -1)
+        message(FATAL_ERROR "Advanced settings lost its new-machine storage choice: ${required}")
+    endif()
+endforeach()
+string(FIND "${machines}" "alertControllerWithTitle:@\"Disk Size\"" old_disk_picker)
+string(FIND "${machines}" "createInstanceNamed:name error:&err" default_creation)
+string(FIND "${store}" "diskSizeGiB:[VMSettings sharedSettings].newMachineDiskSizeGiB error:error" recorded_default)
+if(NOT old_disk_picker EQUAL -1 OR default_creation EQUAL -1 OR recorded_default EQUAL -1)
+    message(FATAL_ERROR "New Machine must record the storage default without a size picker")
+endif()
 string(FIND "${app}" "[rows addObject:@(VMGeneralRowPauseInBackground)]" background_row)
 string(FIND "${app}" "VMDiagnosticsRowPauseInBackground" old_background_row)
 if(background_row EQUAL -1 OR NOT old_background_row EQUAL -1)
