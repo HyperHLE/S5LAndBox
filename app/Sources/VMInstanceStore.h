@@ -42,6 +42,8 @@ extern NSString *const VMInstanceStoreDidChangeNotification;
  * that nothing outside this class has to know it must be 16 lower-case hex
  * digits. Returns the new identifier, or nil with `error` describing which
  * refusal the C layer returned.
+ * The convenience form records the current new-machine storage preference
+ * (8 GiB by default). Later preference changes never alter that record.
  */
 - (nullable NSString *)createInstanceNamed:(NSString *)name
                                      error:(NSError **)error;

@@ -1,11 +1,15 @@
 # Disk-size presets
 
-Status on 2026-10-10: verified for prerelease integration into main; no release
-has been published. The original guarded geometry foundation is retained.
-New Machine offers 2 (default), 4 and 8 GiB; a strict `disk-size-v1` record
-travels with each machine. Fresh provisioning and jailbreak honor it, duplicates
-copy the choice, and missing records retain legacy behavior. Existing disks are
-never resized at boot. Malformed records refuse before install transaction work.
+New machines use 8 GiB automatically, including the machine created during
+first-run setup. **App Settings > Advanced > Storage for new machines** offers
+4 and 2 GiB alternatives. Creating a machine asks only for its name; changing
+the default affects future machines only. Reset settings restores the 8 GiB
+default.
+
+A strict `disk-size-v1` record travels with each machine. Fresh provisioning
+and jailbreak honor it, duplicates copy the choice, and missing records retain
+legacy behavior. Existing disks are never resized at boot. Malformed records
+refuse before install transaction work.
 
 Maintenance cloning now preserves zero extents while hashing every logical byte,
 so choosing a larger capacity does not inherently allocate that capacity on the

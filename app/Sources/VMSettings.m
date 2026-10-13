@@ -36,6 +36,7 @@ static NSString *const kVMInlineConsole = @"VMInlineConsole";
 static NSString *const kVMLegacyEmulatorUI = @"VMLegacyEmulatorUI";
 static NSString *const kVMPackagesWithJailbreak = @"VMPackagesWithJailbreak";
 static NSString *const kVMGuestMicrophoneEnabled = @"VMGuestMicrophoneEnabled";
+static NSString *const kVMNewMachineDiskSizeGiB = @"VMNewMachineDiskSizeGiB";
 
 /*
  * The instruction caps the screen cycles through. 0 first because no limit is
@@ -108,6 +109,21 @@ static const uint64_t kVMInstructionCaps[] = {
 
 - (void)setGuestMicrophoneEnabled:(BOOL)enabled {
     [[self defaults] setBool:enabled forKey:kVMGuestMicrophoneEnabled];
+    [self publishChange];
+}
+
+- (NSUInteger)newMachineDiskSizeGiB {
+    NSNumber *stored = [[self defaults] objectForKey:kVMNewMachineDiskSizeGiB];
+    if (![stored isKindOfClass:NSNumber.class]) return 8;
+    for (NSNumber *choice in @[@2, @4, @8]) {
+        if ([stored isEqualToNumber:choice]) return choice.unsignedIntegerValue;
+    }
+    return 8;
+}
+
+- (void)setNewMachineDiskSizeGiB:(NSUInteger)gib {
+    if (gib != 2 && gib != 4 && gib != 8) return;
+    [[self defaults] setInteger:(NSInteger)gib forKey:kVMNewMachineDiskSizeGiB];
     [self publishChange];
 }
 
@@ -513,6 +529,7 @@ static const uint64_t kVMInstructionCaps[] = {
     [defaults removeObjectForKey:kVMLegacyEmulatorUI];
     [defaults removeObjectForKey:kVMPackagesWithJailbreak];
     [defaults removeObjectForKey:kVMGuestMicrophoneEnabled];
+    [defaults removeObjectForKey:kVMNewMachineDiskSizeGiB];
     [self publishChange];
 }
 

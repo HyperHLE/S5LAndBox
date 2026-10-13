@@ -82,6 +82,10 @@ typedef NS_ENUM(NSInteger, VMGraphicsMode) {
  * the running machine retains its separate session switch. */
 @property(nonatomic) BOOL guestMicrophoneEnabled;
 
+/* Capacity recorded only when a machine is created. Defaults to 8 GiB;
+ * Advanced may select 2 or 4. Never resizes an existing or legacy disk. */
+@property(nonatomic) NSUInteger newMachineDiskSizeGiB;
+
 #pragma mark - Recorded only (see the file note)
 
 /* `index` is an index into VMOptions.c's table. This is the effective launch

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 j0shua-SYSON. MIT licensed.
 #import "VMInstanceStore.h"
 #import "VMSettings.h"
+#include "VMDiskSize.h"
 #include <assert.h>
 
 static NSString *testRoot;
@@ -135,6 +136,45 @@ static void testGuestMicrophoneChoice(void) {
     puts("Guest microphone: default on, opt-out persistence, notifications and reset passed");
 }
 
+static void testDiskSizeChoice(void) {
+    NSString *suite = [@"S5LBox.DiskSettingsTests." stringByAppendingString:NSUUID.UUID.UUIDString];
+    NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
+    TestInterfaceSettings *settings = [TestInterfaceSettings new];
+    settings.testDefaults = defaults;
+    assert(settings.newMachineDiskSizeGiB == 8);
+    for (id invalid in @[@"4", @0, @3, @16, @(-2), @2.5, @YES]) {
+        [defaults setObject:invalid forKey:@"VMNewMachineDiskSizeGiB"];
+        assert(settings.newMachineDiskSizeGiB == 8);
+    }
+    [defaults removeObjectForKey:@"VMNewMachineDiskSizeGiB"];
+    settings.guestMicrophoneEnabled = NO;
+    NSDictionary *before = [defaults persistentDomainForName:suite];
+    TestInterfaceSettings *reopened = [TestInterfaceSettings new];
+    reopened.testDefaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
+    __block NSUInteger changes = 0;
+    id observer = [NSNotificationCenter.defaultCenter addObserverForName:VMSettingsDidChangeNotification
+        object:settings queue:nil usingBlock:^(__unused NSNotification *note) { ++changes; }];
+    for (NSNumber *choice in @[@4, @2, @8]) {
+        settings.newMachineDiskSizeGiB = choice.unsignedIntegerValue;
+        assert(settings.newMachineDiskSizeGiB == choice.unsignedIntegerValue);
+        assert(reopened.newMachineDiskSizeGiB == choice.unsignedIntegerValue);
+    }
+    assert(changes == 3);
+    settings.newMachineDiskSizeGiB = 3;
+    settings.newMachineDiskSizeGiB = NSUIntegerMax;
+    assert(settings.newMachineDiskSizeGiB == 8 && changes == 3);
+    NSMutableDictionary *after = [[defaults persistentDomainForName:suite] mutableCopy];
+    [after removeObjectForKey:@"VMNewMachineDiskSizeGiB"];
+    assert([before isEqual:after]);
+    settings.newMachineDiskSizeGiB = 2;
+    [settings resetToDefaults];
+    assert(reopened.newMachineDiskSizeGiB == 8 && changes == 5);
+    assert(![defaults objectForKey:@"VMNewMachineDiskSizeGiB"]);
+    [NSNotificationCenter.defaultCenter removeObserver:observer];
+    [defaults removePersistentDomainForName:suite];
+    puts("new-machine storage: 8 GiB default, strict choices, persistence, notifications and reset passed");
+}
+
 @interface VMInstanceStore (PersistenceTest)
 - (NSString *)containerDirectory;
 - (NSString *)storePath;
@@ -169,18 +209,63 @@ static NSSet *files(void) {
     return [NSSet setWithArray:names];
 }
 
+static void testDiskCreationDefaults(void) {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    id previous = [defaults objectForKey:@"VMNewMachineDiskSizeGiB"];
+    [defaults removeObjectForKey:@"VMNewMachineDiskSizeGiB"];
+    VMSettings *settings = VMSettings.sharedSettings;
+    TestInstanceStore *store = [TestInstanceStore new];
+    assert(store.count == 0);
+    NSError *error = nil;
+    // The same convenience method serves onboarding and the New Machine action.
+    assert([store createInstanceNamed:@"Automatic" error:&error] && !error);
+    for (NSNumber *choice in @[@4, @2]) {
+        settings.newMachineDiskSizeGiB = choice.unsignedIntegerValue;
+        assert([store createInstanceNamed:@"Advanced choice" error:&error] && !error);
+    }
+    settings.newMachineDiskSizeGiB = 8;
+    NSArray *expected = @[@8, @4, @2];
+    for (NSUInteger i = 0; i < expected.count; ++i)
+        assert([[store instanceAtIndex:i][@"diskSizeGiB"] isEqual:expected[i]]);
+    assert([rows(store) isEqual:rows([TestInstanceStore new])]);
+    assert([store duplicateInstanceAtIndex:2 error:&error] && !error);
+    assert([[store instanceAtIndex:3][@"diskSizeGiB"] isEqual:@2]);
+
+    // Simulate a legacy machine. Neither the 8 GiB preference nor reopening
+    // the store can materialize a record and resize that existing machine.
+    NSString *legacyID = [store instanceAtIndex:1][@"id"];
+    NSString *directory = [store directoryForInstanceWithID:legacyID];
+    NSString *record = [directory stringByAppendingPathComponent:@VM_DISK_SIZE_FILE];
+    assert([NSFileManager.defaultManager removeItemAtPath:record error:NULL]);
+    [store noteOpenedInstanceWithID:legacyID];
+    assert([[store instanceAtIndex:1][@"diskSizeGiB"] isEqual:@0]);
+    assert([rows(store) isEqual:rows([TestInstanceStore new])]);
+    uint64_t capacity = 123;
+    assert(vm_disk_size_read(directory.fileSystemRepresentation, &capacity) && capacity == 0);
+    assert(![NSFileManager.defaultManager fileExistsAtPath:record]);
+    assert([store duplicateInstanceAtIndex:1 error:&error] && !error);
+    assert([[store instanceAtIndex:4][@"diskSizeGiB"] isEqual:@2]);
+    assert([[store instanceAtIndex:1][@"diskSizeGiB"] isEqual:@0]);
+    while (store.count) assert([store deleteInstanceAtIndex:0 error:&error] && !error);
+    if (previous) [defaults setObject:previous forKey:@"VMNewMachineDiskSizeGiB"];
+    else [defaults removeObjectForKey:@"VMNewMachineDiskSizeGiB"];
+    puts("machine creation: automatic 8 GiB, Advanced choices, immutable records and legacy fallback passed");
+}
+
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         testInterfaceChoice();
         testPackagesWithJailbreakChoice();
         testGuestMicrophoneChoice();
         testBackgroundPauseChoice();
+        testDiskSizeChoice();
         assert(argc == 2);
         testRoot = [[NSString stringWithUTF8String:argv[1]]
             stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
         NSFileManager *fm = NSFileManager.defaultManager;
         assert([fm createDirectoryAtPath:testRoot withIntermediateDirectories:YES attributes:nil error:NULL]);
         assert([NSData.data writeToFile:[testRoot stringByAppendingPathComponent:@"not-a-directory"] atomically:YES]);
+        testDiskCreationDefaults();
         TestInstanceStore *store = [TestInstanceStore new];
         __block unsigned notifications = 0;
         id observer = [NSNotificationCenter.defaultCenter addObserverForName:VMInstanceStoreDidChangeNotification

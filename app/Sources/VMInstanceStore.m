@@ -441,7 +441,8 @@ static NSString *VMGraphicsRecordText(BOOL mbxEnabled,
 }
 
 - (NSString *)createInstanceNamed:(NSString *)name error:(NSError **)error {
-    return [self createInstanceNamed:name diskSizeGiB:2 error:error];
+    return [self createInstanceNamed:name
+        diskSizeGiB:[VMSettings sharedSettings].newMachineDiskSizeGiB error:error];
 }
 
 - (BOOL)writeDiskSize:(NSUInteger)gib forInstance:(NSString *)identifier error:(NSError **)error {
