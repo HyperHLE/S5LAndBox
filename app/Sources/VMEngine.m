@@ -42,6 +42,7 @@
 #import "VMInstanceStore.h"
 #import "VMSettings.h"
 #import "VMUSBTransport.h"
+#import "VMUSBRecovery.h"
 #include "usb_host.h"
 #include "usb_mux.h"
 
@@ -158,7 +159,7 @@ static double vm_engine_now_seconds(void) {
     usb_host_t       _usbHost;
     BOOL             _usbHostActive;
     usb_mux_t       *_usbMux;
-    double           _usbMuxStart;
+    vm_usb_recovery_t _usbRecovery;
     BOOL             _usbMuxReported;
     uint64_t         _usbBootGeneration;
     VMUSBTransport  *_usbTransport;
@@ -864,6 +865,7 @@ static double vm_engine_now_seconds(void) {
 
     _usbHostActive = _machine.usbotg.enabled != 0;
     _usbBootGeneration = vm_firmware_boot_restart_count(_firmwareBoot);
+    vm_usb_recovery_reset(&_usbRecovery);
     if (_usbHostActive) [_usbTransport beginSession];
     else [_usbTransport endSession:@"This boot has no virtual USB controller. Enable USB OTG, shut down, and start the machine again."];
     if (_usbHostActive) {
@@ -1821,6 +1823,9 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
                 if (shutdownPrepared && resumedNS >= hostPauseStartNS)
                     vm_guest_shutdown_resume(&shutdown,
                         (resumedNS - hostPauseStartNS) / UINT64_C(1000000));
+                if (resumedNS >= hostPauseStartNS)
+                    vm_usb_recovery_resume(&_usbRecovery,
+                        (resumedNS - hostPauseStartNS) * 1e-9);
                 hostPausePending = NO;
             }
             if (checkpoint) {
@@ -2020,6 +2025,7 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
                     // host's usbmux sequences or open service channels. Use
                     // the actual reboot boundary, not just USB register state.
                     _usbBootGeneration = generation;
+                    vm_usb_recovery_reset(&_usbRecovery);
                     [_usbTransport beginSession];
                     if (_usbMux) {
                         usb_mux_cancel(_usbMux, "Guest rebooted");
@@ -2030,46 +2036,71 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
                     usb_host_init(&_usbHost, &_machine);
                     [self appendConsole:@"[usb] new guest boot: previous service session discarded\n"];
                 }
-                if (_machine.usbotg.enabled && !_machine.usbotg.connected)
-                    usb_host_init(&_usbHost, &_machine); /* guest reboot */
-                unsigned previous = _usbHost.stage;
-                usb_host_poll(&_usbHost, &_machine);
-                if (!usb_host_ready(&_usbHost) && _usbMux) {
+                double usbNow = vm_engine_now_seconds();
+                double guestNow = (double)_machine.timer.ticks /
+                    (_machine.tb_hz ?: S5L8900_TB_HZ);
+                if (_usbRecovery.disconnected &&
+                    vm_usb_recovery_poll(&_usbRecovery, usbNow, guestNow,
+                                         false, false, false) == VM_USB_RECONNECT) {
                     [_usbTransport beginSession];
-                    usb_mux_cancel(_usbMux, "Guest USB controller reset");
-                    free(_usbMux); _usbMux = NULL;
-                    _usbMuxReported = NO;
+                    usb_host_init(&_usbHost, &_machine);
+                    [self appendConsole:@"[usb] reconnecting virtual cable\n"];
                 }
-                if (previous != _usbHost.stage) {
-                    [self appendConsole:[NSString stringWithFormat:
-                        @"[usb] stage=%u VID/PID=%04x/%04x configuration=%u bulk=%u/%u %s\n",
-                        _usbHost.stage, _usbHost.vendor, _usbHost.product,
-                        _usbHost.configuration, _usbHost.bulk_in, _usbHost.bulk_out,
-                        _usbHost.error ?: ""]];
-                }
-                if (usb_host_ready(&_usbHost)) {
-                    if (!_usbMux && !_usbMuxReported) {
-                        _usbMux = calloc(1, sizeof *_usbMux);
+                if (!_usbRecovery.disconnected) {
+                    if (_machine.usbotg.enabled && !_machine.usbotg.connected)
+                        usb_host_init(&_usbHost, &_machine); /* guest reboot */
+                    unsigned previous = _usbHost.stage;
+                    usb_host_poll(&_usbHost, &_machine);
+                    if (!usb_host_ready(&_usbHost) && _usbMux) {
+                        [_usbTransport beginSession];
+                        usb_mux_cancel(_usbMux, "Guest USB controller reset");
+                        free(_usbMux); _usbMux = NULL;
+                        _usbMuxReported = NO;
+                    }
+                    if (previous != _usbHost.stage) {
+                        [self appendConsole:[NSString stringWithFormat:
+                            @"[usb] stage=%u VID/PID=%04x/%04x configuration=%u bulk=%u/%u %s\n",
+                            _usbHost.stage, _usbHost.vendor, _usbHost.product,
+                            _usbHost.configuration, _usbHost.bulk_in, _usbHost.bulk_out,
+                            _usbHost.error ?: ""]];
+                    }
+                    if (usb_host_ready(&_usbHost)) {
+                        if (!_usbMux && !_usbMuxReported) {
+                            _usbMux = calloc(1, sizeof *_usbMux);
+                            if (_usbMux) {
+                                usb_mux_init(_usbMux);
+                            } else {
+                                _usbMuxReported = YES;
+                                [self appendConsole:@"[usb] usbmux allocation failed\n"];
+                            }
+                        }
                         if (_usbMux) {
-                            usb_mux_init(_usbMux);
-                            _usbMuxStart = vm_engine_now_seconds();
-                        } else {
-                            _usbMuxReported = YES;
-                            [self appendConsole:@"[usb] usbmux allocation failed\n"];
+                            usb_mux_poll(_usbMux, &_machine, &_usbHost);
+                            [_usbTransport pollWithMux:_usbMux];
+                            if (!_usbMuxReported && (usb_mux_ready(_usbMux) || _usbMux->error)) {
+                                _usbMuxReported = YES;
+                                [self appendConsole:[NSString stringWithFormat:
+                                    @"[usb] usbmux version=%u ready=%u %s\n",
+                                    _usbMux->version, usb_mux_ready(_usbMux), _usbMux->error ?: ""]];
+                            }
                         }
                     }
-                    if (_usbMux) {
-                        usb_mux_poll(_usbMux, &_machine, &_usbHost);
-                        if (!usb_mux_ready(_usbMux) && !_usbMux->error &&
-                            vm_engine_now_seconds() - _usbMuxStart > 120.0)
-                            usb_mux_cancel(_usbMux, "Guest usbmux negotiation timed out");
-                        [_usbTransport pollWithMux:_usbMux];
-                        if (!_usbMuxReported && (usb_mux_ready(_usbMux) || _usbMux->error)) {
-                            _usbMuxReported = YES;
-                            [self appendConsole:[NSString stringWithFormat:
-                                @"[usb] usbmux version=%u ready=%u %s\n",
-                                _usbMux->version, usb_mux_ready(_usbMux), _usbMux->error ?: ""]];
+                    BOOL ready = _usbMux && usb_mux_ready(_usbMux);
+                    const char *failure = _usbHost.error ?: (_usbMux ? _usbMux->error : NULL);
+                    if (!failure && usb_host_ready(&_usbHost) && !_usbMux)
+                        failure = "Virtual USB allocation failed";
+                    if (vm_usb_recovery_poll(&_usbRecovery, usbNow, guestNow,
+                            _usbMux && !ready, failure != NULL, ready) == VM_USB_DISCONNECT) {
+                        const char *reason = failure ?: "Guest usbmux negotiation timed out";
+                        [_usbTransport endSession:[NSString stringWithUTF8String:reason]];
+                        [self appendConsole:[NSString stringWithFormat:
+                            @"[usb] %s; reconnecting automatically\n", reason]];
+                        if (_usbMux) {
+                            usb_mux_cancel(_usbMux, reason);
+                            free(_usbMux); _usbMux = NULL;
                         }
+                        _usbMuxReported = NO;
+                        usb_host_disconnect(&_usbHost, &_machine);
                     }
                 }
             }

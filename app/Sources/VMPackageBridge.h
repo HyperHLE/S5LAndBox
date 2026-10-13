@@ -4,6 +4,10 @@ typedef void (^VMPackageSetupProgress)(NSString *stage, double fraction);
 @interface VMPackageBridge : NSObject
 /* Local preflight only: a capability does not prove that the guest is ready. */
 + (BOOL)hasCapabilityForInstance:(NSString *)identifier;
+/* First live connection after stopped setup, independent of navigation. This
+ * is a host UI hint, not the durable disk-publication pending marker. */
++ (BOOL)awaitingFirstConnectionForInstance:(NSString *)identifier;
++ (void)noteSuccessfulConnectionForInstance:(NSString *)identifier;
 - (instancetype)initWithTransport:(VMUSBTransport *)transport instanceID:(NSString *)identifier;
 @property (atomic) BOOL canceled;
 @property (nonatomic, copy) void (^progress)(NSString *text);

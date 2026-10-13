@@ -532,6 +532,19 @@ else()
 endif()
 add_test(NAME app_network_session COMMAND test_vmnetworksession)
 
+add_executable(test_vmusbrecovery
+    ../app/Tests/test_vmusbrecovery.c ../app/Sources/VMUSBRecovery.c)
+target_include_directories(test_vmusbrecovery PRIVATE ../app/Sources)
+set_target_properties(test_vmusbrecovery PROPERTIES
+    C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
+if(MSVC)
+    target_compile_options(test_vmusbrecovery PRIVATE /W4 /WX)
+else()
+    target_compile_options(test_vmusbrecovery PRIVATE
+        -Wall -Wextra -Werror -pedantic -Wformat=2 -Wshadow)
+endif()
+add_test(NAME app_usb_recovery COMMAND test_vmusbrecovery)
+
 # The single automatic resume point is a two-payload transaction whose
 # non-empty marker must be published last. It needs no firmware: a small core
 # machine is enough to prove replacement, round-trip and fail-closed ordering.

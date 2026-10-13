@@ -43,6 +43,28 @@ int main(int argc, const char *argv[]) {
         CHECK([Capability(identifier,NO,NULL) isEqualToData:token]);
         CHECK(PackageSetupPending(identifier,NO,NULL));
         CHECK([VMPackageBridge hasCapabilityForInstance:identifier]);
+        // Disk publication readiness and first live connection are distinct.
+        // A manually opened workspace must keep the first-start allowance even
+        // after its controller was dismissed or the host app was relaunched.
+        [VMPackageBridge noteSuccessfulConnectionForInstance:identifier];
+        CHECK(![VMPackageBridge awaitingFirstConnectionForInstance:identifier]);
+        AwaitFirstConnection(identifier);
+        CHECK([VMPackageBridge awaitingFirstConnectionForInstance:identifier]);
+        CHECK([NSUserDefaults.standardUserDefaults boolForKey:FirstConnectionKey(identifier)]);
+        CHECK([VMPackageBridge hasCapabilityForInstance:identifier]);
+        CHECK(![VMPackageBridge awaitingFirstConnectionForInstance:@"fedcba9876543210"]);
+        CHECK(PackageSetupPending(identifier,YES,NULL));
+        CHECK([VMPackageBridge awaitingFirstConnectionForInstance:identifier]);
+        [VMPackageBridge noteSuccessfulConnectionForInstance:identifier];
+        CHECK(![VMPackageBridge awaitingFirstConnectionForInstance:identifier]);
+        CHECK(![VMPackageBridge hasCapabilityForInstance:identifier]);
+        CHECK(PackageSetupPending(identifier,NO,NULL));
+        CHECK([VMPackageBridge hasCapabilityForInstance:identifier]);
+        CHECK(![VMPackageBridge awaitingFirstConnectionForInstance:identifier]);
+        // Invalid identities never write a hint or affect another machine.
+        AwaitFirstConnection(@"../invalid");
+        CHECK(![VMPackageBridge awaitingFirstConnectionForInstance:@"../invalid"]);
+        [VMPackageBridge noteSuccessfulConnectionForInstance:@"../invalid"];
         NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:CapabilityURL(identifier,NULL).path error:NULL];
         CHECK([attributes[NSFilePosixPermissions] unsignedIntValue] == 0600);
         CHECK(Capability(@"../invalid",YES,NULL) == nil);

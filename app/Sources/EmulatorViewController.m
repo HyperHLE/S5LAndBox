@@ -1065,7 +1065,7 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
 - (void)openRuntimePackages {
     if (![self runtimeCanControlGuest] || [_engine isPaused] || self.presentedViewController) return;
     VMPackageManagerViewController *packages = [[VMPackageManagerViewController alloc]
-        initWithTransport:_engine.usbTransport instanceID:self.instanceID finishingSetup:self.openPackagesWhenRunning];
+        initWithTransport:_engine.usbTransport instanceID:self.instanceID];
     packages.modalPresentationStyle = UIModalPresentationFullScreen;
     __weak EmulatorViewController *weakSelf = self;
     __weak VMPackageManagerViewController *weakPackages = packages;

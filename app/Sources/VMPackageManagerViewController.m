@@ -164,6 +164,7 @@ static UIImage *Tile(NSString *symbol) {
     dispatch_queue_t _queue;
     NSData *_status;
     NSString *_message;
+    NSError *_lastConnectionError;
     BOOL _busy, _idleWasDisabled, _holdsIdleTimer;
     BOOL _connecting, _needsSetup, _closed, _loadedSources;
     BOOL _connectionTimedOut, _finishingSetup;
@@ -176,12 +177,8 @@ static UIImage *Tile(NSString *symbol) {
     __weak VMPackageScreen *_operation;
 }
 - (instancetype)initWithTransport:(VMUSBTransport *)transport instanceID:(NSString *)identifier {
-    return [self initWithTransport:transport instanceID:identifier finishingSetup:NO];
-}
-- (instancetype)initWithTransport:(VMUSBTransport *)transport instanceID:(NSString *)identifier
-                  finishingSetup:(BOOL)finishingSetup {
     self=[super init]; if (!self) return nil;
-    _finishingSetup=finishingSetup;
+    _finishingSetup=[VMPackageBridge awaitingFirstConnectionForInstance:identifier];
     _catalog=[VMPackageCatalog new]; _repository=[VMPackageRepository new];
     _bridge=[[VMPackageBridge alloc] initWithTransport:transport instanceID:identifier];
     _instanceID=[identifier copy];
@@ -258,12 +255,14 @@ static UIImage *Tile(NSString *symbol) {
     if (!_connectionDeadline) _connectionDeadline=NSProcessInfo.processInfo.systemUptime+(_finishingSetup ? 600 : 120);
     if (NSProcessInfo.processInfo.systemUptime>=_connectionDeadline) {
         _connectionTimedOut=YES;
-        _message=@"Make sure iPhone OS has started and is unlocked, then try again.";
+        NSString *hint=@"Show iPhone OS to check startup, then try again.";
+        _message=_lastConnectionError.localizedDescription.length ?
+            [NSString stringWithFormat:@"%@\n%@",_lastConnectionError.localizedDescription,hint] : hint;
         [self renderAll]; return;
     }
     _connecting=YES; _bridge.canceled=NO;
     NSUInteger generation=++_connectionGeneration;
-    _message=_finishingSetup ? @"First startup can take several minutes. Wake and unlock iPhone OS if it is asleep."
+    _message=_finishingSetup ? @"iPhone OS is finishing setup. Its Home screen may restart once."
         : @"Wake and unlock iPhone OS to connect.";
     [self renderAll];
     dispatch_async(_queue,^{
@@ -274,12 +273,13 @@ static UIImage *Tile(NSString *symbol) {
             if (connected) {
                 self->_connectionDeadline=0;
                 self->_connectionTimedOut=NO;
-                self->_finishingSetup=NO;
+                self->_lastConnectionError=nil;
                 self->_message=@"Connected to your guest.";
                 [self renderAll];
                 if (!self->_loadedSources) [self refresh];
             } else {
                 self->_status=nil;
+                self->_lastConnectionError=error;
                 [self renderAll];
                 [self scheduleGuestConnection];
             }
@@ -360,8 +360,8 @@ static UIImage *Tile(NSString *symbol) {
                 NSMutableDictionary *retry=[Row(@"Try Again",nil,@"arrow.clockwise",@"refresh") mutableCopy];
                 retry[@"button"]=@YES; [connectionRows addObject:retry];
             }
-            if (self.setupRequest && (_needsSetup || _connectionTimedOut)) {
-                NSMutableDictionary *setup=[Row(_needsSetup ? @"Set Up Packages" : @"Repair Setup",
+            if (self.setupRequest && _needsSetup) {
+                NSMutableDictionary *setup=[Row(@"Set Up Packages",
                     @"This machine will restart.",@"shippingbox",_busy ? nil : @"setup") mutableCopy];
                 setup[@"button"]=@YES; setup[@"identifier"]=@"s5lbox.packages.setup";
                 [connectionRows addObject:setup];
@@ -579,6 +579,10 @@ static UIImage *Tile(NSString *symbol) {
     dispatch_sync(dispatch_get_main_queue(),^{
         if (self->_closed || self->_bridge.canceled) return;
         self->_status=status; self->_catalog.installed=records; self->_finishAction=finish; self->_finishReady=ready;
+        // Only an accepted live status read proves the package service is
+        // reachable. It does not claim all Cydia first-boot jobs have finished.
+        [VMPackageBridge noteSuccessfulConnectionForInstance:self->_instanceID];
+        self->_finishingSetup=NO;
         accepted=YES;
     });
     return accepted;
@@ -587,6 +591,7 @@ static UIImage *Tile(NSString *symbol) {
     if (_closed || _connecting) return;
     if (!_status) {
         _connectionDeadline=0; _connectionTimedOut=NO;
+        _lastConnectionError=nil;
         [self connectGuest]; return;
     }
     if (!_queue || _busy) return; _operation=nil; [self setWorking:YES]; [self report:@"Loading repositories…"];

@@ -146,6 +146,18 @@ jobs:
             app/Tests/test_vmusbservices.m -o work/usb-service-tests/test_vmusbservices
           work/usb-service-tests/test_vmusbservices "$GITHUB_WORKSPACE/work/usb-service-tests/pairing"
 
+      - name: Test virtual USB cancellation and recovery
+        run: |
+          set -euo pipefail
+          mkdir -p work/usb-transport-tests
+          xcrun clang -std=c11 -Wall -Wextra -Werror -I core/include \
+            -c core/src/usb_mux.c -o work/usb-transport-tests/usb_mux.o
+          xcrun clang -fobjc-arc -Wall -Wextra -Werror -framework Foundation \
+            -I app/Sources -I core/include app/Sources/VMUSBTransport.m \
+            app/Tests/test_vmusbtransport.m work/usb-transport-tests/usb_mux.o \
+            -o work/usb-transport-tests/test_vmusbtransport
+          work/usb-transport-tests/test_vmusbtransport
+
       - name: Test native package planning
         run: |
           set -euo pipefail
