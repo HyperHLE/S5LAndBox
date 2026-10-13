@@ -31,6 +31,8 @@
  * return to Machines and invoke this block. Never invoked on failure/cancel. */
 @property (nonatomic, copy) void (^guestShutdownCompletion)(void);
 @property (nonatomic) BOOL openPackagesWhenRunning;
+/* Consumed once after this guest starts, never on ordinary resume. */
+@property (nonatomic, copy) NSString *jailbreakNotice;
 /* Invoked only after explicit setup consent and successful disk teardown. */
 @property (nonatomic, copy) void (^packageSetupRequest)(void);
 

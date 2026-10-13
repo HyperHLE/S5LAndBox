@@ -22,6 +22,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic) BOOL packageManagerOnly;
 /* Only explicit Packages setup requests reopen Packages after boot. */
 @property (nonatomic, readonly) BOOL openPackagesWhenReady;
+/* First-boot notice for a newly published jailbreak, not helper repair. */
+@property (nonatomic, copy, readonly, nullable) NSString *jailbreakNotice;
 
 @end
 
