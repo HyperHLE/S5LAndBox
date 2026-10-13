@@ -34,17 +34,26 @@ static OSStatus ServiceWrite(SSLConnectionRef ref, const void *data, size_t *siz
 }
 @implementation VMUSBService {
     SSLContextRef _tls;
+    NSTimeInterval _operationDeadline;
 }
 - (instancetype)initWithTransport:(VMUSBTransport *)transport port:(uint16_t)port error:(NSError **)error {
     return [self initWithTransport:transport port:port canceled:nil error:error];
 }
 - (instancetype)initWithTransport:(VMUSBTransport *)transport port:(uint16_t)port
                          canceled:(BOOL (^)(void))canceled error:(NSError **)error {
+    return [self initWithTransport:transport port:port canceled:canceled deadline:0 error:error];
+}
+- (instancetype)initWithTransport:(VMUSBTransport *)transport port:(uint16_t)port
+                         canceled:(BOOL (^)(void))canceled deadline:(NSTimeInterval)deadline
+                            error:(NSError **)error {
     self = [super init];
     if (!self) return nil;
     _socketFD = -1;
     _canceled = [canceled copy];
-    _socketFD = [transport openPort:port timeout:120 canceled:_canceled error:error];
+    _operationDeadline = deadline;
+    if (![self checkOperation:error]) return nil;
+    NSTimeInterval timeout = deadline ? MIN(120, deadline - NSProcessInfo.processInfo.systemUptime) : 120;
+    _socketFD = [transport openPort:port timeout:timeout canceled:_canceled error:error];
     if (_socketFD < 0) return nil;
     return self;
 }
@@ -53,11 +62,19 @@ static OSStatus ServiceWrite(SSLConnectionRef ref, const void *data, size_t *siz
     if (_tls) { CFRelease(_tls); _tls = NULL; }
     if (_socketFD >= 0) { close(_socketFD); _socketFD = -1; }
 }
+- (BOOL)checkOperation:(NSError **)error {
+    if (self.canceled && self.canceled()) {
+        if (error) *error = ServiceError(@"Operation canceled."); return NO;
+    }
+    if (_operationDeadline && NSProcessInfo.processInfo.systemUptime >= _operationDeadline) {
+        if (error) *error = ServiceError(@"The guest service did not respond in time."); return NO;
+    }
+    return YES;
+}
 - (BOOL)waitUntil:(NSTimeInterval)deadline error:(NSError **)error {
+    if (_operationDeadline) deadline = MIN(deadline, _operationDeadline);
     for (;;) {
-        if (self.canceled && self.canceled()) {
-            if (error) *error = ServiceError(@"Installation canceled."); return NO;
-        }
+        if (![self checkOperation:error]) return NO;
         NSTimeInterval left = deadline - NSProcessInfo.processInfo.systemUptime;
         if (left <= 0 || _socketFD < 0) {
             if (error) *error = ServiceError(@"The guest service timed out or disconnected."); return NO;
@@ -80,9 +97,7 @@ static OSStatus ServiceWrite(SSLConnectionRef ref, const void *data, size_t *siz
     NSUInteger at = 0;
     NSTimeInterval deadline = NSProcessInfo.processInfo.systemUptime + 120.0;
     while (at < count) {
-        if (self.canceled && self.canceled()) {
-            if (error) *error = ServiceError(@"Installation canceled."); return NO;
-        }
+        if (![self checkOperation:error]) return NO;
         size_t n = count - at;
         OSStatus status;
         if (_tls) {
@@ -158,6 +173,7 @@ static OSStatus ServiceWrite(SSLConnectionRef ref, const void *data, size_t *siz
     NSTimeInterval deadline = NSProcessInfo.processInfo.systemUptime + 120.0;
     BOOL pinned = NO;
     while (!status || status == errSSLWouldBlock || status == errSSLServerAuthCompleted) {
+        if (![self checkOperation:error]) return NO;
         status = SSLHandshake(_tls);
         if (status == errSSLServerAuthCompleted) {
             SecTrustRef trust = NULL;

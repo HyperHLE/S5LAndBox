@@ -36,6 +36,9 @@ on:
       - 'tools/a64_static.c'
       - 'tools/a64_static.h'
       - 'tools/gen_a64_static.py'
+      - 'tools/guest_bootstrap.c'
+      - 'tools/test_guest_bootstrap.py'
+      - 'tools/build_guest_bootstrap.ps1'
       - '.github/workflows/ios-build.yml'
   workflow_dispatch:
     inputs:
@@ -178,6 +181,9 @@ jobs:
           clang -Wall -Wextra -Werror -DS5LBOX_PACKAGE_TEST -I tools \
             tools/guest_package_service.c tools/sha256.c -o work/package-tests/test_service
           python3 tools/test_guest_package_service.py work/package-tests/test_service
+          clang -Wall -Wextra -Werror -DS5LBOX_BOOTSTRAP_TEST -I app/Tests \
+            tools/guest_bootstrap.c -o work/package-tests/test_bootstrap
+          python3 tools/test_guest_bootstrap.py work/package-tests/test_bootstrap
 
       - name: Verify stock-iPhone app policy
         working-directory: app

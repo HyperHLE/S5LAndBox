@@ -31,6 +31,8 @@ extern "C" {
     "/private/var/lib/s5lbox/packages"
 #define VM_GUEST_ROOTFS_INSTALL_SCRIPT \
     "/usr/libexec/s5lbox-guest-install"
+#define VM_GUEST_ROOTFS_BOOTSTRAP \
+    "/usr/libexec/s5lbox-bootstrap-v1"
 #define VM_GUEST_ROOTFS_LAUNCHD_PLIST \
     "/System/Library/LaunchDaemons/com.j0shua.s5lbox.guest-install.plist"
 

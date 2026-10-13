@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "VMGuestBootstrap.inc"
 
 #define PLAN_NAME_ARENA_BYTES \
     ((size_t)ROOTFS_WORK_MAX_ENTRIES * (size_t)ROOTFS_WORK_MAX_PATH)
@@ -119,7 +120,7 @@ static const char INSTALL_PLIST[] =
     "  <string>com.j0shua.s5lbox.guest-install</string>\n"
     "  <key>ProgramArguments</key>\n"
     "  <array>\n"
-    "    <string>" VM_GUEST_ROOTFS_INSTALL_SCRIPT "</string>\n"
+    "    <string>" VM_GUEST_ROOTFS_BOOTSTRAP "</string>\n"
     "  </array>\n"
     "  <key>RunAtLoad</key>\n"
     "  <true/>\n"
@@ -688,7 +689,10 @@ static bool plan_add_runtime_entries(
                            0644u, detail, detail_capacity))
             return false;
     }
-    return plan_add_file(plan, VM_GUEST_ROOTFS_INSTALL_SCRIPT,
+    return plan_add_file(plan, VM_GUEST_ROOTFS_BOOTSTRAP,
+                         GUEST_BOOTSTRAP, sizeof GUEST_BOOTSTRAP, 0755u,
+                         detail, detail_capacity) &&
+           plan_add_file(plan, VM_GUEST_ROOTFS_INSTALL_SCRIPT,
                          (const uint8_t *)plan->script, plan->script_size,
                          0755u, detail, detail_capacity) &&
            plan_add_file(plan, VM_GUEST_ROOTFS_LAUNCHD_PLIST,
@@ -707,7 +711,8 @@ static bool plan_compute_manifest(vm_guest_rootfs_plan_t *plan,
                                   size_t input_count) {
     ios3_sha256_context_t context;
     if (!ios3_sha256_init(&context) ||
-        !plan_hash_text(&context, "s5lbox-guest-rootfs-plan 9\n") ||
+        !plan_hash_text(&context, "s5lbox-guest-rootfs-plan 10\n") ||
+        !ios3_sha256_update(&context, GUEST_BOOTSTRAP, sizeof GUEST_BOOTSTRAP) ||
         !plan_hash_text(&context,
                         "aliases /etc=/private/etc /var=/private/var\n") ||
         !plan_hash_text(

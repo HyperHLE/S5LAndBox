@@ -6,6 +6,11 @@
 - (instancetype)initWithTransport:(VMUSBTransport *)transport port:(uint16_t)port error:(NSError **)error;
 - (instancetype)initWithTransport:(VMUSBTransport *)transport port:(uint16_t)port
                          canceled:(BOOL (^)(void))canceled error:(NSError **)error;
+/* Absolute systemUptime deadline, including connect and all subsequent I/O.
+ * Zero retains the normal per-operation timeout. Never use cancellation as a timer. */
+- (instancetype)initWithTransport:(VMUSBTransport *)transport port:(uint16_t)port
+                         canceled:(BOOL (^)(void))canceled deadline:(NSTimeInterval)deadline
+                            error:(NSError **)error;
 @property (nonatomic, copy) BOOL (^canceled)(void);
 - (BOOL)writeData:(NSData *)data error:(NSError **)error;
 - (NSData *)readCount:(NSUInteger)count error:(NSError **)error;

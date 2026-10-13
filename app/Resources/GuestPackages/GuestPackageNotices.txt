@@ -1,6 +1,7 @@
 S5LBox guest package service - third-party notice
 
-The ARMv6 s5lbox-package-service executable includes the unmodified crt1.o
+The ARMv6 s5lbox-package-service and embedded s5lbox-bootstrap executables
+include the unmodified crt1.o
 startup object from common-3.0-sdk v0.3.7. Its Apple Csu sources are:
   crt.c       Copyright (c) 1999-2008 Apple Inc. All rights reserved.
   start.s     Copyright (c) 1999-2009 Apple Inc. All rights reserved.
@@ -30,7 +31,8 @@ SHA256: c616f77aa309cca34813f5f5a3207fc27e830d235dd3d45f352fe0db01fafc8e
 crt1.o SHA256: 64253d22b21c81776a9c085b16387317bd837d8caa9070273af9f348e1758fb8
 
 The S5LBox executor and SHA-256 sources are separately MIT licensed; see
-tools/guest_package_service.c, tools/sha256.c and LICENSE in the S5LBox
+tools/guest_package_service.c, tools/guest_bootstrap.c, tools/sha256.c and LICENSE in the S5LBox
 source repository: https://github.com/j0shua-SYSON/S5LBox
 This notice does not relicense Apple code as MIT. The executable dynamically
-uses the guest's libSystem; that library is not included in this resource.
+uses the guest's libSystem. The bootstrap also uses guest CoreFoundation and
+IOKit. None of these Apple libraries are included in these resources.

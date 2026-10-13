@@ -690,6 +690,15 @@ set_tests_properties(app_guest_rootfs_plan PROPERTIES
 # after respring. C-only consumers can still build without Python or bash.
 find_package(Python3 QUIET COMPONENTS Interpreter)
 find_program(S5LBOX_TEST_BASH bash)
+if(UNIX AND Python3_Interpreter_FOUND)
+    add_executable(test_guest_bootstrap ../tools/guest_bootstrap.c)
+    target_compile_definitions(test_guest_bootstrap PRIVATE S5LBOX_BOOTSTRAP_TEST)
+    target_include_directories(test_guest_bootstrap PRIVATE ../app/Tests)
+    add_test(NAME app_guest_bootstrap_lifetime
+        COMMAND "${Python3_EXECUTABLE}" -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/../tools/test_guest_bootstrap.py"
+            $<TARGET_FILE:test_guest_bootstrap>)
+endif()
 if(Python3_Interpreter_FOUND AND S5LBOX_TEST_BASH)
     add_test(NAME app_guest_first_boot
         COMMAND "${Python3_EXECUTABLE}" -B

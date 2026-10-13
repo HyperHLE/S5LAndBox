@@ -107,6 +107,7 @@ static void testService(void) {
     service.canceled = ^BOOL{ return YES; };
     NSError *error = nil;
     CHECK(![service readCount:1 error:&error] && error != nil);
+    CHECK([error.localizedDescription isEqual:@"Operation canceled."]);
     service.canceled = nil;
     CHECK(![service readCount:4194305 error:&error]);
     const uint8_t large[4] = {0xff,0xff,0xff,0xff};
@@ -114,6 +115,27 @@ static void testService(void) {
     CHECK(![service receivePlist:&error]);
     close(fds[1]); CHECK(![service readCount:1 error:&error]);
     [service close]; [service close];
+
+    // An expired connection deadline never opens a transport or masquerades
+    // as user cancellation. The same bound applies after the socket connects.
+    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+    service = [[VMUSBService alloc] initWithTransport:[VMUSBTransport new] port:64321
+        canceled:nil deadline:now-1 error:&error];
+    CHECK(!service && [error.localizedDescription containsString:@"did not respond in time"]);
+    CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
+    CHECK(fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0);
+    nextFD=fds[0]; now=NSProcessInfo.processInfo.systemUptime;
+    service = [[VMUSBService alloc] initWithTransport:[VMUSBTransport new] port:64321
+        canceled:nil deadline:now+0.05 error:&error];
+    CHECK(service != nil);
+    CHECK(![service readCount:1 error:&error]);
+    CHECK(NSProcessInfo.processInfo.systemUptime-now < 2);
+    CHECK(![error.localizedDescription containsString:@"canceled"]);
+    CHECK(![service writeData:[NSData dataWithBytes:"x" length:1] error:&error]);
+    CHECK([error.localizedDescription containsString:@"did not respond in time"]);
+    service.canceled=^BOOL{ return YES; };
+    CHECK(![service readCount:1 error:&error] && [error.localizedDescription isEqual:@"Operation canceled."]);
+    [service close]; close(fds[1]);
 }
 static void testPairing(NSURL *folder) {
     NSDictionary *attributes = @{(__bridge id)kSecAttrKeyType:(__bridge id)kSecAttrKeyTypeRSA, (__bridge id)kSecAttrKeySizeInBits:@2048};
