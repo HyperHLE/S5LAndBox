@@ -1,6 +1,6 @@
 # Live IPA installation
 
-Work branch: `feature/live-ipa-usb`. Device-validated candidate, not merged to main.
+Live installation is available from **Machine Settings > Install IPA**.
 The IPA library remains in `Documents/IPAs`; importing a file must never
 automatically install it. The target is one app at a time, through the running
 guest's own AFC and `com.apple.mobile.installation_proxy` services.
