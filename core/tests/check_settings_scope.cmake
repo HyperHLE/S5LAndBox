@@ -76,6 +76,26 @@ if(controls_pause EQUAL -1)
     message(FATAL_ERROR "Controls must retain Pause/Resume")
 endif()
 
+# UIKit positions the navigation title. Mutating it from the guest's layout
+# resets its animated origin and makes the machine name jump during startup.
+foreach(forbidden "_machineHeading.frame =" "_machineHeading.bounds =" "_machineHeading.center =")
+    string(FIND "${emulator}" "${forbidden}" found)
+    if(NOT found EQUAL -1)
+        message(FATAL_ERROR "Emulator layout must not reposition its navigation title: ${forbidden}")
+    endif()
+endforeach()
+foreach(required "@interface VMMachineHeadingView : UIView"
+        "- (CGSize)intrinsicContentSize" "- (CGSize)sizeThatFits:(CGSize)size"
+        "[titleContent.leadingAnchor constraintEqualToAnchor:_machineHeading.leadingAnchor]"
+        "[titleContent.trailingAnchor constraintEqualToAnchor:_machineHeading.trailingAnchor]"
+        "_machineTitle.lineBreakMode = NSLineBreakByTruncatingTail;"
+        "traitCollectionDidChange:" "[self updateMachineHeadingFonts];")
+    string(FIND "${emulator}" "${required}" found)
+    if(found EQUAL -1)
+        message(FATAL_ERROR "Navigation title lost its self-sizing or accessibility behavior: ${required}")
+    endif()
+endforeach()
+
 file(READ "${APP_DIR}/Sources/VMEngine.m" engine)
 file(READ "${APP_DIR}/Sources/AppDelegate.m" delegate)
 foreach(required "setMicrophoneEnabled:[VMSettings sharedSettings].guestMicrophoneEnabled")
