@@ -103,6 +103,7 @@ targets:
       - sdk: Security.framework
       - sdk: UIKit.framework
       - sdk: CoreGraphics.framework
+      - sdk: ImageIO.framework
       - sdk: QuartzCore.framework
       - sdk: AVFoundation.framework
       - sdk: libbz2.tbd

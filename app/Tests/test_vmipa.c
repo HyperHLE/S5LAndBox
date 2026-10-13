@@ -93,6 +93,34 @@ int main(void) {
     VMFW_T_CHECK(t, !vm_ipa_check_executable(fat, sizeof fat, detail, sizeof detail), "overlapping slices accepted");
     fx_w32be(fat + 36, 128); fx_w32be(fat + 32, 6);
     VMFW_T_CHECK(t, !vm_ipa_check_executable(fat, sizeof fat, detail, sizeof detail), "mismatched architecture accepted");
+    VMFW_T_SECTION(t, "bounded native icon decoding input");
+    uint8_t png[64] = {137,80,78,71,13,10,26,10};
+    fx_w32be(png + 8, 13); memcpy(png + 12, "IHDR", 4);
+    fx_w32be(png + 16, 57); fx_w32be(png + 20, 60);
+    png[24] = 8; png[25] = 6;
+    uint32_t width = 0, height = 0;
+    VMFW_T_CHECK(t, vm_ipa_icon_png_dimensions(png, 33, &width, &height) && width == 57 && height == 60,
+        "valid legacy icon dimensions refused");
+    for (size_t n = 0; n < 33; n++)
+        VMFW_T_CHECK(t, !vm_ipa_icon_png_dimensions(png, n, NULL, NULL), "truncated PNG accepted");
+    fx_w32be(png + 16, 2049);
+    VMFW_T_CHECK(t, !vm_ipa_icon_png_dimensions(png, 33, NULL, NULL), "oversize width accepted");
+    fx_w32be(png + 16, 0);
+    VMFW_T_CHECK(t, !vm_ipa_icon_png_dimensions(png, 33, NULL, NULL), "zero width accepted");
+    fx_w32be(png + 16, 57); fx_w32be(png + 20, UINT32_MAX);
+    VMFW_T_CHECK(t, !vm_ipa_icon_png_dimensions(png, 33, NULL, NULL), "oversize height accepted");
+    fx_w32be(png + 20, 60); png[28] = 2;
+    VMFW_T_CHECK(t, !vm_ipa_icon_png_dimensions(png, 33, NULL, NULL), "bad interlace accepted");
+    png[28] = 0;
+    VMFW_T_CHECK(t, !vm_ipa_icon_png_dimensions(png, 2u * 1024u * 1024u + 1, NULL, NULL), "oversize icon accepted");
+    memmove(png + 24, png + 8, 25);
+    fx_w32be(png + 8, 4); memcpy(png + 12, "CgBI", 4); memset(png + 16, 0, 8);
+    VMFW_T_CHECK(t, vm_ipa_icon_png_dimensions(png, 49, &width, &height) && width == 57 && height == 60,
+        "Apple optimized icon header refused");
+    VMFW_T_CHECK(t, !vm_ipa_icon_png_dimensions(png, 48, NULL, NULL), "truncated optimized icon accepted");
+    fx_w32be(png + 8, UINT32_MAX);
+    VMFW_T_CHECK(t, !vm_ipa_icon_png_dimensions(png, 49, NULL, NULL), "CgBI length overflow accepted");
+    VMFW_T_CHECK(t, !vm_ipa_icon_png_dimensions(NULL, 49, NULL, NULL), "null icon accepted");
     printf("IPA inspection: %u checks, %u failures\n", t->checks, t->failures);
     return t->failures ? 1 : 0;
 }
