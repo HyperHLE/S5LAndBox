@@ -14,7 +14,7 @@
 #include <string.h>
 
 @interface VMGuestInstallViewController ()
-- (void)offerPackagesIfVisible:(NSNotification * _Nullable)notification;
+- (void)completeIfVisible:(NSNotification * _Nullable)notification;
 - (void)startInstall;
 - (void)runBuilderWithPackageDirectory:(NSURL *)packageDirectory;
 - (void)failWithHeadline:(NSString *)headline
@@ -44,7 +44,7 @@ static void VMGuestInstallBuildProgress(
     VMGuestPackageDownloader *_downloader;
     dispatch_queue_t _buildQueue;
     UIBackgroundTaskIdentifier _backgroundTask;
-    BOOL _packageOfferPending;
+    BOOL _completionPending;
     BOOL _started;
     BOOL _finished;
     BOOL _packageFlow, _jailbreakNeeded, _openForShutdown, _keepsAwake, _previousIdle;
@@ -189,7 +189,7 @@ static void VMGuestInstallBuildProgress(
     for (UILabel *label in @[machine, _headline, _detail, _hint])
         [label setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisVertical];
     _buildQueue = dispatch_queue_create("com.j0shua.S5LBox.GuestInstallBuild", DISPATCH_QUEUE_SERIAL);
-    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(offerPackagesIfVisible:)
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(completeIfVisible:)
         name:UIApplicationDidBecomeActiveNotification object:nil];
 }
 
@@ -204,7 +204,7 @@ static void VMGuestInstallBuildProgress(
         _started = YES;
         [self startInstall];
     }
-    [self offerPackagesIfVisible:nil];
+    [self completeIfVisible:nil];
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
@@ -369,37 +369,23 @@ static void VMGuestInstallBuildProgress(
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
                                      (int64_t)(0.8 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
-            self->_packageOfferPending = YES;
-            [self offerPackagesIfVisible:nil];
+            self->_completionPending = YES;
+            [self completeIfVisible:nil];
         });
     });
 }
 
-- (void)offerPackagesIfVisible:(NSNotification *)notification {
+- (void)completeIfVisible:(NSNotification *)notification {
     (void)notification;
-    if (!_packageOfferPending || !self.view.window || self.presentedViewController ||
+    if (!_completionPending || !self.view.window || self.presentedViewController ||
         UIApplication.sharedApplication.applicationState != UIApplicationStateActive ||
         self.navigationController.topViewController != self) return;
-    _packageOfferPending = NO;
+    // A jailbreak returns straight to the guest. Only an explicit Packages
+    // setup request reopens Packages once the guest is running.
+    _completionPending = NO;
+    _openPackagesWhenReady = _packageFlow;
     void (^ready)(void) = [self.readyHandler copy];
-    if (_packageFlow || !_includePackages) {
-        _openPackagesWhenReady = _packageFlow;
-        if (ready) ready();
-        return;
-    }
-    UIAlertController *offer = [UIAlertController alertControllerWithTitle:@"Ready to start"
-        message:@"Start iPhone OS to finish installing Cydia and Packages."
-        preferredStyle:UIAlertControllerStyleAlert];
-    [offer addAction:[UIAlertAction actionWithTitle:@"Open iPhone OS" style:UIAlertActionStyleCancel
-        handler:^(__unused UIAlertAction *action) {
-            [self dismissViewControllerAnimated:YES completion:ready];
-        }]];
-    [offer addAction:[UIAlertAction actionWithTitle:@"Open Packages" style:UIAlertActionStyleDefault
-        handler:^(__unused UIAlertAction *action) {
-            self->_openPackagesWhenReady = YES;
-            [self dismissViewControllerAnimated:YES completion:ready];
-        }]];
-    [self presentViewController:offer animated:YES completion:nil];
+    if (ready) ready();
 }
 
 - (void)startInstall {
@@ -407,7 +393,7 @@ static void VMGuestInstallBuildProgress(
     // Capture once on the main thread; retries get a fresh choice, but an
     // in-flight disk transaction never changes policy halfway through.
     _includePackages = _packageFlow || [VMSettings sharedSettings].packagesWithJailbreak;
-    _packageOfferPending = NO;
+    _completionPending = NO;
     _openPackagesWhenReady = NO;
     _openForShutdown = NO;
     _retry.hidden = YES;
@@ -454,8 +440,8 @@ static void VMGuestInstallBuildProgress(
                 [self_ setFraction:1 stage:@"Starting iPhone OS"];
                 self_->_finished = YES;
                 self_->_hint.hidden = YES;
-                self_->_packageOfferPending = YES;
-                [self_ offerPackagesIfVisible:nil];
+                self_->_completionPending = YES;
+                [self_ completeIfVisible:nil];
             });
             return;
         }

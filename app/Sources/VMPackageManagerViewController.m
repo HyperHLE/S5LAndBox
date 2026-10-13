@@ -349,8 +349,6 @@ static UIImage *Tile(NSString *symbol) {
         if (!_busy) [screen.refreshControl endRefreshing];
     }
     if ([kind isEqual:@"home"]) {
-        NSMutableDictionary *hero=[Row(@"S5LBox Packages",@"Tweaks and tools for iPhone OS 3",@"shippingbox.fill",nil) mutableCopy]; hero[@"hero"]=@YES;
-        [sections addObject:Section(nil,@[hero],nil)];
         NSMutableDictionary *status=[Row(_busy ? @"Refreshing packages" : _status ? @"Connected" : _needsSetup ? @"Welcome to Packages" : _connectionTimedOut ? @"Couldn’t connect" : @"Connecting to iPhone OS",
             _message,_status ? @"checkmark.circle" : @"shippingbox",_status && !_busy ? @"refresh" : nil) mutableCopy];
         status[@"spinner"]=@(_busy || (!_needsSetup && !_status && !_connectionTimedOut));

@@ -20,7 +20,7 @@ NS_ASSUME_NONNULL_BEGIN
 /* Called after a durable image publication, on the main queue. */
 @property (nonatomic, copy, nullable) void (^readyHandler)(void);
 @property (nonatomic) BOOL packageManagerOnly;
-/* Read by the owner after the post-jailbreak choice or helper-only setup. */
+/* Only explicit Packages setup requests reopen Packages after boot. */
 @property (nonatomic, readonly) BOOL openPackagesWhenReady;
 
 @end

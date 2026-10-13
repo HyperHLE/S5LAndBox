@@ -122,13 +122,35 @@ endif()
 file(READ "${APP_DIR}/Sources/VMGuestInstallViewController.m" jailbreak)
 foreach(required "_includePackages = _packageFlow || [VMSettings sharedSettings].packagesWithJailbreak;"
         "if (!_includePackages) return YES;"
-        "if (_packageFlow || !_includePackages)"
         "_openPackagesWhenReady = _packageFlow;")
     string(FIND "${jailbreak}" "${required}" found)
     if(found EQUAL -1)
         message(FATAL_ERROR "Jailbreak lost its optional Packages policy: ${required}")
     endif()
 endforeach()
+foreach(forbidden "offerPackagesIfVisible" "_packageOfferPending"
+        "actionWithTitle:@\"Open Packages\"" "actionWithTitle:@\"Open iPhone OS\"")
+    string(FIND "${jailbreak}" "${forbidden}" found)
+    if(NOT found EQUAL -1)
+        message(FATAL_ERROR "Jailbreak must return to the machine without a completion chooser: ${forbidden}")
+    endif()
+endforeach()
+# Consume completion before calling the owner, and only from the visible,
+# foreground screen. Notifications and viewDidAppear must not open it twice.
+string(FIND "${jailbreak}" "if (!_completionPending || !self.view.window || self.presentedViewController ||" completion_guard)
+string(FIND "${jailbreak}" "UIApplication.sharedApplication.applicationState != UIApplicationStateActive ||" active_guard)
+string(FIND "${jailbreak}" "self.navigationController.topViewController != self) return;" top_guard)
+string(FIND "${jailbreak}" "_completionPending = NO;\n    _openPackagesWhenReady = _packageFlow;\n    void (^ready)(void) = [self.readyHandler copy];" completion_consumed)
+string(FIND "${jailbreak}" "void (^ready)(void) = [self.readyHandler copy];\n    if (ready) ready();" direct_handoff)
+if(completion_guard EQUAL -1 OR active_guard EQUAL -1 OR top_guard EQUAL -1
+        OR completion_consumed EQUAL -1 OR direct_handoff EQUAL -1)
+    message(FATAL_ERROR "Jailbreak completion must perform a guarded, one-shot handoff")
+endif()
+file(READ "${APP_DIR}/Sources/VMPackageManagerViewController.m" packages)
+string(FIND "${packages}" "Row(@\"S5LBox Packages\"" packages_banner)
+if(NOT packages_banner EQUAL -1)
+    message(FATAL_ERROR "Packages home must not duplicate its title in a branded banner")
+endif()
 string(FIND "${jailbreak}" "vm_guest_install_build_after_force_off(" force_builder)
 string(FIND "${app}" "Force Off & Jailbreak" force_choice)
 string(FIND "${machines}" "[self_ prepareGuestInstall:install" boot_to_shutdown)
