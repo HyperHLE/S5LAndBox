@@ -127,6 +127,26 @@ static uint32_t le32(const uint8_t *p) {
 static uint32_t be32(const uint8_t *p) {
     return (uint32_t)p[3] | (uint32_t)p[2] << 8 | (uint32_t)p[1] << 16 | (uint32_t)p[0] << 24;
 }
+bool vm_ipa_icon_png_dimensions(const uint8_t *bytes, size_t size,
+                                uint32_t *width, uint32_t *height) {
+    static const uint8_t signature[8] = {137, 80, 78, 71, 13, 10, 26, 10};
+    if (!bytes || size < 33 || size > 2u * 1024u * 1024u ||
+        memcmp(bytes, signature, sizeof signature)) return false;
+    size_t offset = 8;
+    if (!memcmp(bytes + offset + 4, "CgBI", 4)) {
+        uint32_t length = be32(bytes + offset);
+        if (length > 64 || (size_t)length + 12 > size - offset) return false;
+        offset += (size_t)length + 12;
+    }
+    if (size - offset < 25 || be32(bytes + offset) != 13 ||
+        memcmp(bytes + offset + 4, "IHDR", 4)) return false;
+    uint32_t w = be32(bytes + offset + 8), h = be32(bytes + offset + 12);
+    if (!w || !h || w > 2048 || h > 2048 || bytes[offset + 18] != 0 ||
+        bytes[offset + 19] != 0 || bytes[offset + 20] > 1) return false;
+    if (width) *width = w;
+    if (height) *height = h;
+    return true;
+}
 static bool armv6(uint32_t subtype) {
     subtype &= 0xffffffu;
     return subtype == 0 || subtype == 5 || subtype == 6 || subtype == 7;

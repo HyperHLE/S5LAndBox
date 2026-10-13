@@ -121,6 +121,16 @@ jobs:
             -I app/Sources app/Sources/VMIPALibrary.m app/Tests/test_vmipalibrary.m \
             -o work/ipa-library-tests/test_vmipalibrary
           work/ipa-library-tests/test_vmipalibrary "$GITHUB_WORKSPACE/work/ipa-library-tests"
+          for source in app/Sources/VMIPAArchive.c app/Sources/VMFirmwareZip.c \
+            app/Sources/VMFirmwareInflate.c app/Sources/VMFirmwareDigest.c; do
+            xcrun clang -std=c11 -Wall -Wextra -Werror -I app/Sources \
+              -c "$source" -o "work/ipa-library-tests/$(basename "$source" .c).o"
+          done
+          xcrun clang -fobjc-arc -Wall -Wextra -Werror -framework Foundation \
+            -I app/Sources -I app/Tests -I core/include \
+            app/Sources/VMIPAIcon.m app/Tests/test_vmipaicon.m work/ipa-library-tests/*.o \
+            -o work/ipa-library-tests/test_vmipaicon
+          work/ipa-library-tests/test_vmipaicon "$GITHUB_WORKSPACE/work/ipa-library-tests"
 
       - name: Test native guest USB services
         run: |

@@ -5,6 +5,10 @@ The IPA library remains in `Documents/IPAs`; importing a file must never
 automatically install it. The target is one app at a time, through the running
 guest's own AFC and `com.apple.mobile.installation_proxy` services.
 
+The library displays each app's icon from its IPA, including legacy optimized
+PNG icons. Artwork loads in the background; missing or unreadable icons use a
+placeholder. Importing or previewing artwork never installs the app.
+
 ## Current boundary
 
 - The old USB model only supplied configuration registers. The new

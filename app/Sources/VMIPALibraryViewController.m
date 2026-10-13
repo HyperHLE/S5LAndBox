@@ -1,6 +1,34 @@
 // Copyright (c) 2026 j0shua-SYSON. MIT licensed.
 #import "VMIPALibraryViewController.h"
 #import "VMIPALibrary.h"
+#import "VMIPAIcon.h"
+#import <ImageIO/ImageIO.h>
+
+static UIImage *LibraryIconThumbnail(NSArray<NSData *> *candidates, CGFloat scale) {
+    for (NSData *data in candidates) {
+        CGImageSourceRef source = CGImageSourceCreateWithData((__bridge CFDataRef)data, NULL);
+        CGImageRef thumbnail = source ? CGImageSourceCreateThumbnailAtIndex(source, 0,
+            (__bridge CFDictionaryRef)@{(id)kCGImageSourceCreateThumbnailFromImageAlways:@YES,
+                (id)kCGImageSourceThumbnailMaxPixelSize:@(48 * scale),
+                (id)kCGImageSourceCreateThumbnailWithTransform:@YES}) : NULL;
+        UIImage *decoded = thumbnail ? [UIImage imageWithCGImage:thumbnail] : nil;
+        if (thumbnail) CGImageRelease(thumbnail);
+        if (source) CFRelease(source);
+        // UIKit understands the optimized CgBI PNGs shipped in early iPhone
+        // apps. Keep that native path when ImageIO cannot make a thumbnail.
+        if (!decoded) decoded = [UIImage imageWithData:data];
+        if (!decoded || decoded.size.width <= 0 || decoded.size.height <= 0) continue;
+        UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat preferredFormat];
+        format.scale = scale; format.opaque = NO;
+        UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(48, 48) format:format];
+        CGFloat ratio = MIN(48 / decoded.size.width, 48 / decoded.size.height);
+        CGSize size = CGSizeMake(decoded.size.width * ratio, decoded.size.height * ratio);
+        return [[renderer imageWithActions:^(__unused UIGraphicsImageRendererContext *context) {
+            [decoded drawInRect:CGRectMake((48 - size.width) / 2, (48 - size.height) / 2, size.width, size.height)];
+        }] imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+    }
+    return nil;
+}
 
 @interface VMIPALibraryViewController () <UIDocumentPickerDelegate>
 - (void)refreshLibrary;
@@ -12,11 +40,19 @@
     NSArray<NSURL *> *_files;
     NSString *_status;
     BOOL _importing;
+    NSCache<NSURL *, UIImage *> *_icons;
+    NSOperationQueue *_iconQueue;
+    NSUInteger _iconGeneration;
 }
 - (instancetype)init {
     self = [super initWithStyle:UITableViewStyleInsetGrouped];
     if (!self) return nil;
     _files = @[];
+    _icons = [NSCache new];
+    _icons.countLimit = 128;
+    _iconQueue = [NSOperationQueue new];
+    _iconQueue.maxConcurrentOperationCount = 1;
+    _iconQueue.qualityOfService = NSQualityOfServiceUserInitiated;
     self.title = @"IPA Library";
     return self;
 }
@@ -37,14 +73,41 @@
     [super viewWillAppear:animated];
     [self refreshLibrary];
 }
-- (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
+- (void)dealloc {
+    [_iconQueue cancelAllOperations];
+    [[NSNotificationCenter defaultCenter] removeObserver:self];
+}
 - (void)refreshLibrary {
     if (_importing) { [self.refreshControl endRefreshing]; return; }
     NSError *error = nil;
     _files = [VMIPALibrary filesWithError:&error] ?: @[];
     if (error) _status = error.localizedDescription;
+    NSUInteger generation = ++_iconGeneration;
+    [_iconQueue cancelAllOperations];
+    [_icons removeAllObjects];
     [self.refreshControl endRefreshing];
     [self.tableView reloadData];
+    CGFloat scale = self.view.window.screen.scale ?: UIScreen.mainScreen.scale;
+    __weak VMIPALibraryViewController *weakSelf = self;
+    for (NSURL *url in _files) {
+        [_iconQueue addOperationWithBlock:^{
+            @autoreleasepool {
+                UIImage *icon = LibraryIconThumbnail([VMIPAIcon imageDataCandidatesForURL:url], scale);
+                if (!icon) return;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    VMIPALibraryViewController *owner = weakSelf;
+                    if (!owner || owner->_iconGeneration != generation) return;
+                    NSUInteger row = [owner->_files indexOfObject:url];
+                    if (row == NSNotFound) return;
+                    [owner->_icons setObject:icon forKey:url];
+                    UITableViewCell *cell = [owner.tableView cellForRowAtIndexPath:
+                        [NSIndexPath indexPathForRow:(NSInteger)row inSection:1]];
+                    cell.imageView.image = icon;
+                    [cell setNeedsLayout];
+                });
+            }
+        }];
+    }
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 2; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
@@ -77,8 +140,21 @@
         cell.textLabel.text = url.lastPathComponent.stringByDeletingPathExtension;
         NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:url.path error:NULL];
         cell.detailTextLabel.text = [NSByteCountFormatter stringFromByteCount:(long long)[attributes fileSize] countStyle:NSByteCountFormatterCountStyleFile];
-        cell.imageView.image = [UIImage systemImageNamed:@"app.dashed"];
+        UIImage *icon = [_icons objectForKey:url];
+        if (!icon) {
+            // Reserve the actual icon's footprint so artwork arriving later
+            // never moves the app name or Install button.
+            UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(48, 48)];
+            icon = [renderer imageWithActions:^(__unused UIGraphicsImageRendererContext *context) {
+                [[[UIImage systemImageNamed:@"app.dashed"] imageWithTintColor:UIColor.secondaryLabelColor]
+                    drawInRect:CGRectMake(10, 10, 28, 28)];
+            }];
+        }
+        cell.imageView.image = icon;
         cell.imageView.tintColor = UIColor.secondaryLabelColor;
+        cell.imageView.layer.cornerRadius = 10;
+        cell.imageView.clipsToBounds = YES;
+        cell.imageView.contentMode = UIViewContentModeScaleAspectFit;
         UIButton *install = [UIButton buttonWithType:UIButtonTypeSystem];
         [install setTitle:@"Install" forState:UIControlStateNormal];
         install.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];

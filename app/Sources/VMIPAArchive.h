@@ -20,6 +20,10 @@ bool vm_ipa_archive_open(const vmfw_zip_t *zip, vm_ipa_archive_t *plan,
                          char *detail, size_t capacity);
 void vm_ipa_archive_close(vm_ipa_archive_t *plan);
 bool vm_ipa_safe_path(const char *path);
+/* A bounded PNG header check before handing untrusted icon bytes to the native
+ * image decoder. Accepts both ordinary PNG and Apple's legacy CgBI prefix. */
+bool vm_ipa_icon_png_dimensions(const uint8_t *bytes, size_t size,
+                                uint32_t *width, uint32_t *height);
 /* Main executable must have an unencrypted ARMv6-compatible Mach-O slice,
  * with a deployment target no newer than iPhone OS 3.1.3. */
 bool vm_ipa_check_executable(const uint8_t *bytes, size_t size,
