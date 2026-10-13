@@ -13,9 +13,9 @@ machine offers **Jailbreak & Set Up**, with a separate confirmation. Jailbreak
 includes helper setup by default. Turn off **App Settings > Advanced > Packages
 with jailbreak** to skip it on subsequent jailbreak preparations. This does not
 remove an existing helper. Explicit **Set Up Packages** (including **Jailbreak &
-Set Up**) still installs it regardless of that preference. After an ordinary
-jailbreak with Packages enabled, choose **Open Packages** or **Open iPhone OS**;
-setup has already completed, so this is not another installation prompt.
+Set Up**) still installs it regardless of that preference. A successful
+jailbreak opens the machine automatically, without another prompt. Explicit
+**Set Up Packages** requests return to Packages after the machine starts.
 For a stopped machine, the same setup
 is available under **App Settings > Advanced > Set up package manager**.
 
