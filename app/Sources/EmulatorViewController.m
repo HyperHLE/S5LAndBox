@@ -77,6 +77,20 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
 
 @class EmulatorViewController;
 
+// UINavigationBar owns this view's frame, including during push/pop animations.
+// Advertise a preferred size and let the bar shrink it around its buttons.
+@interface VMMachineHeadingView : UIView
+@end
+@implementation VMMachineHeadingView
+- (CGSize)intrinsicContentSize { return CGSizeMake(220, 40); }
+- (CGSize)sizeThatFits:(CGSize)size {
+    CGSize preferred = self.intrinsicContentSize;
+    if (size.width > 0) preferred.width = MIN(preferred.width, size.width);
+    if (size.height > 0) preferred.height = MIN(preferred.height, size.height);
+    return preferred;
+}
+@end
+
 /* CADisplayLink retains its target. Keeping only a weak edge back to the view
  * controller lets normal controller teardown reach -dealloc and stop the VM. */
 @interface VMDisplayLinkProxy : NSObject
@@ -128,6 +142,7 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
 - (void)buildModernControls;
 - (void)applyInterfaceStyle;
 - (void)refreshModernControls;
+- (void)updateMachineHeadingFonts;
 - (void)layoutModernInterface;
 - (void)deviceControlsTapped:(id)sender;
 @end
@@ -173,7 +188,7 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
     UIView            *_dock;
     VMHardwareButton  *_homeButton;
     UIButton          *_settingsButton, *_deviceControlsButton;
-    UIStackView       *_machineHeading;
+    VMMachineHeadingView *_machineHeading;
     UILabel           *_machineTitle, *_machineStatus;
     BOOL               _legacyInterface;
     NSMutableString   *_consoleText;
@@ -1272,11 +1287,37 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
     _machineStatus.font = [UIFont preferredFontForTextStyle:UIFontTextStyleCaption2];
     _machineStatus.textColor = UIColor.secondaryLabelColor;
     _machineStatus.textAlignment = NSTextAlignmentCenter;
-    _machineHeading = [[UIStackView alloc] initWithArrangedSubviews:@[_machineTitle, _machineStatus]];
-    _machineHeading.axis = UILayoutConstraintAxisVertical;
-    _machineHeading.spacing = 1;
+    UIStackView *titleContent = [[UIStackView alloc] initWithArrangedSubviews:@[_machineTitle, _machineStatus]];
+    titleContent.axis = UILayoutConstraintAxisVertical;
+    titleContent.spacing = 1;
+    titleContent.translatesAutoresizingMaskIntoConstraints = NO;
+    _machineHeading = [VMMachineHeadingView new];
+    [_machineHeading setContentCompressionResistancePriority:UILayoutPriorityDefaultLow
+        forAxis:UILayoutConstraintAxisHorizontal];
+    [_machineHeading addSubview:titleContent];
+    [NSLayoutConstraint activateConstraints:@[
+        [titleContent.leadingAnchor constraintEqualToAnchor:_machineHeading.leadingAnchor],
+        [titleContent.trailingAnchor constraintEqualToAnchor:_machineHeading.trailingAnchor],
+        [titleContent.centerYAnchor constraintEqualToAnchor:_machineHeading.centerYAnchor],
+        [titleContent.heightAnchor constraintLessThanOrEqualToAnchor:_machineHeading.heightAnchor]
+    ]];
     _machineHeading.isAccessibilityElement = YES;
     _machineHeading.accessibilityTraits = UIAccessibilityTraitHeader;
+    [self updateMachineHeadingFonts];
+}
+
+- (void)updateMachineHeadingFonts {
+    // Keep both lines inside the navigation bar at accessibility text sizes.
+    _machineTitle.font = [UIFont systemFontOfSize:MIN(20, [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline
+        compatibleWithTraitCollection:self.traitCollection].pointSize) weight:UIFontWeightSemibold];
+    _machineStatus.font = [UIFont systemFontOfSize:MIN(13, [UIFont preferredFontForTextStyle:UIFontTextStyleCaption2
+        compatibleWithTraitCollection:self.traitCollection].pointSize)];
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    [super traitCollectionDidChange:previousTraitCollection];
+    if (![previousTraitCollection.preferredContentSizeCategory isEqualToString:self.traitCollection.preferredContentSizeCategory])
+        [self updateMachineHeadingFonts];
 }
 
 - (void)applyInterfaceStyle {
@@ -1356,11 +1397,6 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
     _console.hidden = !inlineConsole;
     _console.frame = inlineConsole ? CGRectMake(area.origin.x, area.origin.y + band + 6,
         area.size.width, MAX(0, area.size.height - band - 6)) : CGRectZero;
-    // Navigation bars have a fixed height even at accessibility text sizes.
-    _machineTitle.font = [UIFont systemFontOfSize:MIN(20, [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline].pointSize)
-        weight:UIFontWeightSemibold];
-    _machineStatus.font = [UIFont systemFontOfSize:MIN(13, [UIFont preferredFontForTextStyle:UIFontTextStyleCaption2].pointSize)];
-    _machineHeading.frame = CGRectMake(0, 0, MIN(220, MAX(80, self.view.bounds.size.width - 150)), 40);
 }
 
 /*
