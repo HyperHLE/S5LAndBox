@@ -120,6 +120,10 @@ if(background_row EQUAL -1 OR NOT old_background_row EQUAL -1)
 endif()
 
 file(READ "${APP_DIR}/Sources/VMGuestInstallViewController.m" jailbreak)
+string(FIND "${jailbreak}" "_headline.textAlignment = NSTextAlignmentCenter;" centered_install_stage)
+if(centered_install_stage EQUAL -1)
+    message(FATAL_ERROR "Guest preparation headings must be centered above progress")
+endif()
 foreach(required "_includePackages = _packageFlow || [VMSettings sharedSettings].packagesWithJailbreak;"
         "if (!_includePackages) return YES;"
         "_openPackagesWhenReady = _packageFlow;")

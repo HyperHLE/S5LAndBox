@@ -121,6 +121,7 @@ static void VMGuestInstallBuildProgress(
     [card addSubview:content];
     _headline = [UILabel new];
     _headline.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
+    _headline.textAlignment = NSTextAlignmentCenter;
     _headline.adjustsFontForContentSizeCategory = YES;
     _headline.numberOfLines = 0;
     _headline.lineBreakMode = NSLineBreakByWordWrapping;
