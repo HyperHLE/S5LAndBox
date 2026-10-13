@@ -39,6 +39,7 @@ static void test_enumeration(bool malformed) {
     CHECK(s5l8900_init(&m, 0x08000000, 1u << 20));
     usb_host_t host;
     usb_host_init(&host, &m);
+    CHECK(!usb_host_enumerating(&host));
     wr(USBOTG_GAHBCFG, 0x21);
     wr(USBOTG_GINTMSK, USBOTG_INT_RESET | USBOTG_INT_ENUM);
     wr(USBOTG_DCTL, 0);
@@ -46,6 +47,7 @@ static void test_enumeration(bool malformed) {
     unsigned requests = 0;
     for (unsigned i = 0; i < 300 && !usb_host_ready(&host) && !host.error; i++) {
         usb_host_poll(&host, &m);
+        CHECK(usb_host_enumerating(&host) == (!usb_host_ready(&host) && !host.error));
         if (rd(USBOTG_GINTSTS) & USBOTG_INT_RESET)
             wr(USBOTG_GINTSTS, USBOTG_INT_RESET);
         if (rd(USBOTG_GINTSTS) & USBOTG_INT_ENUM) {
@@ -81,6 +83,7 @@ static void test_enumeration(bool malformed) {
             wr(USBOTG_DOEP(0) + 16, (3u << 29) | (1u << 19) | 24u);
         }
     }
+    CHECK(!usb_host_enumerating(&host));
     if (malformed) CHECK(host.error && !usb_host_ready(&host));
     else {
         CHECK(usb_host_ready(&host) && !host.error);
@@ -89,7 +92,47 @@ static void test_enumeration(bool malformed) {
         CHECK(host.configuration == 1 && host.bulk_in == 2 && host.bulk_out == 3);
     }
     usb_host_disconnect(&host, &m);
+    CHECK(!usb_host_enumerating(&host) && !usb_host_ready(&host));
     CHECK(!m.usbotg.connected && !(m.pmu.regs[PCF50635_MBCS1] & 3));
+    s5l8900_free(&m);
+}
+
+static void test_enumeration_stall(void) {
+    CHECK(s5l8900_init(&m, 0x08000000, 1u << 20));
+    usb_host_t host;
+    usb_host_init(&host, &m);
+    CHECK(!usb_host_enumerating(NULL));
+    for (unsigned i = 0; i < 10; i++) {
+        usb_host_poll(&host, &m);
+        CHECK(!usb_host_enumerating(&host) && !host.error);
+    }
+    wr(USBOTG_GAHBCFG, 0x21);
+    wr(USBOTG_GINTMSK, USBOTG_INT_RESET | USBOTG_INT_ENUM);
+    wr(USBOTG_DCTL, 0);
+    usb_host_poll(&host, &m);
+    CHECK(usb_host_enumerating(&host));
+    wr(USBOTG_GINTSTS, USBOTG_INT_RESET);
+    usb_host_poll(&host, &m);
+    CHECK(usb_host_enumerating(&host));
+    wr(USBOTG_GINTSTS, USBOTG_INT_ENUM);
+    usb_host_poll(&host, &m);
+    CHECK(host.setup[1] == 6 && host.setup[3] == 1 && host.wanted == 18);
+    /* A guest that never arms EP0 makes GET_DESCRIPTOR return NAK forever.
+     * It is still enumerating, so the caller can time out this handshake. */
+    for (unsigned i = 0; i < 100; i++) {
+        usb_host_poll(&host, &m);
+        CHECK(usb_host_enumerating(&host) && !host.error && !usb_host_ready(&host));
+    }
+    arm_ep(0, 0, m.ram_base + 4096, 24, 1);
+    wr(USBOTG_DOEP(0) + 16, (3u << 29) | (1u << 19) | 24u);
+    usb_host_poll(&host, &m);
+    CHECK(usb_host_enumerating(&host));
+    arm_ep(1, 0, m.ram_base + 8192, 18, 1);
+    wr(USBOTG_DIEP(0), rd(USBOTG_DIEP(0)) | USBOTG_EP_STALL);
+    usb_host_poll(&host, &m);
+    CHECK(host.error && !usb_host_enumerating(&host) && !usb_host_ready(&host));
+    usb_host_disconnect(&host, &m);
+    CHECK(!usb_host_enumerating(&host) && !host.error);
     s5l8900_free(&m);
 }
 
@@ -192,6 +235,7 @@ int main(void) {
     s5l8900_free(&m);
     test_enumeration(false);
     test_enumeration(true);
+    test_enumeration_stall();
     printf("USB: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0;
 }

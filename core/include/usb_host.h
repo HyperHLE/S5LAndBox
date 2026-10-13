@@ -16,5 +16,8 @@ void usb_host_init(usb_host_t *h, s5l8900_t *m);
 /* Poll between guest batches. No blocking waits. A caller owns its deadline. */
 void usb_host_poll(usb_host_t *h, s5l8900_t *m);
 bool usb_host_ready(const usb_host_t *h);
+/* A bus reset has started enumeration. Waiting for the guest driver, a ready
+ * link, and terminal errors are not enumeration. */
+bool usb_host_enumerating(const usb_host_t *h);
 void usb_host_disconnect(usb_host_t *h, s5l8900_t *m);
 #endif

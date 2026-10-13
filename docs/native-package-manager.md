@@ -28,12 +28,14 @@ claim that every Cydia startup job has completed. A startup connection timeout
 offers **Try Again** and **Show iPhone OS**, retains the connection error, and
 does not suggest reinstalling an already-prepared helper.
 
-Failed virtual USB handshakes reconnect the virtual cable automatically, with
+Failed USB enumeration or mux handshakes reconnect the virtual cable automatically, with
 bounded backoff and time for the guest to observe the disconnect. Pausing the
 machine does not consume negotiation or retry time. Recovery closes stale
 streams; it never replays an installation or other package command. Canceled
 connection attempts release their sockets and channel slots even while the
 handshake is unfinished. A single refused service does not reset a healthy link.
+Resuming a saved machine also gives the guest an observable cable-disconnect
+interval before attaching a new host session.
 
 Setup shows the current step and real, centered copy progress. Keep S5LBox open
 while it prepares the disk; the app prevents Auto-Lock during preparation.

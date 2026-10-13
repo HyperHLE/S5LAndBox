@@ -24,6 +24,9 @@ void usb_host_disconnect(usb_host_t *h, s5l8900_t *m) {
     memset(h, 0, sizeof *h);
 }
 bool usb_host_ready(const usb_host_t *h) { return h->stage == READY; }
+bool usb_host_enumerating(const usb_host_t *h) {
+    return h && h->stage > WAIT_DEVICE && h->stage < READY;
+}
 static void fail(usb_host_t *h, const char *message) {
     h->error = message; h->stage = FAILED; h->control = CONTROL_IDLE;
 }
