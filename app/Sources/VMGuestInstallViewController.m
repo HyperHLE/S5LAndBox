@@ -355,6 +355,9 @@ static void VMGuestInstallBuildProgress(
     dispatch_async(dispatch_get_main_queue(), ^{
         if (self->_finished) return;
         self->_finished = YES;
+        self->_jailbreakNotice = alreadyPresent ? nil : self->_includePackages
+            ? @"First-boot setup is still running. Cydia and Packages may not be available yet. The guest will respring automatically."
+            : @"First-boot setup is still running. Cydia may not be available yet. The guest will respring automatically.";
         [self endBackgroundTime];
         [self->_spinner stopAnimating];
         self->_hint.hidden = YES;
@@ -396,6 +399,7 @@ static void VMGuestInstallBuildProgress(
     _includePackages = _packageFlow || [VMSettings sharedSettings].packagesWithJailbreak;
     _completionPending = NO;
     _openPackagesWhenReady = NO;
+    _jailbreakNotice = nil;
     _openForShutdown = NO;
     _retry.hidden = YES;
     _hint.hidden = NO;

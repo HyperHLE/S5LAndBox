@@ -255,14 +255,14 @@ static UIImage *Tile(NSString *symbol) {
     if (!_connectionDeadline) _connectionDeadline=NSProcessInfo.processInfo.systemUptime+(_finishingSetup ? 600 : 120);
     if (NSProcessInfo.processInfo.systemUptime>=_connectionDeadline) {
         _connectionTimedOut=YES;
-        NSString *hint=@"Show iPhone OS to check startup, then try again.";
+        NSString *hint=@"Tap Done to check guest startup, then try again.";
         _message=_lastConnectionError.localizedDescription.length ?
             [NSString stringWithFormat:@"%@\n%@",_lastConnectionError.localizedDescription,hint] : hint;
         [self renderAll]; return;
     }
     _connecting=YES; _bridge.canceled=NO;
     NSUInteger generation=++_connectionGeneration;
-    _message=_finishingSetup ? @"iPhone OS is finishing setup. Its Home screen may restart once."
+    _message=_finishingSetup ? @"First-boot setup is running. The guest will respring automatically."
         : @"Wake and unlock iPhone OS to connect.";
     [self renderAll];
     dispatch_async(_queue,^{
@@ -366,7 +366,6 @@ static UIImage *Tile(NSString *symbol) {
                 setup[@"button"]=@YES; setup[@"identifier"]=@"s5lbox.packages.setup";
                 [connectionRows addObject:setup];
             }
-            if (!_needsSetup) [connectionRows addObject:Row(@"Show iPhone OS",nil,@"iphone",@"show-guest")];
             [sections addObject:Section(nil,connectionRows,nil)];
         }
         if (_finishAction) [sections addObject:Section(nil,@[Row(FinishTitle(_finishAction),
@@ -498,7 +497,6 @@ static UIImage *Tile(NSString *symbol) {
     else if ([action isEqual:@"installed"]) self.selectedIndex=3;
     else if ([action isEqual:@"sources"]) self.selectedIndex=1;
     else if ([action isEqual:@"refresh"]) [self refresh];
-    else if ([action isEqual:@"show-guest"]) [self closePackages];
     else if ([action isEqual:@"setup"]) {
         _connectionDeadline=0; _connectionTimedOut=NO;
         ++_connectionGeneration; _bridge.canceled=YES;

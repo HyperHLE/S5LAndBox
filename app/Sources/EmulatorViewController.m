@@ -1564,6 +1564,18 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
 
     // Keep status work at its previous cadence, independent of pixel updates.
     if ((++_ticks % 16) == 0) {
+        if (self.jailbreakNotice.length && self.view.window &&
+            self.navigationController.topViewController == self &&
+            UIApplication.sharedApplication.applicationState == UIApplicationStateActive &&
+            !self.transitionCoordinator && !self.presentedViewController && [self runtimeCanControlGuest]) {
+            NSString *message = self.jailbreakNotice;
+            self.jailbreakNotice = nil;
+            UIAlertController *notice = [UIAlertController alertControllerWithTitle:@"Jailbroken"
+                message:message preferredStyle:UIAlertControllerStyleAlert];
+            [notice addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+            // The guest keeps booting behind the notice; OK only dismisses it.
+            [self presentViewController:notice animated:YES completion:nil];
+        }
         if (self.openPackagesWhenRunning && self.view.window &&
             self.navigationController.topViewController == self &&
             !self.transitionCoordinator && !self.presentedViewController && [self runtimeCanControlGuest]) {

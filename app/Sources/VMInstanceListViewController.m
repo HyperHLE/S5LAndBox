@@ -31,6 +31,9 @@ static NSString *const kAutomationMachinePrefix = @"s5lbox.machine.";
              afterShutdown:(void (^)(void))afterShutdown;
 - (BOOL)openInstanceAtIndex:(NSUInteger)index animated:(BOOL)animated
              afterShutdown:(void (^)(void))afterShutdown openPackages:(BOOL)openPackages;
+- (BOOL)openInstanceAtIndex:(NSUInteger)index animated:(BOOL)animated
+             afterShutdown:(void (^)(void))afterShutdown openPackages:(BOOL)openPackages
+           jailbreakNotice:(NSString *)jailbreakNotice;
 - (void)prepareGuestInstall:(UIViewController *)install
                 instanceID:(NSString *)identifier returningThrough:(UIViewController *)library;
 - (void)chooseMachineForIPA:(NSURL *)url library:(VMIPALibraryViewController *)library;
@@ -235,7 +238,8 @@ static NSString *const kAutomationMachinePrefix = @"s5lbox.machine.";
                 NSDictionary *row = [store instanceAtIndex:index];
                 if ([row[@"id"] isEqualToString:identifier]) {
                     [list openInstanceAtIndex:index animated:YES afterShutdown:nil
-                                 openPackages:screen.openPackagesWhenReady];
+                                 openPackages:screen.openPackagesWhenReady
+                               jailbreakNotice:screen.jailbreakNotice];
                     return;
                 }
             }
@@ -574,6 +578,13 @@ titleForFooterInSection:(NSInteger)section {
 
 - (BOOL)openInstanceAtIndex:(NSUInteger)index animated:(BOOL)animated
              afterShutdown:(void (^)(void))afterShutdown openPackages:(BOOL)openPackages {
+    return [self openInstanceAtIndex:index animated:animated afterShutdown:afterShutdown
+                       openPackages:openPackages jailbreakNotice:nil];
+}
+
+- (BOOL)openInstanceAtIndex:(NSUInteger)index animated:(BOOL)animated
+             afterShutdown:(void (^)(void))afterShutdown openPackages:(BOOL)openPackages
+           jailbreakNotice:(NSString *)jailbreakNotice {
     NSDictionary *row = [[VMInstanceStore sharedStore] instanceAtIndex:index];
     UINavigationController *navigation = self.navigationController;
 
@@ -617,6 +628,7 @@ titleForFooterInSection:(NSInteger)section {
     /* Configure the actual controller before pushing. UIKit may defer the push
      * during a preceding pop; topViewController can still be Machines then. */
     vc.openPackagesWhenRunning = openPackages;
+    vc.jailbreakNotice = jailbreakNotice;
     __weak VMInstanceListViewController *weakSelf = self;
     NSString *identifier = row[@"id"], *name = row[@"name"];
     vc.packageSetupRequest = ^{
