@@ -91,9 +91,9 @@ static void AwaitFirstConnection(NSString *identifier) {
     if (NSThread.isMainThread) { if (error) *error = VMPackageError(@"Package work requires a worker thread."); return nil; }
     NSData *capability = Capability(_identifier,NO,error); if (!capability) return nil;
     __weak VMPackageBridge *weakSelf = self;
-    NSTimeInterval statusDeadline=NSProcessInfo.processInfo.systemUptime+10;
+    NSTimeInterval statusDeadline=operation=='S' ? NSProcessInfo.processInfo.systemUptime+10 : 0;
     VMUSBService *service = [[VMUSBService alloc] initWithTransport:_transport port:64321
-        canceled:^BOOL{ return weakSelf.canceled || (operation=='S' && NSProcessInfo.processInfo.systemUptime>statusDeadline); } error:error];
+        canceled:^BOOL{ return weakSelf.canceled; } deadline:statusDeadline error:error];
     if (!service) return nil;
     NSMutableData *hello = [NSMutableData dataWithBytes:"SPM2" length:4];
     [hello appendData:capability]; [hello appendBytes:&operation length:1];

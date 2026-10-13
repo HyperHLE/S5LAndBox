@@ -92,7 +92,7 @@ static NSError *VMUSBError(NSString *message) {
             if ((canceled && canceled()) || left <= 0) {
                 c.canceled = YES;
                 c.error = VMUSBError(left <= 0 ? @"The guest USB service did not respond in time. Wake and unlock iPhone OS, then try again."
-                                               : @"Installation canceled.");
+                                               : @"Operation canceled.");
                 break;
             }
             [_condition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:MIN(left, 0.25)]];

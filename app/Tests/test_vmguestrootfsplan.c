@@ -481,6 +481,15 @@ static void test_complete_synthetic_plan(void) {
           strstr((const char *)plist->content,
                  "com.j0shua.s5lbox.guest-install") != NULL,
           "the launchd job is absent");
+    const rootfs_work_entry_t *bootstrap = find_entry(plan, VM_GUEST_ROOTFS_BOOTSTRAP);
+    CHECK(bootstrap && bootstrap->kind == ROOTFS_WORK_ENTRY_FILE &&
+          bootstrap->permissions == 0755u && bootstrap->owner_id == 0u &&
+          bootstrap->content_size > 28u &&
+          memcmp(bootstrap->content, "\xce\xfa\xed\xfe\x0c\0\0\0", 8u) == 0,
+          "the guest-only ARM bootstrap supervisor is missing or unsafe");
+    CHECK(plist && strstr((const char *)plist->content, VM_GUEST_ROOTFS_BOOTSTRAP) &&
+          !strstr((const char *)plist->content, "<string>" VM_GUEST_ROOTFS_INSTALL_SCRIPT "</string>"),
+          "launchd bypasses the scoped first-boot sleep assertion");
     CHECK(script &&
           strstr((const char *)script->content,
                  "/bin/su --login --command /usr/bin/uicache mobile || exit 1") != NULL,
@@ -576,10 +585,10 @@ static void test_complete_synthetic_plan(void) {
     CHECK(vm_guest_rootfs_plan_manifest_sha256(plan, digest),
           "plan manifest identity was not produced");
     static const uint8_t EXPECTED[VM_GUEST_PACKAGE_SHA256_SIZE] = {
-        0xf4u, 0x76u, 0x14u, 0x35u, 0x23u, 0xf1u, 0x4eu, 0x13u,
-        0x40u, 0x0eu, 0x2cu, 0xd4u, 0x28u, 0x0eu, 0xf0u, 0x30u,
-        0x67u, 0xfdu, 0x32u, 0x2bu, 0x7eu, 0xaeu, 0x3du, 0x2du,
-        0x50u, 0xb1u, 0x64u, 0xa7u, 0x5du, 0x46u, 0x08u, 0x17u
+        0x9du, 0x34u, 0x44u, 0xc5u, 0xb7u, 0x9cu, 0x60u, 0x17u,
+        0xcfu, 0xcau, 0xefu, 0x8au, 0x71u, 0x1fu, 0xbau, 0x51u,
+        0x9eu, 0x53u, 0x78u, 0xd6u, 0xd3u, 0xf4u, 0x22u, 0x0au,
+        0xcau, 0x15u, 0x51u, 0x24u, 0x9cu, 0x0au, 0x34u, 0x7au
     };
     CHECK(memcmp(digest, EXPECTED, sizeof digest) == 0,
           "synthetic plan identity changed");
