@@ -870,10 +870,20 @@ static double vm_engine_now_seconds(void) {
     else [_usbTransport endSession:@"This boot has no virtual USB controller. Enable USB OTG, shut down, and start the machine again."];
     if (_usbHostActive) {
         /* A saved guest retains its controller, not this process's host
-         * session. Deliver cable removal before starting a new host session. */
+         * session. Let it EXECUTE with the cable absent before reattaching;
+         * unplug/replug in the same chunk hides removal from the USB driver. */
+        BOOL wasConnected = _machine.usbotg.connected != 0;
         usb_host_disconnect(&_usbHost, &_machine);
-        usb_host_init(&_usbHost, &_machine);
-        [self appendConsole:@"[usb] virtual host attached; waiting for the guest USB driver\n"];
+        if (wasConnected) {
+            (void)vm_usb_recovery_poll(&_usbRecovery, vm_engine_now_seconds(),
+                (double)_machine.timer.ticks / (_machine.tb_hz ?: S5L8900_TB_HZ),
+                false, true, false);
+            [_usbTransport endSession:@"Reconnecting to the saved machine."];
+            [self appendConsole:@"[usb] saved connection detached; waiting before reconnect\n"];
+        } else {
+            usb_host_init(&_usbHost, &_machine);
+            [self appendConsole:@"[usb] virtual host attached; waiting for the guest USB driver\n"];
+        }
     }
 
     uint64_t after = [VMEngine physFootprintBytes];
@@ -2090,8 +2100,9 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
                     if (!failure && usb_host_ready(&_usbHost) && !_usbMux)
                         failure = "Virtual USB allocation failed";
                     if (vm_usb_recovery_poll(&_usbRecovery, usbNow, guestNow,
-                            _usbMux && !ready, failure != NULL, ready) == VM_USB_DISCONNECT) {
-                        const char *reason = failure ?: "Guest usbmux negotiation timed out";
+                            usb_host_enumerating(&_usbHost) || (_usbMux && !ready),
+                            failure != NULL, ready) == VM_USB_DISCONNECT) {
+                        const char *reason = failure ?: "Guest USB handshake timed out";
                         [_usbTransport endSession:[NSString stringWithUTF8String:reason]];
                         [self appendConsole:[NSString stringWithFormat:
                             @"[usb] %s; reconnecting automatically\n", reason]];
