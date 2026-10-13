@@ -2,59 +2,70 @@
 
 **Classic iPhone OS. On your iPhone.**
 
-S5LBox runs real iPhone OS 3.1.3 by emulating the iPhone 3G's hardware.
-Rediscover its home screen, apps, and tweaks inside an app on your iPhone—no
-host jailbreak or JIT setup required.
+Slide to unlock. Open an old favorite. Make it yours again.
+
+S5LBox brings the iPhone 3G and its original iPhone OS 3.1.3 to your iPhone.
+It's the real operating system, running inside an app—not a theme or a recreation.
+Your iPhone doesn't need to be jailbroken.
+
+[Download S5LBox](https://github.com/j0shua-SYSON/S5LBox/releases)
 
 ## What you can do
 
-- Create separate machines, choose their storage size, and save and resume sessions.
-- Install compatible IPA apps without shutting down the machine.
-- Add Cydia and manage tweaks with the built-in Packages browser.
-- Use guest networking, experimental audio playback, and optional microphone input.
+- **Rediscover the classics.** Explore the familiar Home screen, built-in apps,
+  and compatible apps from the early days of iPhone.
+- **Set up in a few taps.** Download iPhone OS inside S5LBox, or import your own
+  firmware file. It checks and prepares everything for you—no keys to enter.
+- **Bring your apps.** Import `.ipa` files directly or put them in S5LBox's
+  **IPAs** folder in Files. Choose what to install, one app at a time, without
+  closing the running machine.
+- **Make room for tweaks.** Add Cydia and use the built-in **Packages** browser
+  to explore sources, search, install, update, and remove packages. It handles
+  required packages and tells you when a restart is needed.
+- **Keep your own collection.** Create separate machines for different apps
+  and experiments. Name them, keep their data separate, and let storage grow
+  as you fill it. Smaller disks are available in **Advanced**.
+- **Pick up where you left off.** Save and resume a session, or keep snapshots
+  to return to later.
+- **Stay in control.** Use Home, sleep, volume, and silent controls, pause when
+  you need to, and connect your machine to the internet. Sound and microphone
+  support are also available, though still experimental.
+
+Everyday controls stay simple. Extra options—including the classic S5LBox
+interface—live in **Advanced**.
 
 ## Get started
 
-You'll need a 64-bit iPhone running **iOS 13 or later** and several gigabytes
+You'll need an iPhone running **iOS 13 or later** and several gigabytes
 of free storage.
 
-1. Get `S5LBox.ipa` from a successful **main** run of the
-   [iOS build workflow](https://github.com/j0shua-SYSON/S5LBox/actions/workflows/ios-build.yml?query=branch%3Amain).
-   Development builds must be signed for your device before installing on stock iOS.
-2. Open S5LBox and choose **Download iPhone OS**, or **Import IPSW** to use your
-   own iPhone 3G / iPhone OS 3.1.3 firmware.
-3. Keep the app open while setup validates and prepares the firmware, then tap
-   **Start iPhone OS**. No decryption keys to enter.
+1. Download **S5LBox.ipa** from [Releases](https://github.com/j0shua-SYSON/S5LBox/releases)
+   and install it with your preferred IPA installer.
+2. Open S5LBox and tap **Download iPhone OS**. Already have the iPhone 3G's
+   iPhone OS 3.1.3 firmware file? Choose **Import IPSW** instead.
+3. Keep S5LBox open while setup finishes, then tap **Start iPhone OS**.
 
-Use **Save & close** to pick up where you left off. Advanced options live in
-Settings. Firmware downloads come directly from Apple; no Apple firmware is
-bundled with S5LBox.
+When you're done, choose **Save & close** to keep your place.
+Firmware downloads come directly from Apple; Apple firmware is not included
+with S5LBox.
 
-## Before you try it
+## Good to know
 
-S5LBox is experimental and preparing for its first release. Performance varies
-by device, and some apps, tweaks, and hardware features are not yet fully
-supported. Older online services may no longer work. Back up important guest
-data before experimenting.
+This first release is experimental. Speed varies by device, and not every app,
+tweak, or hardware feature works yet. Apps must be compatible with iPhone OS
+3.1.3 and the iPhone 3G; copy-protected app files cannot be installed. Some apps
+need AppSync installed inside the machine.
 
-## Explore further
+Old online services may no longer be available, and modern websites may not
+work in the original browser. Keep a backup of anything important before
+experimenting.
+
+## Learn more
 
 - [Installing apps](docs/live-ipa-usb.md) · [Packages and tweaks](docs/native-package-manager.md)
 - [Audio](docs/audio.md) · [Storage options](docs/DISK-SIZE-PRESETS.md)
-- [Architecture](docs/ARCHITECTURE.md) · [Detailed technical reference](docs/README-DETAILED.md)
-
-### Build the core
-
-The emulator core is portable C. Its public tests do not need Apple firmware.
-
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
-```
-
-The iOS app uses Xcode. See the [build workflow](.github/workflows/ios-build.yml)
-for the app build and packaging steps.
+- [Building and technical details](docs/README-DETAILED.md) · [Architecture](docs/ARCHITECTURE.md)
+- [Report a problem](https://github.com/j0shua-SYSON/S5LBox/issues)
 
 ## License
 
