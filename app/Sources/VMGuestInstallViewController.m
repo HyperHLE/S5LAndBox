@@ -356,7 +356,7 @@ static void VMGuestInstallBuildProgress(
         if (self->_finished) return;
         self->_finished = YES;
         self->_jailbreakNotice = alreadyPresent ? nil : self->_includePackages
-            ? @"First-boot setup is still running. Cydia and Packages may not be available yet. The guest will respring automatically."
+            ? @"First-boot setup is still running. The guest will respring automatically. After the respring, you may need to reboot the guest to use Packages."
             : @"First-boot setup is still running. Cydia may not be available yet. The guest will respring automatically.";
         [self endBackgroundTime];
         [self->_spinner stopAnimating];
