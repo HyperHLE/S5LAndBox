@@ -155,6 +155,33 @@ string(FIND "${packages}" "Row(@\"S5LBox Packages\"" packages_banner)
 if(NOT packages_banner EQUAL -1)
     message(FATAL_ERROR "Packages home must not duplicate its title in a branded banner")
 endif()
+# First-start readiness is per machine, not the choice of screen opened after
+# jailbreaking. Manual entry, closing the sheet and relaunching must preserve it.
+foreach(required "_finishingSetup=[VMPackageBridge awaitingFirstConnectionForInstance:identifier];"
+        "[VMPackageBridge noteSuccessfulConnectionForInstance:self->_instanceID];"
+        "self->_lastConnectionError=error;"
+        "_lastConnectionError.localizedDescription"
+        "if (self.setupRequest && _needsSetup)")
+    string(FIND "${packages}" "${required}" found)
+    if(found EQUAL -1)
+        message(FATAL_ERROR "Packages lost its independent first-start connection state: ${required}")
+    endif()
+endforeach()
+string(FIND "${emulator}" "finishingSetup:self.openPackagesWhenRunning" coupled_setup_navigation)
+string(FIND "${packages}" "_needsSetup || _connectionTimedOut" timeout_reinstall)
+if(NOT coupled_setup_navigation EQUAL -1 OR NOT timeout_reinstall EQUAL -1)
+    message(FATAL_ERROR "Connection readiness must not depend on navigation or imply a reinstall on timeout")
+endif()
+file(READ "${APP_DIR}/Sources/VMPackageBridge.m" package_bridge)
+string(REGEX MATCHALL "AwaitFirstConnection\\(identifier\\)" first_connection_markers "${package_bridge}")
+list(LENGTH first_connection_markers first_connection_marker_count)
+if(NOT first_connection_marker_count EQUAL 2)
+    message(FATAL_ERROR "Both successful helper-preparation paths must await their first live connection")
+endif()
+string(FIND "${package_bridge}" "choose Repair package setup" misleading_repair_hint)
+if(NOT misleading_repair_hint EQUAL -1)
+    message(FATAL_ERROR "A transient connection error must not recommend reinstalling the helper")
+endif()
 string(FIND "${jailbreak}" "vm_guest_install_build_after_force_off(" force_builder)
 string(FIND "${app}" "Force Off & Jailbreak" force_choice)
 string(FIND "${machines}" "[self_ prepareGuestInstall:install" boot_to_shutdown)

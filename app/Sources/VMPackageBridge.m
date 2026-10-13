@@ -59,6 +59,14 @@ static BOOL PackageSetupPending(NSString *identifier, BOOL pending, NSError **er
         withIntermediateDirectories:YES attributes:@{NSFilePosixPermissions:@0700} error:error] &&
         [[NSData data] writeToURL:marker options:NSDataWritingAtomic error:error];
 }
+static NSString *FirstConnectionKey(NSString *identifier) {
+    if (!CapabilityURL(identifier,NULL)) return nil;
+    return [@"PackageManagerAwaitingFirstConnection-" stringByAppendingString:identifier];
+}
+static void AwaitFirstConnection(NSString *identifier) {
+    NSString *key=FirstConnectionKey(identifier);
+    if (key) [NSUserDefaults.standardUserDefaults setBool:YES forKey:key];
+}
 @implementation VMPackageBridge {
     VMUSBTransport *_transport;
     NSString *_identifier;
@@ -67,6 +75,14 @@ static BOOL PackageSetupPending(NSString *identifier, BOOL pending, NSError **er
     NSURL *token = CapabilityURL(identifier,NULL);
     return token && ![NSFileManager.defaultManager fileExistsAtPath:
         [token URLByAppendingPathExtension:@"pending"].path] && Capability(identifier, NO, NULL).length == 32;
+}
++ (BOOL)awaitingFirstConnectionForInstance:(NSString *)identifier {
+    NSString *key=FirstConnectionKey(identifier);
+    return key && [NSUserDefaults.standardUserDefaults boolForKey:key];
+}
++ (void)noteSuccessfulConnectionForInstance:(NSString *)identifier {
+    NSString *key=FirstConnectionKey(identifier);
+    if (key) [NSUserDefaults.standardUserDefaults removeObjectForKey:key];
 }
 - (instancetype)initWithTransport:(VMUSBTransport *)transport instanceID:(NSString *)identifier {
     self = [super init]; if (self) { _transport = transport; _identifier = [identifier copy]; } return self;
@@ -110,7 +126,7 @@ static BOOL PackageSetupPending(NSString *identifier, BOOL pending, NSError **er
     VMUSBService *service = [self connect:'S' error:error];
     NSData *data = service ? [self receive:service terminal:'S' error:error] : nil; [service close];
     if (!data && !self.canceled && error) *error=VMPackageError([NSString stringWithFormat:
-        @"Cannot connect to the guest. Let it finish booting, or choose Repair package setup. %@",(*error).localizedDescription ?: @""]);
+        @"Cannot connect to iPhone OS. %@",(*error).localizedDescription ?: @"Let it finish starting, then try again."]);
     return data;
 }
 - (BOOL)number:(uint32_t)n service:(VMUSBService *)service error:(NSError **)error {
@@ -260,6 +276,7 @@ static BOOL PackageSetupPending(NSString *identifier, BOOL pending, NSError **er
     }
     if (count == 1 && !needsRewrite && !needsCounters) {
         if (!PackageSetupPending(identifier,NO,error)) return NO;
+        AwaitFirstConnection(identifier);
         if (progress) progress(@"Package files verified", 1);
         return YES;
     }
@@ -293,6 +310,7 @@ static BOOL PackageSetupPending(NSString *identifier, BOOL pending, NSError **er
         if (error) *error = VMPackageError([NSString stringWithUTF8String:detail]); return NO;
     }
     if (!PackageSetupPending(identifier,NO,error)) return NO;
+    AwaitFirstConnection(identifier);
     if (progress) progress(@"Package files verified", 1);
     return YES;
 }

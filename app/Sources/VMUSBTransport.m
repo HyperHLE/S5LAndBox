@@ -99,6 +99,14 @@ static NSError *VMUSBError(NSString *message) {
         }
     }
     NSError *failure = c.error;
+    if (failure) {
+        /* A timeout must release its socket even if the emulator is paused or
+         * USB negotiation has not finished. Only the emulator thread may close
+         * an assigned mux channel; requests that never got one can leave now. */
+        c.canceled = YES;
+        if (c.bridgeFD >= 0) { close(c.bridgeFD); c.bridgeFD = -1; }
+        if (c.channel < 0) [_connections removeObject:c];
+    }
     [_condition unlock];
     if (failure) { close(fds[1]); if (error) *error = failure; return -1; }
     return fds[1];
@@ -106,7 +114,6 @@ static NSError *VMUSBError(NSString *message) {
 - (void)pollWithMux:(usb_mux_t *)mux {
     if (!mux) return;
     if (mux->error) { [self endSession:[NSString stringWithUTF8String:mux->error]]; return; }
-    if (!usb_mux_ready(mux)) return;
     [_condition lock];
     /* Nonblocking I/O only, bounded to one queue-sized transfer per direction
      * per channel. Neither a slow client nor TLS work runs on this thread. */
@@ -116,6 +123,9 @@ static NSError *VMUSBError(NSString *message) {
             if (c.bridgeFD >= 0) close(c.bridgeFD);
             c.bridgeFD = -1; [_connections removeObject:c]; continue;
         }
+        /* Cancellation is independent of link readiness. In particular, a
+         * first-boot service retry must not retain one of our four slots. */
+        if (!usb_mux_ready(mux)) continue;
         if (c.channel < 0) c.channel = usb_mux_connect(mux, c.port);
         if (c.channel < 0) continue;
         usb_mux_channel_t *stream = &mux->channel[c.channel];

@@ -19,6 +19,22 @@ jailbreak opens the machine automatically, without another prompt. Explicit
 For a stopped machine, the same setup
 is available under **App Settings > Advanced > Set up package manager**.
 
+After preparation, Packages remembers that this machine has not yet connected
+to its helper. Opening Packages manually gets the same first-start wait as the
+explicit setup flow, even after closing the screen or relaunching S5LBox. The
+hint clears only when Packages receives and accepts a live installed-package
+list; it is separate from the stopped-disk transaction marker and does not
+claim that every Cydia startup job has completed. A startup connection timeout
+offers **Try Again** and **Show iPhone OS**, retains the connection error, and
+does not suggest reinstalling an already-prepared helper.
+
+Failed virtual USB handshakes reconnect the virtual cable automatically, with
+bounded backoff and time for the guest to observe the disconnect. Pausing the
+machine does not consume negotiation or retry time. Recovery closes stale
+streams; it never replays an installation or other package command. Canceled
+connection attempts release their sockets and channel slots even while the
+handshake is unfinished. A single refused service does not reset a healthy link.
+
 Setup shows the current step and real, centered copy progress. Keep S5LBox open
 while it prepares the disk; the app prevents Auto-Lock during preparation.
 Errors offer retry or, for an interrupted shutdown, a path back to the machine
