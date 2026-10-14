@@ -56,9 +56,7 @@ tweak, or hardware feature works yet. Apps must be compatible with iPhone OS
 3.1.3 and the iPhone 3G; copy-protected app files cannot be installed. Some apps
 need AppSync installed inside the machine.
 
-Old online services may no longer be available, and modern websites may not
-work in the original browser. Keep a backup of anything important before
-experimenting.
+Keep a backup of anything important before experimenting.
 
 ## Learn more
 
