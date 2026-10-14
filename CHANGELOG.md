@@ -126,5 +126,5 @@ on stock iOS, your installer must apply a valid provisioning signature. Keep
 several gigabytes free, open S5LBox, and choose **Download iPhone OS** or
 **Import IPSW**. Keep the app open while firmware preparation finishes.
 
-The release includes a SHA-256 checksum file. Apple firmware, machine disks,
-snapshots and test-device data are not part of the release assets.
+Apple firmware, machine disks, snapshots and test-device data are not part of
+the release assets.
