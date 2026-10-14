@@ -5,6 +5,7 @@
 
 typedef struct {
     unsigned stage, control, used, wanted, config_index, config_count;
+    uint32_t reset_generation;
     uint8_t setup[8], descriptor[4096];
     uint8_t configuration, bulk_in, bulk_out;
     uint16_t vendor, product;

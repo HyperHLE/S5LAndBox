@@ -12,6 +12,7 @@ static unsigned le16(const uint8_t *p) { return p[0] | ((unsigned)p[1] << 8); }
 
 void usb_host_init(usb_host_t *h, s5l8900_t *m) {
     memset(h, 0, sizeof *h);
+    h->reset_generation = m->usbotg.reset_generation;
     s5l_usbotg_enable(&m->usbotg);
     s5l_usbotg_connect(&m->usbotg, true);
     s5l_pcf50635_set_usb(&m->pmu, true);
@@ -100,6 +101,14 @@ static bool parse_config(usb_host_t *h) {
 }
 
 void usb_host_poll(usb_host_t *h, s5l8900_t *m) {
+    if (h->reset_generation != m->usbotg.reset_generation) {
+        /* A guest software reset is not an acknowledgement of our bus reset
+         * or enumeration interrupt. It can complete between polls, leaving
+         * both status bits clear and the controller apparently ready again.
+         * Discard all old control/descriptor state and negotiate afresh. */
+        memset(h, 0, sizeof *h);
+        h->reset_generation = m->usbotg.reset_generation;
+    }
     if (h->stage == FAILED) return;
     if (h->stage == READY) {
         /* A guest core reset removes its USB address. Old service streams
@@ -107,6 +116,7 @@ void usb_host_poll(usb_host_t *h, s5l8900_t *m) {
         if (m->usbotg.enabled && m->usbotg.connected &&
             (m->usbotg.dcfg & (0x7fu << 4))) return;
         memset(h, 0, sizeof *h);
+        h->reset_generation = m->usbotg.reset_generation;
     }
     if (h->control && !control_poll(h, m)) return;
     switch (h->stage) {

@@ -3684,6 +3684,10 @@ typedef struct {
     uint32_t grxfsiz, gnptxfsiz, dptxfsiz[15];
     uint32_t dcfg, dctl, diepmsk, doepmsk, daintmsk;
     s5l_usb_ep_t ep[2][S5L_USB_ENDPOINTS]; /* 0 = OUT, 1 = IN */
+    /* Host-only reset witness. A core reset can clear RESET/ENUM before the
+     * guest handles them; their absence is not then a handshake ACK. This is
+     * not a register and is not serialized. Restoring requires a new host. */
+    uint32_t reset_generation;
 } s5l_usbotg_t;
 
 void     s5l_usbotg_reset(s5l_usbotg_t *u);
