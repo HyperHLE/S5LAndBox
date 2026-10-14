@@ -130,6 +130,39 @@ successful pre-submission cancellation test above.
 Staging cleanup is bounded best effort; failed cleanup can leave that attempt's
 unique `PublicStaging/S5LBox-*.ipa`, never a reason to remove unrelated files.
 
+## Save and resume reconnection
+
+The October 14, 2026 regression was shared by live IPA installation and
+Packages: restoring guest USB registers does not restore the host's service
+connections. The virtual cable is detached and reconnected, but two lifecycle
+gaps could leave the new connection waiting indefinitely or for repeated
+sleep/wake cycles:
+
+- A sleeping guest was not woken for a pending service request. The worker now
+  wakes confirmed hibernation through the existing Home-button input path.
+  This does not unlock the guest, resume a paused machine, or power on a machine
+  that was shut down. Canceled, expired and closed requests do not demand wake.
+- A guest controller reset could clear the pending reset/enumeration interrupt
+  between host polls. The host mistook this for acknowledgement and sent a
+  descriptor request before the guest was ready. A host-only reset generation
+  now invalidates that handshake and starts enumeration again. The snapshot
+  format is unchanged.
+
+Requests not yet assigned a USB stream retain their original deadline across
+reconnection. Existing streams are invalidated, never silently replayed; an
+interrupted installation still needs its actual outcome checked before retry.
+
+Candidate `c4bc247` passed all 84 local CTests and iOS build `38560814490`.
+On a physical iPhone 6s Plus running iOS 15.8.5, five consecutive save/resume
+cycles on a disposable guest passed: three Packages connections and two live
+installs of the authored UIKit fixture. Each fixture install was complete at
+the five-second observation after confirmation; this is not a large-app
+throughput measurement. The logs show the controller-reset race being caught
+on all five cycles, with no failed handshake or manual Home press/reboot.
+The originally reported Test2 guest also connected Packages after restore,
+without changing its installed packages. These are bounded regression results,
+not a guarantee for every guest state or app.
+
 ## References
 
 - Synopsys DWC2 register definitions in Linux `drivers/usb/dwc2/hw.h`.
