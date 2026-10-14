@@ -10,11 +10,13 @@ Your iPhone doesn't need to be jailbroken.
 
 [Download S5LBox](https://github.com/j0shua-SYSON/S5LBox/releases)
 
-<p align="center">
-  <a href="docs/images/readme-classic-iphone.jpg"><img src="docs/images/readme-classic-iphone.jpg" width="240" alt="iPhone OS 3.1.3 running in S5LBox"></a>
-  <a href="docs/images/readme-device-controls.jpg"><img src="docs/images/readme-device-controls.jpg" width="240" alt="S5LBox device controls"></a>
-  <a href="docs/images/readme-packages.jpg"><img src="docs/images/readme-packages.jpg" width="240" alt="WinterBoard listing in S5LBox Packages"></a>
-</p>
+<table>
+  <tr>
+    <td align="center"><a href="docs/images/readme-classic-iphone.jpg"><img src="docs/images/readme-classic-iphone.jpg" width="180" alt="iPhone OS 3.1.3 running in S5LBox"></a><br><strong>iPhone OS</strong></td>
+    <td align="center"><a href="docs/images/readme-device-controls.jpg"><img src="docs/images/readme-device-controls.jpg" width="180" alt="S5LBox device controls"></a><br><strong>Controls</strong></td>
+    <td align="center"><a href="docs/images/readme-packages.jpg"><img src="docs/images/readme-packages.jpg" width="180" alt="WinterBoard listing in S5LBox Packages"></a><br><strong>Packages</strong></td>
+  </tr>
+</table>
 
 ## What you can do
 
