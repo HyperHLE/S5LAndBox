@@ -11,5 +11,11 @@
 /* Owner emulator thread lifecycle; reset wakes every pending client. */
 - (void)beginSession;
 - (void)endSession:(NSString *)reason;
+/* Cable reset: invalidate assigned streams, but preserve requests which have
+ * not reached the guest. Their original timeout/cancellation still applies. */
+- (void)reconnectSession:(NSString *)reason;
+/* Owner-thread query, including requests waiting for enumeration. No guest
+ * mutation here; the engine may wake a sleeping guest for live service work. */
+- (BOOL)hasServiceActivity;
 - (void)pollWithMux:(usb_mux_t *)mux;
 @end

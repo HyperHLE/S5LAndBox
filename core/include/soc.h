@@ -4592,6 +4592,10 @@ bool s5l8900_wake_from_standby(s5l8900_t *m);
  * state a short Power press must resume in place.
  */
 bool s5l8900_wake_from_hibernation(s5l8900_t *m);
+/* True only after a hibernating kernel reaches its final retained-reset wait.
+ * Frontends must not inject an automatic wake while sleep preparation still
+ * executes. Never true for a shut-down (standby) machine. Owner-thread only. */
+bool s5l8900_hibernation_ready(const s5l8900_t *m);
 
 /*
  * Inject one host button transition through the complete machine, including

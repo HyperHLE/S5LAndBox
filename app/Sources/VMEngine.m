@@ -878,7 +878,8 @@ static double vm_engine_now_seconds(void) {
             (void)vm_usb_recovery_poll(&_usbRecovery, vm_engine_now_seconds(),
                 (double)_machine.timer.ticks / (_machine.tb_hz ?: S5L8900_TB_HZ),
                 false, true, false);
-            [_usbTransport endSession:@"Reconnecting to the saved machine."];
+            // Keep new service requests queued during cable recovery. They
+            // also supply the wake demand if this snapshot is hibernating.
             [self appendConsole:@"[usb] saved connection detached; waiting before reconnect\n"];
         } else {
             usb_host_init(&_usbHost, &_machine);
@@ -2013,6 +2014,25 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
              * on this thread, between chunks, with nothing executing. During a
              * checkpoint the quiesce state machine above owns input instead. */
             if (!checkpoint) {
+                if (_usbHostActive && !shutdownRequested &&
+                    s5l8900_hibernation_ready(&_machine) &&
+                    [_usbTransport hasServiceActivity]) {
+                    // Use the existing debounced Home wake, not Power (which
+                    // could shut down an awake guest), and never unlock it.
+                    // Queue both edges atomically without overtaking user input.
+                    pthread_mutex_lock(&_lock);
+                    BOOL wake = _state == VMEngineStateRunning && !_paused &&
+                        !_checkpointRequested && !_buttonQueue.count &&
+                        !_buttons[VMButtonHome] && !_buttons[VMButtonPower] &&
+                        !s5l_buttons_held(&_machine.buttons, S5L_BUTTON_MENU) &&
+                        !s5l_buttons_held(&_machine.buttons, S5L_BUTTON_HOLD);
+                    if (wake) {
+                        vm_button_queue_push(&_buttonQueue, S5L_BUTTON_MENU, true);
+                        vm_button_queue_push(&_buttonQueue, S5L_BUTTON_MENU, false);
+                    }
+                    pthread_mutex_unlock(&_lock);
+                    if (wake) [self appendConsole:@"[usb] waking sleeping guest for service connection\n"];
+                }
                 [self drainOneTouch_emulatorThread];
                 [self drainOneButton_emulatorThread];
             }
@@ -2052,7 +2072,6 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
                 if (_usbRecovery.disconnected &&
                     vm_usb_recovery_poll(&_usbRecovery, usbNow, guestNow,
                                          false, false, false) == VM_USB_RECONNECT) {
-                    [_usbTransport beginSession];
                     usb_host_init(&_usbHost, &_machine);
                     [self appendConsole:@"[usb] reconnecting virtual cable\n"];
                 }
@@ -2062,7 +2081,7 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
                     unsigned previous = _usbHost.stage;
                     usb_host_poll(&_usbHost, &_machine);
                     if (!usb_host_ready(&_usbHost) && _usbMux) {
-                        [_usbTransport beginSession];
+                        [_usbTransport reconnectSession:@"Guest USB controller reset"];
                         usb_mux_cancel(_usbMux, "Guest USB controller reset");
                         free(_usbMux); _usbMux = NULL;
                         _usbMuxReported = NO;
@@ -2103,7 +2122,7 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
                             usb_host_enumerating(&_usbHost) || (_usbMux && !ready),
                             failure != NULL, ready) == VM_USB_DISCONNECT) {
                         const char *reason = failure ?: "Guest USB handshake timed out";
-                        [_usbTransport endSession:[NSString stringWithUTF8String:reason]];
+                        [_usbTransport reconnectSession:[NSString stringWithUTF8String:reason]];
                         [self appendConsole:[NSString stringWithFormat:
                             @"[usb] %s; reconnecting automatically\n", reason]];
                         if (_usbMux) {
