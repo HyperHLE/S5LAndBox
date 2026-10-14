@@ -27,6 +27,8 @@ static int nextFD = -1;
 }
 - (void)beginSession {}
 - (void)endSession:(NSString *)reason { (void)reason; }
+- (void)reconnectSession:(NSString *)reason { (void)reason; }
+- (BOOL)hasServiceActivity { return NO; }
 - (void)pollWithMux:(usb_mux_t *)mux { (void)mux; }
 @end
 
