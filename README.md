@@ -33,8 +33,7 @@ Your iPhone doesn't need to be jailbroken.
 - **Keep your own collection.** Create separate machines for different apps
   and experiments. Name them, keep their data separate, and let storage grow
   as you fill it. Smaller disks are available in **Advanced**.
-- **Pick up where you left off.** Save and resume a session, or keep snapshots
-  to return to later.
+- **Pick up where you left off.** Save and resume your session.
 - **Stay in control.** Use Home, sleep, volume, and silent controls, pause when
   you need to, and connect your machine to the internet. Sound and microphone
   support are also available, though still experimental.
