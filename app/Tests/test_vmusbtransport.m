@@ -98,17 +98,20 @@ static void closeClient(VMUSBTransport *transport, usb_mux_t *mux, USBRequest *r
 }
 static void testBeforeReady(VMUSBTransport *transport, usb_mux_t *mux) {
     [transport beginSession]; usb_mux_init(mux);
+    CHECK(![transport hasServiceActivity]);
     failed(request(transport, 62078, 1, YES), @"canceled");
     unsigned baseline = openFDs();
     for (unsigned i = 0; i < USB_MUX_CHANNELS * 3; i++) {
         // No emulator poll at all: canceled, unassigned requests release now.
         failed(request(transport, 62078, 1, YES), @"canceled");
         failed(request(transport, 62078, 0.01, NO), @"did not respond in time");
+        CHECK(![transport hasServiceActivity]);
         [transport pollWithMux:mux];
         CHECK(openFDs() == baseline);
     }
     ready(mux);
     USBRequest *r = request(transport, 62078, 2, NO);
+    CHECK([transport hasServiceActivity]);
     int channel = acceptRequest(transport, mux, r, 62078);
     if (channel >= 0 && r.fd >= 0) {
         CHECK(send(r.fd, "ping", 4, 0) == 4); [transport pollWithMux:mux];
@@ -116,6 +119,7 @@ static void testBeforeReady(VMUSBTransport *transport, usb_mux_t *mux) {
         CHECK(!memcmp(mux->channel[channel].send, "ping", 4));
     }
     closeClient(transport, mux, r);
+    CHECK(![transport hasServiceActivity]);
     CHECK(openFDs() == baseline);
 }
 static void testAssignedCancellation(VMUSBTransport *transport, usb_mux_t *mux) {
@@ -163,13 +167,57 @@ static void testCloseErrorAndReset(VMUSBTransport *transport, usb_mux_t *mux) {
     [transport beginSession]; usb_mux_init(mux);
     r = request(transport, 62078, 2, NO);
     [transport beginSession]; failed(r, @"new USB session");
-    r = request(transport, 62078, 2, NO);
+    ready(mux);
+    r = request(transport, 62078, 2, NO); [transport pollWithMux:mux];
     usb_mux_cancel(mux, "Link failed"); [transport pollWithMux:mux]; failed(r, @"Link failed");
-    failed(request(transport, 62078, 2, NO), @"Link failed");
     [transport beginSession]; ready(mux);
     r = request(transport, 62078, 2, NO); acceptRequest(transport, mux, r, 62078);
     [transport endSession:@"Stopped"];
     if (r.fd >= 0) { char byte; CHECK(recv(r.fd, &byte, 1, 0) == 0); }
+    CHECK(![transport hasServiceActivity]);
+    failed(request(transport, 62078, 2, NO), @"Stopped");
+}
+static void testReconnectWaitingAndLiveStreams(VMUSBTransport *transport, usb_mux_t *mux) {
+    [transport beginSession]; usb_mux_init(mux);
+    // A new request during saved-state cable recovery must survive reconnect,
+    // carry wake demand even before enumeration, and finish on the new link.
+    USBRequest *waiting = request(transport, 64321, 3, NO);
+    CHECK([transport hasServiceActivity]);
+    [transport reconnectSession:@"Saved cable reconnect"];
+    usb_mux_cancel(mux, "Handshake failed"); [transport pollWithMux:mux];
+    CHECK([transport hasServiceActivity]);
+    ready(mux);
+    acceptRequest(transport, mux, waiting, 64321);
+    CHECK([transport hasServiceActivity]);
+    // Sleep must not make an already closed host socket a permanent wake lease.
+    close(waiting.fd); waiting.fd = -1;
+    CHECK(![transport hasServiceActivity]);
+    [transport pollWithMux:mux];
+
+    [transport beginSession]; ready(mux);
+    USBRequest *live = request(transport, 62078, 3, NO);
+    acceptRequest(transport, mux, live, 62078);
+    USBRequest *assigned = request(transport, 62079, 3, NO);
+    [transport pollWithMux:mux];
+    waiting = request(transport, 64321, 3, NO);
+    [transport reconnectSession:@"Cable changed"];
+    failed(assigned, @"Cable changed");
+    char byte;
+    CHECK(recv(live.fd, &byte, 1, 0) == 0); // Never replay an in-flight operation.
+    CHECK([transport hasServiceActivity]);
+    ready(mux); acceptRequest(transport, mux, waiting, 64321);
+    closeClient(transport, mux, waiting);
+    CHECK(![transport hasServiceActivity]);
+
+    [transport beginSession]; usb_mux_init(mux);
+    waiting = request(transport, 64321, 0.05, NO);
+    [transport reconnectSession:@"Retry"];
+    failed(waiting, @"did not respond in time"); // Deadline was not extended.
+    CHECK(![transport hasServiceActivity]);
+    waiting = request(transport, 64321, 3, NO);
+    waiting.canceled = YES; failed(waiting, @"canceled");
+    [transport reconnectSession:@"Retry"];
+    CHECK(![transport hasServiceActivity]);
 }
 int main(void) {
     @autoreleasepool {
@@ -179,6 +227,7 @@ int main(void) {
         testBeforeReady(transport, mux);
         testAssignedCancellation(transport, mux);
         testCloseErrorAndReset(transport, mux);
+        testReconnectWaitingAndLiveStreams(transport, mux);
         [transport endSession:@"Finished"]; free(mux);
         printf("VMUSBTransport: %u checks, %u failures\n", checks, failures);
         return failures ? 1 : 0;

@@ -902,12 +902,14 @@ static void power_wait_fixture(s5l8900_t *m, active_clock_probe_t *probe) {
     m->cpu.cpsr = ARM_MODE_SVC | ARM_CPSR_I | ARM_CPSR_F;
     m->pmu.regs[PCF50635_OOCSHDWN] = PCF50635_OOCSHDWN_GO_HIBERNATE;
     m->pmu.written[PCF50635_OOCSHDWN] = 1u;
+    CHECK(!s5l8900_hibernation_ready(m), "automatic wake overtook sleep preparation");
     CHECK(s5l8900_set_wfi_host_pacing(m, active_clock_probe_sleep, probe),
           "power wait callback");
     arm_status_t status = ARM_OK;
     CHECK(s5l8900_run(m, 1u, &status) == 1u && status == ARM_OK &&
           m->cpu.r[15] == 4u && probe->sleep_calls == 0u,
           "power command stopped shutdown preparation");
+    CHECK(s5l8900_hibernation_ready(m), "finished sleep did not permit service wake");
 }
 
 static void power_wait_service(void *ctx, unsigned retired) {
@@ -956,16 +958,19 @@ static void test_power_wait_freezes_cpu_and_preserves_rtc_wake_restore(void) {
           m.wfi_host_sleep == active_clock_probe_sleep,
           "restore retained derived proof/remainder or lost host policy");
     free(saved);
+    CHECK(!s5l8900_hibernation_ready(&m), "restore reused a stale sleep witness");
     unsigned waits = probe.sleep_calls;
     CHECK(s5l8900_run(&m, 1u, &status) == 1u && status == ARM_OK &&
           probe.sleep_calls == waits && m.cpu.r[15] == 4u,
           "restore did not rebuild its fetch witness literally");
+    CHECK(s5l8900_hibernation_ready(&m), "restored sleep cannot wake for services");
     CHECK(s5l8900_run(&m, 1u, &status) == 0u && status == ARM_OK &&
           probe.sleep_calls == waits + 1u, "restored sleep failed to park");
     cycles = m.cpu.cycles;
     CHECK(s5l8900_wake_from_hibernation(&m) && m.cpu.r[15] == m.ram_base &&
           m.cpu.cycles == cycles && m.power_wait_fraction == 0u &&
           !s5l_pcf50635_in_hibernation(&m.pmu), "retained-reset wake failed");
+    CHECK(!s5l8900_hibernation_ready(&m), "awake guest requested a second wake");
     CHECK(s5l8900_run(&m, 1u, &status) == 1u && status == ARM_OK &&
           probe.sleep_calls == waits + 1u, "wake did not resume CPU work");
     s5l8900_free(&m);
@@ -1012,6 +1017,7 @@ static void test_power_wait_requires_a_live_quiescent_witness(void) {
         case BUS_INTERPOSE: m.bus.host_ram = NULL; break;
         default: break;
         }
+        CHECK(!s5l8900_hibernation_ready(&m), "invalid service wake witness %u accepted", which);
         arm_status_t status = ARM_OK;
         (void)s5l8900_run(&m, 1u, &status);
         CHECK(probe.sleep_calls == 0u, "invalid power wait witness %u accepted", which);
@@ -1026,6 +1032,7 @@ static void test_power_wait_bounds_clock_and_failed_waits(void) {
     active_clock_probe_t probe = {.succeeds = true};
     power_wait_fixture(&m, &probe);
     m.pmu.regs[PCF50635_OOCSHDWN] = PCF50635_OOCSHDWN_GO_STANDBY;
+    CHECK(!s5l8900_hibernation_ready(&m), "service demand could power on a shut-down guest");
     m.pmu.tick_hz = 1000u;
     m.pmu.tick_accum = 0u;
     CHECK(s5l8900_set_active_host_clock(&m, active_clock_probe_now, &probe),

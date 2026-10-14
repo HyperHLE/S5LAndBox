@@ -2771,6 +2771,11 @@ static bool powered_down_self_branch(const s5l8900_t *m) {
            p[2] == 0xffu && p[3] == 0xeau; /* B . */
 }
 
+bool s5l8900_hibernation_ready(const s5l8900_t *m) {
+    return m && s5l_pcf50635_in_hibernation(&m->pmu) &&
+           !s5l_pcf50635_in_standby(&m->pmu) && powered_down_self_branch(m);
+}
+
 static bool powered_down_host_wait(s5l8900_t *m) {
     if (!powered_down_self_branch(m)) {
         m->power_wait_fraction = 0u;

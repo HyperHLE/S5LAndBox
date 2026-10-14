@@ -51,6 +51,35 @@ static NSError *VMUSBError(NSString *message) {
     [_connections removeAllObjects];
     [_condition broadcast]; [_condition unlock];
 }
+- (void)reconnectSession:(NSString *)reason {
+    [_condition lock];
+    for (VMUSBConnection *c in [_connections copy]) {
+        if (c.channel < 0 && !c.canceled) continue;
+        c.error = VMUSBError(reason);
+        if (c.bridgeFD >= 0) { close(c.bridgeFD); c.bridgeFD = -1; }
+        [_connections removeObject:c];
+    }
+    _accepting = YES; _unavailable = nil;
+    [_condition broadcast]; [_condition unlock];
+}
+- (BOOL)hasServiceActivity {
+    [_condition lock];
+    BOOL active = NO;
+    for (VMUSBConnection *c in _connections) {
+        if (c.canceled || c.error || c.bridgeFD < 0) continue;
+        // A caller can close its stream while the guest/link is asleep. Do
+        // not wake it for an abandoned request just because mux polling stopped.
+        char byte;
+        ssize_t n = recv(c.bridgeFD, &byte, 1, MSG_PEEK);
+        if (!n || (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) {
+            c.canceled = YES;
+            continue;
+        }
+        active = YES;
+    }
+    [_condition unlock];
+    return active;
+}
 - (int)openPort:(uint16_t)port timeout:(NSTimeInterval)timeout error:(NSError **)error {
     return [self openPort:port timeout:timeout canceled:nil error:error];
 }
@@ -113,7 +142,7 @@ static NSError *VMUSBError(NSString *message) {
 }
 - (void)pollWithMux:(usb_mux_t *)mux {
     if (!mux) return;
-    if (mux->error) { [self endSession:[NSString stringWithUTF8String:mux->error]]; return; }
+    if (mux->error) { [self reconnectSession:[NSString stringWithUTF8String:mux->error]]; return; }
     [_condition lock];
     /* Nonblocking I/O only, bounded to one queue-sized transfer per direction
      * per channel. Neither a slow client nor TLS work runs on this thread. */
