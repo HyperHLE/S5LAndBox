@@ -68,6 +68,7 @@ Keep a backup of anything important before experimenting.
 
 ## Learn more
 
+- [Changelog](CHANGELOG.md)
 - [Installing apps](docs/live-ipa-usb.md) · [Packages and tweaks](docs/native-package-manager.md)
 - [Audio](docs/audio.md) · [Storage options](docs/DISK-SIZE-PRESETS.md)
 - [Building and technical details](docs/README-DETAILED.md) · [Architecture](docs/ARCHITECTURE.md)
