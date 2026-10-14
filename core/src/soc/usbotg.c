@@ -141,10 +141,12 @@ void s5l_usbotg_write(s5l_usbotg_t *u, uint32_t off, uint32_t val) {
         case USBOTG_GRSTCTL:
             if (val & 1u) {
                 uint32_t connected = u->connected, pcgcctl = u->pcgcctl;
+                uint32_t generation = u->reset_generation + 1u;
                 s5l_usbotg_reset(u);
                 s5l_usbotg_enable(u);
                 u->connected = connected;
                 u->pcgcctl = pcgcctl;
+                u->reset_generation = generation;
             }
             return;
         case USBOTG_DCTL: {

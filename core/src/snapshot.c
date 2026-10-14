@@ -142,7 +142,8 @@ SNAP_SIZE_GUARD(s5l_gpio_t,        4192,  "snap_gpio");
 /* One held-button byte and three counters, padded to 8-byte alignment. */
 SNAP_SIZE_GUARD(s5l_buttons_t,     32,    "snap_buttons");
 SNAP_SIZE_GUARD(s5l_mtz2_t,        1600,  "snap_mtz2");
-SNAP_SIZE_GUARD(s5l_usbotg_t,      312,   "snap_usbotg");
+/* The extra reset generation is host-only; the wire format is unchanged. */
+SNAP_SIZE_GUARD(s5l_usbotg_t,      316,   "snap_usbotg");
 /* Eight channels of five registers (160), the four controller-wide words, the
  * access and unknown-offset accounting, and the work/refusal counters. */
 SNAP_SIZE_GUARD(s5l_pl080_chan_t,  40,    "snap_pl080");
@@ -230,7 +231,9 @@ SNAP_SIZE_GUARD(s5l_stub_t,        56,    "snap_stubs");
 /* 258568 adds the host-only FETCH preparation callback/context (16), measured
  * by the compiler. Like the other bus hooks these are excluded from MACH and
  * retained from the destination on load. No serialized byte/version changes. */
-SNAP_SIZE_GUARD(s5l8900_t,         258568, "snap_mach");
+/* 258576 adds the nonserialized USB reset witness and alignment, measured
+ * from the compiler. snap_usbotg() clears it on load; no format change. */
+SNAP_SIZE_GUARD(s5l8900_t,         258576, "snap_mach");
 #endif
 
 /* ---------------------------------------------------------------- the IO --- */
@@ -971,6 +974,7 @@ static void snap_spi(sn_io_t *io, s5l_spi_t *s) {
  * cannot restore its host-side protocol session. Straps remain constants.
  */
 static void snap_usbotg(sn_io_t *io, s5l_usbotg_t *u) {
+    if (sn_reading(io)) u->reset_generation = 0;
     if (sn_reading(io) && io->version == 32u) {
         s5l_usbotg_reset(u);
         F32(u->pcgcctl);

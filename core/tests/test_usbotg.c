@@ -136,6 +136,51 @@ static void test_enumeration_stall(void) {
     s5l8900_free(&m);
 }
 
+static void test_reset_during_enumeration(void) {
+    /* Reset at every handshake phase, including an already-addressed link.
+     * Reconfigure completely BETWEEN host polls: status/mask checks alone
+     * cannot distinguish this from the guest acknowledging an interrupt. */
+    for (unsigned stage = 1; stage <= 9; stage++) {
+        CHECK(s5l8900_init(&m, 0x08000000, 1u << 20));
+        usb_host_t host;
+        usb_host_init(&host, &m);
+        wr(USBOTG_GAHBCFG, 0x21);
+        wr(USBOTG_GINTMSK, USBOTG_INT_RESET | USBOTG_INT_ENUM);
+        usb_host_poll(&host, &m);
+        CHECK(host.stage == 1 && (rd(USBOTG_GINTSTS) & USBOTG_INT_RESET));
+        host.stage = stage;
+        host.control = stage >= 3 && stage <= 7 ? 2 : 0;
+        host.used = 7;
+        host.vendor = 0x05ac;
+        host.bulk_in = 3;
+        if (stage == 9) host.error = "previous control failure";
+        wr(USBOTG_GRSTCTL, 1);
+        CHECK(m.usbotg.reset_generation == 1);
+        CHECK(!rd(USBOTG_GINTSTS));
+        wr(USBOTG_GAHBCFG, 0x21);
+        wr(USBOTG_GINTMSK, USBOTG_INT_RESET | USBOTG_INT_ENUM);
+        /* Even a stale address cannot make READY survive a core reset. */
+        wr(USBOTG_DCFG, 1u << 4);
+        usb_host_poll(&host, &m);
+        CHECK(host.stage == 1 && !host.control && !host.error);
+        CHECK(!host.used && !host.vendor && !host.bulk_in);
+        CHECK(rd(USBOTG_GINTSTS) & USBOTG_INT_RESET);
+        CHECK(!(rd(USBOTG_GINTSTS) & USBOTG_INT_ENUM));
+        CHECK(host.reset_generation == 1);
+        wr(USBOTG_GINTSTS, USBOTG_INT_RESET);
+        usb_host_poll(&host, &m);
+        CHECK(host.stage == 2 && (rd(USBOTG_GINTSTS) & USBOTG_INT_ENUM));
+        /* An incomplete reinitialization must instead wait for readiness. */
+        wr(USBOTG_GRSTCTL, 1);
+        usb_host_poll(&host, &m);
+        CHECK(host.stage == 0 && !host.control && !host.error);
+        CHECK(m.usbotg.reset_generation == 2 && host.reset_generation == 2);
+        wr(USBOTG_GRSTCTL, 0x10); /* FIFO flush is not a core reset. */
+        CHECK(m.usbotg.reset_generation == 2);
+        s5l8900_free(&m);
+    }
+}
+
 int main(void) {
     CHECK(s5l8900_init(&m, 0x08000000u, 1u << 20));
     if (!m.ram) return 1;
@@ -222,6 +267,7 @@ int main(void) {
     arm_ep(0, 3, m.ram_base + 20000, 1024, 2);
     CHECK(s5l8900_usb_packet(&m, S5L_USB_OUT, 3, data, 512, &actual) == S5L_USB_ACK);
     s5l_usbotg_t saved = m.usbotg;
+    m.usbotg.reset_generation = 47; /* derived witness must not enter the file */
     CHECK(snapshot_save_mem(&m, &save, &length) == SNAP_OK);
     s5l_usbotg_reset(&m.usbotg);
     CHECK(snapshot_load_mem(&m, save, length) == SNAP_OK);
@@ -236,6 +282,7 @@ int main(void) {
     test_enumeration(false);
     test_enumeration(true);
     test_enumeration_stall();
+    test_reset_during_enumeration();
     printf("USB: %u checks, %u failures\n", checks, failures);
     return failures ? 1 : 0;
 }
