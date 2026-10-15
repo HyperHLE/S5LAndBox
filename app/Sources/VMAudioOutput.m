@@ -21,6 +21,7 @@
     AVAudioEngine *_engine;
     NSMutableArray<id> *_observers;
     BOOL _running, _foreground, _interrupted, _microphoneEnabled, _tapInstalled;
+    BOOL _guestRecording;
     NSUInteger _permissionRequest;
     NSString *_status;
 }
@@ -88,10 +89,11 @@
     }
     AVAudioSession *session = AVAudioSession.sharedInstance;
     NSError *error = nil;
+    BOOL capture = _microphoneEnabled && _guestRecording;
     AVAudioSessionCategoryOptions options = AVAudioSessionCategoryOptionMixWithOthers;
-    if (_microphoneEnabled)
+    if (capture)
         options |= AVAudioSessionCategoryOptionDefaultToSpeaker | AVAudioSessionCategoryOptionAllowBluetooth;
-    BOOL ready = [session setCategory:_microphoneEnabled ? AVAudioSessionCategoryPlayAndRecord : AVAudioSessionCategoryPlayback
+    BOOL ready = [session setCategory:capture ? AVAudioSessionCategoryPlayAndRecord : AVAudioSessionCategoryPlayback
                                 mode:AVAudioSessionModeDefault options:options error:&error];
     if (ready) {
         [session setPreferredSampleRate:VM_AUDIO_RATE error:nil];
@@ -120,7 +122,7 @@
         }];
     [engine attachNode:source];
     [engine connect:source to:engine.mainMixerNode format:format];
-    if (_microphoneEnabled) {
+    if (capture) {
         AVAudioInputNode *input = engine.inputNode;
         AVAudioFormat *inputFormat = [input outputFormatForBus:0];
         if (inputFormat.sampleRate > 0 && inputFormat.channelCount > 0) {
@@ -151,7 +153,15 @@
     atomic_store_explicit(&_storage->pcm.microphone_enabled, _tapInstalled, memory_order_release);
     atomic_store_explicit(&_storage->pcm.host_running, true, memory_order_release);
     _status = _tapInstalled ? @"Playback and microphone are available." :
-        (_microphoneEnabled ? @"Playback is available. No microphone input route." : @"Playback is available. Microphone is off.");
+        (capture ? @"Playback is available. No microphone input route." : @"Playback is available. Microphone is idle.");
+}
+- (void)setGuestRecording:(BOOL)recording {
+    if (!NSThread.isMainThread) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [self setGuestRecording:recording]; }); return;
+    }
+    if (_guestRecording == recording) return;
+    _guestRecording = recording;
+    if (_running) [self rebuild];
 }
 - (void)setRunning:(BOOL)running {
     if (!NSThread.isMainThread) {

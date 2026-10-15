@@ -302,6 +302,12 @@ static void test_pre_step_hook_is_bounded_and_fail_closed(void) {
           "handled pre-step state r0/pc/cycles=%08x/%08x/%llu",
           m.cpu.r[0], m.cpu.r[15], (unsigned long long)m.cpu.cycles);
 
+    fixture.next_pc = target;
+    fixture.calls = 0u;
+    m.cpu.r[15] = target;
+    CHECK(s5l8900_run(&m, 8u, &status) == 0u && status == ARM_OK &&
+          fixture.calls == 8u, "repeating helper did not yield its bounded slice");
+    fixture.next_pc = 4u;
     fixture.handle = false;
     fixture.calls = 0u;
     m.cpu.r[0] = 0u;

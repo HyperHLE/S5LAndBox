@@ -44,6 +44,11 @@ static void testInterfaceChoice(void) {
     settings.legacyEmulatorUI = YES;
     [settings resetToDefaults];
     assert(!settings.legacyEmulatorUI && changes == 4);
+    assert(!settings.homeOnlyEmulatorUI);
+    settings.homeOnlyEmulatorUI = YES;
+    assert(reopened.homeOnlyEmulatorUI && !reopened.legacyEmulatorUI && changes == 5);
+    [settings resetToDefaults];
+    assert(!reopened.homeOnlyEmulatorUI && changes == 6);
     [NSNotificationCenter.defaultCenter removeObserver:observer];
     [defaults removePersistentDomainForName:suite];
     puts("interface settings: Modern default, Legacy persistence, notifications, reset and unrelated values passed");

@@ -43,7 +43,9 @@ foreach(required "[_engine setInstructionCap:_sessionInstructionCap]"
         "BOOL inlineConsole = _sessionInlineConsole"
         "[_engine forcePowerOffWithCompletion:"
         "self.guestShutdownCompletion = nil; /* NEVER continue jailbreak after force-off */"
-        "!_savingCheckpoint && !_restarting && !_forcePoweringOff;")
+        "return _engine && !_forcePoweringOff &&"
+        "if (!strongSelf || strongSelf->_forcePowerOffRequested) return;"
+        "strongSelf->_engine != stoppedEngine || strongSelf->_forcePowerOffRequested) return;")
     string(FIND "${emulator}" "${required}" found)
     if(found EQUAL -1)
         message(FATAL_ERROR "Engine no longer consumes session-owned settings: ${required}")

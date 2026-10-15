@@ -48,8 +48,9 @@ typedef void (^VMEngineStopCompletion)(void);
 
 /*
  * Allocate the machine, install a guest, and start interpreting on a
- * background thread. Returns YES when already running, and NO if startup fails
- * or a start/stop transition is already in progress.
+ * background thread, including firmware preparation. Returns YES when startup
+ * was scheduled (or already running), NO if scheduling fails or a transition
+ * is in progress. Asynchronous startup errors are published in bringUpNote.
  *
  * WHICH GUEST depends on what has been imported. When the firmware directory
  * holds a kernel, a device tree, a root filesystem and the writable work image
@@ -108,6 +109,7 @@ typedef void (^VMEngineStopCompletion)(void);
  * without anyone pressing anything. */
 - (BOOL)isPaused;
 - (BOOL)isRunning;
+- (BOOL)isStarting;
 /* Service clients run off-main; this transport never accesses the guest disk. */
 - (VMUSBTransport *)usbTransport;
 

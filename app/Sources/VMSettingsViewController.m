@@ -523,7 +523,8 @@ titleForFooterInSection:(NSInteger)section {
             cell.selectionStyle = UITableViewCellSelectionStyleDefault;
         } else if (row == VMGeneralRowInterface) {
             cell.textLabel.text = @"Emulator interface";
-            cell.detailTextLabel.text = _settings.legacyEmulatorUI ? @"Legacy" : @"Modern";
+            cell.detailTextLabel.text = _settings.legacyEmulatorUI ? @"Legacy" :
+                _settings.homeOnlyEmulatorUI ? @"Home only" : @"Modern";
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             cell.accessibilityIdentifier = @"s5lbox.settings.interface";
         } else if (row == VMGeneralRowGraphicsMode) {
@@ -1008,18 +1009,20 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 
 - (void)chooseEmulatorInterface {
     UIAlertController *picker = [UIAlertController alertControllerWithTitle:@"Emulator interface"
-        message:@"Use the modern dock or the original five-button layout."
+        message:@"In Home only, tap outside the guest display to show or hide controls."
         preferredStyle:UIAlertControllerStyleAlert];
     __weak VMSettingsViewController *weakSelf = self;
-    for (NSNumber *choice in @[@NO, @YES]) {
-        BOOL legacy = choice.boolValue;
-        NSString *title = legacy ? @"Legacy" : @"Modern";
-        if (_settings.legacyEmulatorUI == legacy) title = [title stringByAppendingString:@" (current)"];
+    NSUInteger selected = _settings.legacyEmulatorUI ? 2 : _settings.homeOnlyEmulatorUI ? 1 : 0;
+    for (NSNumber *choice in @[@0, @1, @2]) {
+        NSUInteger mode = choice.unsignedIntegerValue;
+        NSString *title = @[@"Modern", @"Home only", @"Legacy"][mode];
+        if (selected == mode) title = [title stringByAppendingString:@" (current)"];
         [picker addAction:[UIAlertAction actionWithTitle:title style:UIAlertActionStyleDefault
             handler:^(__unused UIAlertAction *action) {
                 VMSettingsViewController *controller = weakSelf;
                 if (!controller) return;
-                controller->_settings.legacyEmulatorUI = legacy;
+                controller->_settings.homeOnlyEmulatorUI = mode == 1;
+                controller->_settings.legacyEmulatorUI = mode == 2;
                 [controller.tableView reloadData];
             }]];
     }

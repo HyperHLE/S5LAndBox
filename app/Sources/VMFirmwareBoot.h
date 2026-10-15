@@ -302,6 +302,9 @@ typedef enum {
 vm_firmware_checkpoint_status_t vm_firmware_boot_save_resume(
     vm_firmware_boot_t *boot, const s5l8900_t *machine,
     char *detail, size_t detail_capacity);
+vm_firmware_checkpoint_status_t vm_firmware_boot_save_resume_cancellable(
+    vm_firmware_boot_t *boot, const s5l8900_t *machine,
+    char *detail, size_t detail_capacity, bool (*cancel)(void *), void *ctx);
 
 /* Close the work image and release the bridge storage. Safe on a NULL slot. */
 /*

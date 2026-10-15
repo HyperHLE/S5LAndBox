@@ -2814,6 +2814,7 @@ unsigned s5l8900_run(s5l8900_t *m, unsigned max_steps, arm_status_t *status) {
     arm_status_t st = ARM_OK;
     unsigned n = 0;
     unsigned active_pending_retired = 0u;
+    unsigned handled_steps = 0u;
     bool active_clock = false;
     if (max_steps && !m->restart_requested && powered_down_host_wait(m))
         max_steps = 0u;
@@ -2849,8 +2850,13 @@ unsigned s5l8900_run(s5l8900_t *m, unsigned max_steps, arm_status_t *status) {
             break;
         }
         if (pre_step_target_matches(m, m->cpu.r[15])) {
+            /* Replacements need a separate budget: they do not retire CPU
+             * instructions. A helper returning to a hooked PC must still
+             * yield to the owner's stop/input checks. */
+            if (handled_steps == max_steps) break;
             m->pre_step_matches++;
             if (m->pre_step_hook(m->pre_step_ctx)) {
+                handled_steps++;
                 m->pre_step_handled++;
                 /* A replacement completes a whole guest operation but does
                  * not pretend those skipped instructions retired.  One device

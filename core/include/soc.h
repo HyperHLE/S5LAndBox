@@ -2259,6 +2259,8 @@ bool     s5l_i2c_irq(const s5l_i2c_t *bus);
 #define PCF50635_DEFAULT_TIME 1262304000ull /* 2010-01-01 00:00:00 UTC */
 #define PCF50635_UNKNOWN_REGS 16u
 
+typedef uint64_t (*s5l_rtc_now_fn)(void *ctx);
+
 typedef struct {
     uint8_t  regs[PCF50635_NREG];
     uint8_t  written[PCF50635_NREG];
@@ -2274,10 +2276,15 @@ typedef struct {
     uint64_t reg_reads, reg_writes, unknown_reads, unknown_writes;
     uint8_t  unknown_reg[PCF50635_UNKNOWN_REGS];
     unsigned unknown_reg_count;
+    /* Optional host wall clock, never serialized. Sampled once per I2C read
+     * transaction so a slow guest cannot read a mixture of two dates. */
+    s5l_rtc_now_fn host_now;
+    void *host_now_ctx;
 } s5l_pcf50635_t;
 
 void s5l_pcf50635_reset(s5l_pcf50635_t *pmu, uint32_t tick_hz);
 void s5l_pcf50635_set_time(s5l_pcf50635_t *pmu, uint64_t unix_seconds);
+void s5l_pcf50635_set_host_clock(s5l_pcf50635_t *pmu, s5l_rtc_now_fn now, void *ctx);
 void s5l_pcf50635_tick(s5l_pcf50635_t *pmu, uint32_t ticks);
 void s5l_pcf50635_bind(s5l_pcf50635_t *pmu, s5l_i2c_slave_t *slave);
 bool s5l_pcf50635_irq(const s5l_pcf50635_t *pmu);
@@ -2544,6 +2551,7 @@ bool s5l_i2s_audio_tick(s5l_i2s_t *i2s, const s5l_wm8991_t *codec,
                        uint32_t ticks, uint32_t tick_hz);
 uint32_t s5l_i2s_audio_next(const s5l_i2s_t *i2s, uint32_t tick_hz);
 uint32_t s5l_i2s_clock_next(const s5l_i2s_t *i2s, uint32_t tick_hz);
+bool s5l_i2s_input_active(const s5l_i2s_t *i2s, const s5l_wm8991_t *codec);
 /* The byte offset backing slot `index`, or UINT32_MAX past the end. The map is
  * exposed so the tests pin the exact seven the driver writes rather than
  * re-deriving them from this model's own storage order. */
