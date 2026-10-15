@@ -543,10 +543,10 @@ static double vm_engine_now_seconds(void) {
 }
 
 /*
- * The one slow step, on its own thread. rootfs_work_create() refuses to
- * replace an existing destination, so a second start while this is running
- * cannot corrupt the image being written -- it is the flag, not the file, that
- * keeps two of these from being launched.
+ * The slow disk-preparation step stays on the engine's owning startup worker.
+ * Stop completion cannot release the machine until this returns. The rootfs
+ * writer refuses an existing destination and removes unpublished copies when
+ * canceled, preserving both existing disks and the ownership boundary.
  */
 - (void)provisionRootFilesystem:(id)where {
     @autoreleasepool {

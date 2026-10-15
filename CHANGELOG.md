@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- Optional Home-only interface in Advanced, with margin-tap and VoiceOver access
+  to the hidden controls. Modern remains the default; Legacy remains available.
+- Firmware preparation runs off the main thread on the machine's owning worker.
+  Force Power Off stays available during startup, saving and restart, and cancels
+  unfinished disk copies and checkpoint writes before releasing the machine.
+  It remains an unclean shutdown and can lose unsaved guest work.
+- Supply the guest hardware clock with the host date instead of the fixed 2010
+  default, independently of CPU and animation timing.
+- Start physical microphone capture only when the guest audio hardware requests
+  input, rather than whenever microphone access is allowed.
+
 ## 1.0.0 — 2026-10-15
 
 The first public release of S5LBox: the iPhone 3G's iPhone OS 3.1.3 running inside an iOS app. This release is experimental; compatibility and performance are still being improved.

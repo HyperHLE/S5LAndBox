@@ -386,6 +386,8 @@ static void test_saved_state_restore_fixture(void) {
     CHECK(ok, "app restore was refused: %s", report.detail);
     CHECK(report.ok == ok, "restore report.ok disagrees with return value");
     if (ok) {
+        CHECK(machine.pmu.host_now != NULL,
+              "restored firmware lost the host calendar clock");
         CHECK(machine.mbx.complete_rejected_submits,
               "an effective MBX restore did not arm product liveness policy");
         CHECK(machine.cpu.cycles == UINT64_C(7320000000),
@@ -557,6 +559,8 @@ static void test_guest_watchdog_restart_fixture(void) {
     CHECK(started && report.ok,
           "watchdog restart fixture could not boot: %s", report.detail);
     if (started) {
+        CHECK(machine.pmu.host_now != NULL,
+              "cold firmware boot has no host calendar clock");
         int mbx = vm_option_index("mbx");
         bool expect_mbx_liveness = mbx >= 0 &&
             (unsigned)mbx < report.options.count &&
@@ -568,6 +572,8 @@ static void test_guest_watchdog_restart_fixture(void) {
                             S5L8900_WDT_RESTART_VALUE);
         arm_status_t status = ARM_UNDEFINED;
         unsigned retired = s5l8900_run(&machine, 1u, &status);
+        CHECK(machine.pmu.host_now != NULL,
+              "watchdog restart lost the host calendar clock");
         CHECK(retired == 0u && status == ARM_OK &&
                   machine.ram != NULL && machine.cpu.r[15] != 0u &&
                   !machine.restart_requested &&
@@ -636,6 +642,8 @@ static void test_powered_off_checkpoint_fixture(void) {
     CHECK(report.ok == ok,
           "powered-off fallback report.ok disagrees with return value");
     if (ok) {
+        CHECK(machine.pmu.host_now != NULL,
+              "powered-off checkpoint fallback lost the host calendar clock");
         CHECK(machine.cpu.cycles == 0u,
               "powered-off checkpoint resumed at %llu instructions instead "
               "of fresh-booting",
