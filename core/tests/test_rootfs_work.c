@@ -1832,7 +1832,38 @@ static void test_sparse_capacity_and_maintenance_copy(uint64_t capacity) {
     remove_if_present(clone); remove_if_present(grown); remove_if_present(source);
 }
 
+typedef struct { unsigned calls, limit; } cancel_copy_t;
+static bool cancel_copy(void *ctx) {
+    cancel_copy_t *cancel = ctx;
+    return ++cancel->calls >= cancel->limit;
+}
+static void test_cancelled_preparation_has_no_published_disk(void) {
+    char source[160], destination[160];
+    uint8_t original[FIXTURE_SIZE], after[FIXTURE_SIZE];
+    CHECK(make_path(source, sizeof source, "cancel-source"), "source path");
+    CHECK(make_path(destination, sizeof destination, "cancel-work"), "destination path");
+    remove_if_present(source); remove_if_present(destination);
+    make_hfs_fixture(original, 1u);
+    CHECK(write_file(source, original, sizeof original), "source fixture");
+    const unsigned limits[] = {1, 2, (FIXTURE_SIZE + 1023) / 1024 + 1};
+    for (unsigned i = 0; i < 3; i++) {
+        cancel_copy_t cancel = {0, limits[i]};
+        rootfs_work_options_t options = {0};
+        options.io_buffer_bytes = 1024;
+        options.cancel = cancel_copy; options.cancel_ctx = &cancel;
+        rootfs_work_result_t result;
+        CHECK(rootfs_work_create(source, destination, &options, &result) == ROOTFS_WORK_CANCELLED,
+              "cancellation at %u failed: %s", limits[i], result.detail);
+        CHECK(!result.published && !result.temporary_left && !path_exists(destination) && no_temporary_files(),
+              "cancelled preparation published a disk or leaked its temporary");
+    }
+    CHECK(read_file(source, after, sizeof after) && !memcmp(original, after, sizeof original),
+          "cancellation modified source");
+    remove_if_present(source);
+}
+
 int main(int argc, char **argv) {
+    test_cancelled_preparation_has_no_published_disk();
     if (argc == 2 && strcmp(argv[1], "--large-disks") == 0) {
         test_sparse_capacity_and_maintenance_copy(UINT64_C(4) << 30);
         test_sparse_capacity_and_maintenance_copy(UINT64_C(8) << 30);
