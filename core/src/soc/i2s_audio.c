@@ -97,6 +97,13 @@ static uint32_t codec_rate(const s5l_wm8991_t *c, unsigned d) {
 }
 
 static float db_gain(float db) { return powf(10.f, db / 20.f); }
+
+bool s5l_i2s_input_active(const s5l_i2s_t *s, const s5l_wm8991_t *c) {
+    /* Permission is not demand: capture only while RX and an ADC are on.
+     * Inspect registers rather than cached audio state, which can lag stop. */
+    return s && c && running(s, 1) && sample_bits(s, 1) &&
+           (c->regs[2] & 3u) && codec_rate(c, 1) != 0;
+}
 static float out_gain(unsigned v) {
     /* Output PGAs: codes 0..47 mute, 48=-73dB, 121=0dB, 127=+6dB. */
     v &= 127u;

@@ -129,7 +129,8 @@ SNAP_SIZE_GUARD(s5l_tvout_t,       12304, "snap_tvout");
 /* I2C/PMU guards are intentionally adjacent to their visitors. These values
  * describe host ABI layout only; the file format remains field-by-field. */
 SNAP_SIZE_GUARD(s5l_i2c_t,         320,   "snap_i2c");
-SNAP_SIZE_GUARD(s5l_pcf50635_t,    600,   "snap_pmu");
+/* Host RTC callback/context add 16 bytes, not serialized state. */
+SNAP_SIZE_GUARD(s5l_pcf50635_t,    616,   "snap_pmu");
 SNAP_SIZE_GUARD(s5l_wm8991_t,      496,   "snap_codec");
 SNAP_SIZE_GUARD(s5l_i2s_t,         728,   "snap_i2s + snap_i2s_audio");
 SNAP_SIZE_GUARD(s5l_spi_t,         240,   "snap_spi");
@@ -233,7 +234,7 @@ SNAP_SIZE_GUARD(s5l_stub_t,        56,    "snap_stubs");
  * retained from the destination on load. No serialized byte/version changes. */
 /* 258576 adds the nonserialized USB reset witness and alignment, measured
  * from the compiler. snap_usbotg() clears it on load; no format change. */
-SNAP_SIZE_GUARD(s5l8900_t,         258576, "snap_mach");
+SNAP_SIZE_GUARD(s5l8900_t,         258592, "snap_mach");
 #endif
 
 /* ---------------------------------------------------------------- the IO --- */
@@ -266,6 +267,8 @@ typedef struct {
     uint64_t  pos;          /* bytes produced/consumed so far (all modes)   */
     uint64_t  hash;         /* legacy payload hash over bytes passed through */
     snapshot_status_t err;
+    snapshot_cancel_fn cancel;
+    void *cancel_ctx;
 } sn_io_t;
 
 static bool sn_reading(const sn_io_t *io) {
@@ -287,6 +290,10 @@ static void sn_hash(sn_io_t *io, const uint8_t *p, size_t n) {
 
 static void sn_raw(sn_io_t *io, void *p, size_t n) {
     if (io->err != SNAP_OK) return;
+    if (io->cancel && io->cancel(io->cancel_ctx)) {
+        io->err = SNAP_ERR_CANCELLED;
+        return;
+    }
     switch (io->mode) {
         case SN_COUNT:
             break;
@@ -811,6 +818,8 @@ static void snap_i2c(sn_io_t *io, s5l_i2c_t *b) {
 }
 
 static void snap_pmu(sn_io_t *io, s5l_pcf50635_t *p) {
+    /* host_now/host_now_ctx belong to the current frontend, not the file.
+     * Keep the wire format compatible and re-sample on the next I2C read. */
     FBYTES(p->regs, PCF50635_NREG);
     FBYTES(p->written, PCF50635_NREG);
     F64(p->seconds);
@@ -1325,9 +1334,11 @@ static void snap_stubs(sn_io_t *io, s5l8900_t *m) {
 
 typedef void (*snap_fn_t)(sn_io_t *, s5l8900_t *);
 
-static uint64_t snap_measure(snap_fn_t fn, s5l8900_t *m) {
+static uint64_t snap_measure(snap_fn_t fn, s5l8900_t *m,
+                             snapshot_cancel_fn cancel, void *ctx) {
     sn_io_t c = {0};
     c.mode = SN_COUNT;
+    c.cancel = cancel; c.cancel_ctx = ctx;
     fn(&c, m);
     return c.pos;
 }
@@ -1335,7 +1346,7 @@ static uint64_t snap_measure(snap_fn_t fn, s5l8900_t *m) {
 static void snap_section(sn_io_t *io, uint32_t tag, snap_fn_t fn, s5l8900_t *m) {
     if (io->err != SNAP_OK) return;
     uint32_t t = tag, zero = 0;
-    uint64_t len = sn_reading(io) ? 0 : snap_measure(fn, m);
+    uint64_t len = sn_reading(io) ? 0 : snap_measure(fn, m, io->cancel, io->cancel_ctx);
 
     if (io->mode == SN_COUNT) { io->pos += 16 + len; return; }
 
@@ -1396,16 +1407,18 @@ static void snap_header(sn_io_t *io, uint64_t *payload_len) {
 /* ------------------------------------------------------------ save side --- */
 
 static snapshot_status_t snap_write(const s5l8900_t *cm, FILE *f,
-                                    uint8_t *buf, size_t cap, size_t *written) {
+                                    uint8_t *buf, size_t cap, size_t *written,
+                                    snapshot_cancel_fn cancel, void *ctx) {
     /* Casting away const is safe and confined: the visitors take a mutable
      * pointer because the SAME code loads, and in SN_SAVE/SN_COUNT mode not
      * one of them assigns through it. */
     s5l8900_t *m = (s5l8900_t *)(uintptr_t)cm;
 
-    uint64_t payload_len = snap_measure(snap_payload, m);
+    uint64_t payload_len = snap_measure(snap_payload, m, cancel, ctx);
 
     sn_io_t io = {0};
     io.mode = SN_SAVE; io.f = f; io.buf = buf; io.cap = cap;
+    io.cancel = cancel; io.cancel_ctx = ctx;
     io.hash = FNV64_OFFSET;
 
     snap_header(&io, &payload_len);
@@ -1507,13 +1520,18 @@ static bool snapshot_replace_file(const char *tmp, const char *path) {
 }
 
 snapshot_status_t snapshot_save(const s5l8900_t *m, const char *path) {
+    return snapshot_save_cancellable(m, path, NULL, NULL);
+}
+
+snapshot_status_t snapshot_save_cancellable(const s5l8900_t *m, const char *path,
+                                            snapshot_cancel_fn cancel, void *ctx) {
     if (!m || !path) return SNAP_ERR_IO;
     if (!snap_machine_valid(m)) return SNAP_ERR_CORRUPT;
     char *tmp = snapshot_temp_path(path, m);
     if (!tmp) return SNAP_ERR_NOMEM;
     FILE *f = fopen(tmp, "wb");
     if (!f) { free(tmp); return SNAP_ERR_IO; }
-    snapshot_status_t st = snap_write(m, f, NULL, 0, NULL);
+    snapshot_status_t st = snap_write(m, f, NULL, 0, NULL, cancel, ctx);
     if (fclose(f) != 0 && st == SNAP_OK) st = SNAP_ERR_IO;
     if (st == SNAP_OK && !snapshot_replace_file(tmp, path)) st = SNAP_ERR_IO;
     if (st != SNAP_OK) remove(tmp);
@@ -1528,13 +1546,13 @@ snapshot_status_t snapshot_save_mem(const s5l8900_t *m,
     if (!m) return SNAP_ERR_IO;
     if (!snap_machine_valid(m)) return SNAP_ERR_CORRUPT;
     s5l8900_t *mm = (s5l8900_t *)(uintptr_t)m;
-    uint64_t payload_len = snap_measure(snap_payload, mm);
+    uint64_t payload_len = snap_measure(snap_payload, mm, NULL, NULL);
     uint64_t total = SNAP_HEADER_LEN + payload_len + 8u;
     if (total > (uint64_t)(size_t)-1) return SNAP_ERR_NOMEM;
     uint8_t *buf = malloc((size_t)total);
     if (!buf) return SNAP_ERR_NOMEM;
     size_t written = 0;
-    snapshot_status_t st = snap_write(m, NULL, buf, (size_t)total, &written);
+    snapshot_status_t st = snap_write(m, NULL, buf, (size_t)total, &written, NULL, NULL);
     if (st != SNAP_OK || written != (size_t)total) {
         free(buf);
         return st == SNAP_OK ? SNAP_ERR_CORRUPT : st;
@@ -1730,6 +1748,7 @@ const char *snapshot_strerror(snapshot_status_t st) {
                                         "this machine (RAM size/base, NOR size, "
                                         "or the stub windows differ)";
         case SNAP_ERR_NOMEM:     return "out of memory";
+        case SNAP_ERR_CANCELLED: return "cancelled";
         default:                 return "unknown snapshot error";
     }
 }

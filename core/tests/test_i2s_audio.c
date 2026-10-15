@@ -170,7 +170,24 @@ static void test_clock_before_dma(void) {
     CHECK(s5l_i2s_clock_next(&m.i2s[0], m.tb_hz) == 0);
     s5l8900_free(&m);
 }
+static void test_microphone_demand(void) {
+    s5l8900_t m; capture_t cap = {0}; setup(&m, &cap);
+    s5l_i2s_t *s = &m.i2s[0];
+    CHECK(s5l_i2s_input_active(s, &m.codec));
+    s5l_i2s_write_width(s, 0x34, 0, 4);
+    CHECK(!s5l_i2s_input_active(s, &m.codec)); /* playback alone */
+    s5l_i2s_write_width(s, 0x34, 6, 4);
+    m.codec.regs[2] &= ~3u;
+    CHECK(!s5l_i2s_input_active(s, &m.codec)); /* ADCs powered down */
+    m.codec.regs[2] |= 1u;
+    CHECK(s5l_i2s_input_active(s, &m.codec)); /* mono capture */
+    m.codec.regs[8] = 0;
+    CHECK(!s5l_i2s_input_active(s, &m.codec)); /* no input clock */
+    CHECK(!s5l_i2s_input_active(NULL, &m.codec));
+    s5l8900_free(&m);
+}
 int main(void) {
+    test_microphone_demand();
     test_transport(); test_clock_and_snapshot(); test_real_dma_and_batched_time();
     test_clock_before_dma();
     printf("I2S PCM: %u checks, %u failures\n", checks, failures);

@@ -204,7 +204,8 @@ typedef enum {
     SNAP_ERR_CHECKSUM,   /* payload does not match its recorded hash         */
     SNAP_ERR_CORRUPT,    /* section framing or a field value is nonsense     */
     SNAP_ERR_GEOMETRY,   /* the machine's RAM/NOR/stub layout does not match */
-    SNAP_ERR_NOMEM
+    SNAP_ERR_NOMEM,
+    SNAP_ERR_CANCELLED
 } snapshot_status_t;
 
 const char *snapshot_strerror(snapshot_status_t st);
@@ -215,6 +216,11 @@ const char *snapshot_strerror(snapshot_status_t st);
  * destination, so a failed save leaves an earlier checkpoint intact.
  */
 snapshot_status_t snapshot_save(const s5l8900_t *m, const char *path);
+/* Cancellation must remain true once requested until this call returns.
+ * The old destination is preserved and the temporary writer is removed. */
+typedef bool (*snapshot_cancel_fn)(void *ctx);
+snapshot_status_t snapshot_save_cancellable(const s5l8900_t *m, const char *path,
+                                            snapshot_cancel_fn cancel, void *ctx);
 
 /*
  * Restore `m` from `path`. `m` must already be a live machine built by

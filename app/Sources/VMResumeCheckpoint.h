@@ -14,6 +14,7 @@
 
 #include "md_snapshot.h"
 #include "soc.h"
+#include "snapshot.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -37,6 +38,9 @@ bool vm_resume_checkpoint_save(const s5l8900_t *machine,
                                const external_md_sidecar_t *sidecar,
                                const char *work_directory,
                                char *detail, size_t detail_capacity);
+bool vm_resume_checkpoint_save_cancellable(const s5l8900_t *machine,
+    const external_md_sidecar_t *sidecar, const char *work_directory,
+    char *detail, size_t detail_capacity, snapshot_cancel_fn cancel, void *ctx);
 
 /* Force-off invalidation, called only after the machine and disk are closed.
  * Remove only the automatic restore marker, leaving disk and payloads intact.

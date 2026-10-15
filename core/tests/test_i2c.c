@@ -663,7 +663,45 @@ static void test_usb_supply_status_and_edges(void) {
     CHECK(status == 0u && event == PCF50635_INT1_USBREM, "USB disconnect edge");
 }
 
+static uint64_t test_wall_now(void *ctx) { return *(uint64_t *)ctx; }
+
+static void test_host_rtc_is_separate_and_restorable(void) {
+    s5l8900_t src, dst;
+    CHECK(s5l8900_init(&src, 0, 65536), "source init");
+    CHECK(s5l8900_init(&dst, 0, 65536), "target init");
+    uint64_t now = UINT64_C(1792108800); /* 2026-10-16 UTC */
+    s5l_pcf50635_set_host_clock(&src.pmu, test_wall_now, &now);
+    CHECK(src.pmu.seconds == now, "RTC not seeded from host");
+    uint64_t timer = src.timer.ticks, cycles = src.cpu.cycles;
+    s5l_pcf50635_tick(&src.pmu, UINT32_MAX);
+    CHECK(src.pmu.seconds == now && src.timer.ticks == timer && src.cpu.cycles == cycles,
+          "host RTC changed CPU/timebase or followed instruction time");
+    uint8_t *bytes = NULL; size_t size = 0;
+    CHECK(snapshot_save_mem(&src, &bytes, &size) == SNAP_OK, "RTC snapshot");
+    uint64_t target_now = now + 86400;
+    s5l_pcf50635_set_host_clock(&dst.pmu, test_wall_now, &target_now);
+    CHECK(snapshot_load_mem(&dst, bytes, size) == SNAP_OK, "RTC restore");
+    free(bytes);
+    CHECK(dst.pmu.host_now_ctx == &target_now, "restored foreign clock context");
+    s5l_i2c_slave_t slave;
+    s5l_pcf50635_bind(&dst.pmu, &slave);
+    slave.start(slave.ctx, false); slave.write(slave.ctx, PCF50635_RTCSC);
+    slave.start(slave.ctx, true);
+    CHECK(dst.pmu.seconds == target_now, "restored RTC did not catch up");
+    uint64_t latched = target_now;
+    target_now += 86400; /* host crosses midnight during a slow I2C read */
+    for (unsigned i = 0; i < 7; i++) (void)slave.read(slave.ctx);
+    CHECK(dst.pmu.seconds == latched, "RTC transaction mixed dates");
+    slave.start(slave.ctx, true);
+    CHECK(dst.pmu.seconds == target_now, "next read failed to refresh calendar");
+    target_now = 0;
+    slave.start(slave.ctx, true);
+    CHECK(dst.pmu.seconds == latched + 86400, "invalid host time reset RTC");
+    s5l8900_free(&src); s5l8900_free(&dst);
+}
+
 int main(void) {
+    test_host_rtc_is_separate_and_restorable();
     printf("S5LBox S5L8900 I2C / PCF50635 tests\n");
     test_reset_and_attachment_are_bounded();
     test_controller_register_edges();

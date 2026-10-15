@@ -21,10 +21,13 @@
 #if defined(S5LBOX_IOS_WFI_REALTIME_PACING)
 #include <errno.h>
 #endif
-#if defined(S5LBOX_IOS_WFI_REALTIME_PACING) || \
-    defined(S5LBOX_IOS_ACTIVE_REALTIME_CLOCK)
 #include <time.h>
-#endif
+
+static uint64_t vm_firmware_rtc_now(void *ctx) {
+    (void)ctx;
+    time_t now = time(NULL);
+    return now < 0 ? 0 : (uint64_t)now;
+}
 
 struct vm_firmware_boot {
     file_block_t     *media;
@@ -589,6 +592,13 @@ bool vm_firmware_boot_flush_overlay(vm_firmware_boot_t *boot) {
 vm_firmware_checkpoint_status_t vm_firmware_boot_save_resume(
         vm_firmware_boot_t *boot, const s5l8900_t *machine,
         char *detail, size_t detail_capacity) {
+    return vm_firmware_boot_save_resume_cancellable(boot, machine, detail,
+        detail_capacity, NULL, NULL);
+}
+
+vm_firmware_checkpoint_status_t vm_firmware_boot_save_resume_cancellable(
+        vm_firmware_boot_t *boot, const s5l8900_t *machine,
+        char *detail, size_t detail_capacity, bool (*cancel)(void *), void *ctx) {
     set_detail(detail, detail_capacity, "");
     if (!boot || !machine || !boot->bridges || !boot->media ||
         !boot->bridges->installed || !boot->work_directory[0] ||
@@ -627,9 +637,9 @@ vm_firmware_checkpoint_status_t vm_firmware_boot_save_resume(
     memcpy(sidecar.guard_tail, boot->bridges->raw.guard_tail,
            sizeof sidecar.guard_tail);
 
-    if (!vm_resume_checkpoint_save(machine, &sidecar,
+    if (!vm_resume_checkpoint_save_cancellable(machine, &sidecar,
                                    boot->work_directory,
-                                   detail, detail_capacity))
+                                   detail, detail_capacity, cancel, ctx))
         return VM_FW_CHECKPOINT_ERROR;
     return VM_FW_CHECKPOINT_OK;
 }
@@ -1852,6 +1862,10 @@ bool vm_firmware_boot_start(vm_firmware_boot_t *boot,
 
     /* The exact-kernel gate has passed and all reset/restore branches have
      * finished. Demand-paged audio code is checked on its first FETCH walk. */
+    /* Calendar time is independent of emulation speed and pause accounting.
+     * Reinstall after every cold boot, watchdog restart and snapshot restore.
+     * This supplies the RTC; it does not overwrite a manual guest kernel date. */
+    s5l_pcf50635_set_host_clock(&machine->pmu, vm_firmware_rtc_now, NULL);
     vm_firmware_audio_enable(machine);
 
 #if defined(S5LBOX_IOS3_HLE_EXPERIMENT)

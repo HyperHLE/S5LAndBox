@@ -63,6 +63,7 @@ void s5l_pcf50635_set_time(s5l_pcf50635_t *pmu,
 }
 
 void s5l_pcf50635_tick(s5l_pcf50635_t *pmu, uint32_t ticks) {
+    if (pmu && pmu->host_now) return;
     if (!pmu || !pmu->tick_hz) return;
     /* The previous implementation used a 32-bit `+= ticks`; UINT32_MAX plus
      * an existing remainder wrapped and moved the RTC backwards relative to
@@ -162,10 +163,26 @@ void s5l_pcf50635_set_usb(s5l_pcf50635_t *pmu, bool connected) {
     pmu->regs[PCF50635_INT1] |= connected ? PCF50635_INT1_USBINS : PCF50635_INT1_USBREM;
 }
 
+static void sync_host_clock(s5l_pcf50635_t *pmu) {
+    if (!pmu->host_now) return;
+    uint64_t seconds = pmu->host_now(pmu->host_now_ctx);
+    /* A failed/unrepresentable host clock must not reset a valid guest RTC. */
+    if (seconds >= PCF50635_MIN_TIME && seconds <= PCF50635_MAX_TIME)
+        s5l_pcf50635_set_time(pmu, seconds);
+}
+
+void s5l_pcf50635_set_host_clock(s5l_pcf50635_t *pmu, s5l_rtc_now_fn now, void *ctx) {
+    if (!pmu) return;
+    pmu->host_now = now;
+    pmu->host_now_ctx = ctx;
+    sync_host_clock(pmu);
+}
+
 static bool pmu_start(void *ctx, bool read) {
     s5l_pcf50635_t *pmu = ctx;
     if (!pmu) return false;
     pmu->reading = read;
+    if (read) sync_host_clock(pmu);
     if (!read) pmu->have_ptr = false;
     return true;
 }

@@ -1313,7 +1313,36 @@ static void test_v32_usb_migration(void) {
     s5l8900_free(&a); s5l8900_free(&b);
 }
 
+typedef struct { unsigned calls, limit; } cancel_fixture_t;
+static bool cancel_snapshot(void *ctx) {
+    cancel_fixture_t *f = ctx;
+    return ++f->calls >= f->limit;
+}
+static void test_cancelled_save_preserves_destination(void) {
+    const char *path = "snapshot-cancel-fixture.bin";
+    s5l8900_t m, restored;
+    CHECK(s5l8900_init(&m, 0, RAMSZ), "cancel source");
+    CHECK(s5l8900_init(&restored, 0, RAMSZ), "cancel target");
+    m.cpu.r[0] = 123;
+    cancel_fixture_t f = {0, UINT32_MAX};
+    CHECK(snapshot_save_cancellable(&m, path, cancel_snapshot, &f) == SNAP_OK,
+          "uncancelled writer failed");
+    unsigned total = f.calls;
+    const unsigned limits[] = {1, total / 2, total};
+    m.cpu.r[0] = 456;
+    for (unsigned i = 0; i < 3; i++) {
+        f.calls = 0; f.limit = limits[i];
+        CHECK(snapshot_save_cancellable(&m, path, cancel_snapshot, &f) == SNAP_ERR_CANCELLED,
+              "cancel at %u was ignored", f.limit);
+        CHECK(snapshot_load(&restored, path) == SNAP_OK && restored.cpu.r[0] == 123,
+              "cancellation replaced the previous complete file");
+    }
+    remove(path);
+    s5l8900_free(&m); s5l8900_free(&restored);
+}
+
 int main(void) {
+    test_cancelled_save_preserves_destination();
     printf("S5LBox snapshot tests\n");
     test_mbx_ta_fifo_midstream_round_trip();
     test_cpu_state_round_trips();

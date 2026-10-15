@@ -29,6 +29,7 @@
 
 static unsigned checks;
 static unsigned failures;
+static bool cancel_save(void *ctx) { (void)ctx; return true; }
 
 #define CHECK(condition, ...) do {                                         \
     checks++;                                                              \
@@ -271,6 +272,12 @@ int main(void) {
           "failed save left a restore marker armed");
     CHECK(detail[0] != '\0', "failed save did not explain itself");
 
+    /* A user force-off cancels writing, never leaves a resumable transaction. */
+    CHECK(write_marker(), "could not seed marker for cancellation");
+    CHECK(!vm_resume_checkpoint_save_cancellable(&source, &sidecar, FIXTURE_DIR,
+        detail, sizeof detail, cancel_save, NULL), "cancelled save succeeded");
+    CHECK(file_bytes(marker) == 0u && strstr(detail, "cancelled"),
+        "cancelled save left a marker or hid cancellation: %s", detail);
     s5l8900_free(&source);
     s5l8900_free(&restored);
     remove_checkpoint_files();

@@ -102,7 +102,8 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
 @interface EmulatorViewController () <VMButtonBarDelegate,
                                       VMFramebufferViewTouchDelegate,
                                       VMSnapshotListDelegate,
-                                      VMDeviceControlsDelegate>
+                                      VMDeviceControlsDelegate,
+                                      UIGestureRecognizerDelegate>
 - (NSString *)snapshotsDirectory;
 - (void)startEmulator;
 - (void)launchEngine;
@@ -119,6 +120,7 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
 - (void)appWillEnterForeground:(NSNotification *)notification;
 - (void)appDidBecomeActive:(NSNotification *)notification;
 - (void)settingsDidChange:(NSNotification *)notification;
+- (BOOL)toggleHostControls;
 - (void)blockSystemPopGestures;
 - (void)restoreSystemPopGestures;
 - (void)beginCheckpointBackgroundTask;
@@ -221,6 +223,9 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
     BOOL               _shuttingDown;
     BOOL               _forcePowerOffRequested;
     BOOL               _forcePoweringOff;
+    BOOL               _homeOnlyInterface;
+    BOOL               _controlsRevealed;
+    BOOL               _launchShutdownRequested;
     BOOL               _packageSetupRequested;
     BOOL               _restoreIdleTimer;
     BOOL               _previousIdleTimerDisabled;
@@ -253,6 +258,7 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     [self blockSystemPopGestures];
+    [self applyInterfaceStyle];
 }
 
 - (void)viewDidAppear:(BOOL)animated {
@@ -260,11 +266,21 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
     /* UINavigationController may finish installing its iOS 26 recognizer as
      * the push completes. Re-run the idempotent block after that transition. */
     [self blockSystemPopGestures];
+    if (_homeOnlyInterface && !self.presentedViewController &&
+        ![NSUserDefaults.standardUserDefaults boolForKey:@"VMHomeOnlyHintSeen"]) {
+        [NSUserDefaults.standardUserDefaults setBool:YES forKey:@"VMHomeOnlyHintSeen"];
+        UIAlertController *hint = [UIAlertController alertControllerWithTitle:@"Home only"
+            message:@"Tap outside the guest display to show or hide controls."
+            preferredStyle:UIAlertControllerStyleAlert];
+        [hint addAction:[UIAlertAction actionWithTitle:@"Got it" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:hint animated:YES completion:nil];
+    }
 }
 
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
     [_homeButton releasePress];
+    [self.navigationController setNavigationBarHidden:NO animated:NO];
 }
 
 - (void)viewDidDisappear:(BOOL)animated {
@@ -471,6 +487,7 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
 
 - (void)launchEngine {
     if (!_frame) return;
+    _launchShutdownRequested = NO;
 
     _engine = [[VMEngine alloc] initWithInstanceID:self.instanceID];
     if (![_engine start]) {
@@ -501,11 +518,6 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
     if (note.length) {
         _lastBringUpNote = note;      /* -tick: watches for it to CHANGE */
         [self reportBringUpProblem:note];
-    }
-    if (self.guestShutdownCompletion && [_engine isRunningFirmware]) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (self.guestShutdownCompletion) [self shutDownTapped:nil];
-        });
     }
 }
 
@@ -588,7 +600,7 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
     const BOOL busy = _savingCheckpoint || _restarting || _shuttingDown || _forcePowerOffRequested;
     /* Normal shutdown may never get a working guest UI. Keep its escape hatch. */
     self.navigationItem.leftBarButtonItem.enabled =
-        !_savingCheckpoint && !_restarting && !_forcePoweringOff;
+        !_forcePoweringOff;
     _screen.userInteractionEnabled = !busy;
     _keys.userInteractionEnabled = !busy;
     _toolbar.userInteractionEnabled = !busy;
@@ -604,8 +616,8 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
 }
 
 - (void)backTapped:(id)sender {
-    if (_savingCheckpoint || _restarting || _forcePoweringOff) return;
-    if (_shuttingDown || _forcePowerOffRequested) {
+    if (_forcePoweringOff) return;
+    if (_savingCheckpoint || _restarting || _shuttingDown || _forcePowerOffRequested) {
         [self forcePowerOffTapped:sender];
         return;
     }
@@ -725,6 +737,7 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
     _forcePowerOffRequested = YES; /* also suppress any queued shutdown callback */
     _forcePoweringOff = YES;
     _shuttingDown = NO;
+    _restarting = NO;
     self.guestShutdownCompletion = nil; /* NEVER continue jailbreak after force-off */
     if (!_restoreIdleTimer) {
         _previousIdleTimerDisabled = [UIApplication sharedApplication].idleTimerDisabled;
@@ -792,7 +805,7 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
     [_engine saveCheckpointAndStopWithCompletion:
         ^(BOOL saved, NSString *message) {
             EmulatorViewController *strongSelf = weakSelf;
-            if (!strongSelf) return;
+            if (!strongSelf || strongSelf->_forcePowerOffRequested) return;
             [strongSelf endCheckpointBackgroundTask];
             if (saved) {
                 [strongSelf.navigationController
@@ -1040,7 +1053,7 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
         EmulatorViewController *strongSelf = weakSelf;
         VMEngine *stoppedEngine = weakOldEngine;
         if (!strongSelf || !stoppedEngine ||
-            strongSelf->_engine != stoppedEngine) return;
+            strongSelf->_engine != stoppedEngine || strongSelf->_forcePowerOffRequested) return;
 
         [strongSelf appendConsole:[stoppedEngine takePendingConsoleText]];
         strongSelf->_engine = nil;
@@ -1123,7 +1136,7 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
 - (BOOL)runtimeCanForcePowerOff {
     /* No guest-ready/isRunning/touch requirement: half-booted and halted guests
      * must be stoppable too. Checkpoints/restarts retain their disk ownership. */
-    return _engine && !_savingCheckpoint && !_restarting && !_forcePoweringOff &&
+    return _engine && !_forcePoweringOff &&
         self.navigationController.topViewController == self;
 }
 - (BOOL)runtimeCanShutDown {
@@ -1279,6 +1292,11 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
     __weak EmulatorViewController *weakSelf = self;
     _homeButton.pressChanged = ^(BOOL pressed) { [weakSelf setDeviceButton:VMButtonHome pressed:pressed]; };
     [_dock addSubview:_homeButton];
+    UITapGestureRecognizer *marginTap = [[UITapGestureRecognizer alloc]
+        initWithTarget:self action:@selector(toggleHostControls)];
+    marginTap.delegate = self;
+    marginTap.cancelsTouchesInView = NO;
+    [self.view addGestureRecognizer:marginTap];
     _machineTitle = [UILabel new];
     _machineTitle.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
     _machineTitle.textAlignment = NSTextAlignmentCenter;
@@ -1323,6 +1341,17 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
 - (void)applyInterfaceStyle {
     [_homeButton releasePress];
     _legacyInterface = VMSettings.sharedSettings.legacyEmulatorUI;
+    BOOL homeOnly = !_legacyInterface && VMSettings.sharedSettings.homeOnlyEmulatorUI;
+    if (homeOnly != _homeOnlyInterface) _controlsRevealed = NO;
+    _homeOnlyInterface = homeOnly;
+    BOOL minimal = homeOnly && !_controlsRevealed;
+    if (self.navigationController.topViewController == self)
+        [self.navigationController setNavigationBarHidden:minimal animated:NO];
+    _settingsButton.hidden = _deviceControlsButton.hidden = minimal;
+    _dock.backgroundColor = minimal ? UIColor.clearColor : UIColor.secondarySystemBackgroundColor;
+    _homeButton.accessibilityCustomActions = homeOnly ? @[
+        [[UIAccessibilityCustomAction alloc] initWithName:minimal ? @"Show controls" : @"Hide controls"
+            target:self selector:@selector(toggleHostControls)]] : nil;
     _keys.hidden = _stats.hidden = _toolbar.hidden = !_legacyInterface;
     _dock.hidden = _legacyInterface;
     _screen.layer.borderWidth = _legacyInterface ? 1 : 0.5;
@@ -1337,13 +1366,32 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
     [self setNeedsStatusBarAppearanceUpdate];
 }
 
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gesture shouldReceiveTouch:(UITouch *)touch {
+    (void)gesture;
+    if (!_homeOnlyInterface || self.presentedViewController) return NO;
+    UIView *view = touch.view;
+    if ([view isDescendantOfView:_screen] || [view isDescendantOfView:_prepareScrim] ||
+        [view isDescendantOfView:_console]) return NO;
+    for (; view && view != self.view; view = view.superview)
+        if ([view isKindOfClass:UIControl.class]) return NO;
+    return YES;
+}
+
+- (BOOL)toggleHostControls {
+    if (!_homeOnlyInterface) return NO;
+    _controlsRevealed = !_controlsRevealed;
+    [self applyInterfaceStyle];
+    UIAccessibilityPostNotification(UIAccessibilityLayoutChangedNotification, _homeButton);
+    return YES;
+}
+
 - (void)refreshModernControls {
     if (!_dock || _legacyInterface) return;
     _homeButton.enabled = ![self deviceButtonUnavailableReason].length && ![_engine isPaused];
     NSString *status = _forcePowerOffRequested ? @"Powering off"
         : _savingCheckpoint ? @"Saving" : _shuttingDown ? @"Shutting down"
         : _restarting ? @"Restarting" : [_engine isPreparingRootFilesystem] ? @"Preparing"
-        : !_engine ? @"Starting" : [_engine isPaused] ? @"Paused"
+        : !_engine || [_engine isStarting] ? @"Starting" : [_engine isPaused] ? @"Paused"
         : [_engine isRunning] ? @"Running" : @"Stopped";
     _machineTitle.text = self.title ?: @"Machine";
     _machineStatus.text = status;
@@ -1386,7 +1434,8 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
     }
     _homeButton.layer.borderColor = UIColor.systemBlueColor.CGColor;
     _screen.layer.borderColor = UIColor.separatorColor.CGColor;
-    BOOL inlineConsole = _sessionInlineConsole && VMSettings.sharedSettings.developerMode;
+    BOOL inlineConsole = _sessionInlineConsole && VMSettings.sharedSettings.developerMode &&
+        (!_homeOnlyInterface || _controlsRevealed);
     CGFloat band = inlineConsole ? floor(area.size.height * 0.62) : area.size.height;
     CGFloat scale = MAX(0, MIN(area.size.width / VM_FB_WIDTH, band / VM_FB_HEIGHT));
     CGFloat width = VM_FB_WIDTH * scale, height = VM_FB_HEIGHT * scale;
@@ -1564,6 +1613,12 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
 
     // Keep status work at its previous cadence, independent of pixel updates.
     if ((++_ticks % 16) == 0) {
+        if (!_launchShutdownRequested && self.guestShutdownCompletion &&
+            [_engine isRunningFirmware] && [_engine isRunning] &&
+            !_forcePowerOffRequested && !_shuttingDown) {
+            _launchShutdownRequested = YES;
+            [self shutDownTapped:nil];
+        }
         if (self.jailbreakNotice.length && self.view.window &&
             self.navigationController.topViewController == self &&
             UIApplication.sharedApplication.applicationState == UIApplicationStateActive &&

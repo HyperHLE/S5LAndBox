@@ -278,6 +278,13 @@ bool vm_resume_checkpoint_save(const s5l8900_t *machine,
                                const external_md_sidecar_t *sidecar,
                                const char *work_directory,
                                char *detail, size_t detail_capacity) {
+    return vm_resume_checkpoint_save_cancellable(machine, sidecar, work_directory,
+        detail, detail_capacity, NULL, NULL);
+}
+
+bool vm_resume_checkpoint_save_cancellable(const s5l8900_t *machine,
+    const external_md_sidecar_t *sidecar, const char *work_directory,
+    char *detail, size_t detail_capacity, snapshot_cancel_fn cancel, void *ctx) {
     resume_detail(detail, detail_capacity, "");
     if (!machine || !sidecar || !work_directory || !*work_directory) {
         resume_detail(detail, detail_capacity,
@@ -330,8 +337,9 @@ bool vm_resume_checkpoint_save(const s5l8900_t *machine,
         return false;
     }
 
-    snapshot_status_t saved = snapshot_save(machine, state_partial);
+    snapshot_status_t saved = snapshot_save_cancellable(machine, state_partial, cancel, ctx);
     if (saved != SNAP_OK) {
+        (void)remove(state_partial);
         (void)remove(bridge_partial);
         (void)snprintf(detail, detail_capacity,
                        "The machine checkpoint could not be written: %s.",
@@ -339,7 +347,7 @@ bool vm_resume_checkpoint_save(const s5l8900_t *machine,
         if (detail && detail_capacity) detail[detail_capacity - 1u] = '\0';
         return false;
     }
-    if (!resume_sync_existing(state_partial)) {
+    if ((cancel && cancel(ctx)) || !resume_sync_existing(state_partial)) {
         (void)remove(state_partial);
         (void)remove(bridge_partial);
         resume_detail(detail, detail_capacity,
@@ -358,6 +366,10 @@ bool vm_resume_checkpoint_save(const s5l8900_t *machine,
     }
 
     static const char request[] = "S5LBox automatic resume 1\n";
+    if (cancel && cancel(ctx)) {
+        resume_detail(detail, detail_capacity, "The checkpoint was cancelled.");
+        return false;
+    }
     if (!resume_write_durable(marker_partial, request, sizeof request - 1u) ||
         !resume_replace(marker_partial, marker)) {
         (void)remove(marker_partial);

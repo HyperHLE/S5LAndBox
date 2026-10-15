@@ -34,6 +34,7 @@ static NSString *const kVMPauseInBackground = @"vm.diag.pauseInBackground";
 static NSString *const kVMDeveloperMode = @"VMDeveloperMode";
 static NSString *const kVMInlineConsole = @"VMInlineConsole";
 static NSString *const kVMLegacyEmulatorUI = @"VMLegacyEmulatorUI";
+static NSString *const kVMHomeOnlyEmulatorUI = @"VMHomeOnlyEmulatorUI";
 static NSString *const kVMPackagesWithJailbreak = @"VMPackagesWithJailbreak";
 static NSString *const kVMGuestMicrophoneEnabled = @"VMGuestMicrophoneEnabled";
 static NSString *const kVMNewMachineDiskSizeGiB = @"VMNewMachineDiskSizeGiB";
@@ -87,6 +88,11 @@ static const uint64_t kVMInstructionCaps[] = {
 }
 
 - (BOOL)legacyEmulatorUI { return [[self defaults] boolForKey:kVMLegacyEmulatorUI]; }
+- (BOOL)homeOnlyEmulatorUI { return [[self defaults] boolForKey:kVMHomeOnlyEmulatorUI]; }
+- (void)setHomeOnlyEmulatorUI:(BOOL)homeOnly {
+    [[self defaults] setBool:homeOnly forKey:kVMHomeOnlyEmulatorUI];
+    [self publishChange];
+}
 - (void)setLegacyEmulatorUI:(BOOL)legacy {
     [[self defaults] setBool:legacy forKey:kVMLegacyEmulatorUI];
     [self publishChange];
@@ -527,6 +533,7 @@ static const uint64_t kVMInstructionCaps[] = {
     [defaults removeObjectForKey:kVMInstructionCapKey];
     [defaults removeObjectForKey:kVMPauseInBackground];
     [defaults removeObjectForKey:kVMLegacyEmulatorUI];
+    [defaults removeObjectForKey:kVMHomeOnlyEmulatorUI];
     [defaults removeObjectForKey:kVMPackagesWithJailbreak];
     [defaults removeObjectForKey:kVMGuestMicrophoneEnabled];
     [defaults removeObjectForKey:kVMNewMachineDiskSizeGiB];

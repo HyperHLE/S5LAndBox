@@ -60,6 +60,10 @@
 // pause latency short without paying the flag check too often.
 static const unsigned kVMChunkInstructions = 100000;
 
+static bool vm_engine_cancelled(void *ctx) {
+    return atomic_load_explicit((atomic_bool *)ctx, memory_order_relaxed);
+}
+
 // Match the panel and the UI display link. Deadlines retain their phase across
 // bounded guest chunks; unchanged pixels do not become fresh snapshots.
 static const double kVMPublishInterval = 1.0 / 60.0;
@@ -128,6 +132,9 @@ static uint64_t vm_now_ns(void) {
 // Declared up front so every call below is checked against a prototype.
 @interface VMEngine ()
 - (void)threadMain:(id)unused;
+- (void)startupMain:(id)unused;
+- (BOOL)prepareMachine;
+- (void)finishFailedStartup;
 - (void)publishRetired:(uint64_t)retired
                   rate:(double)instantRate
                 status:(arm_status_t)status;
@@ -200,6 +207,7 @@ static double vm_engine_now_seconds(void) {
     NSThread        *_thread;
     pthread_mutex_t  _lock;
     BOOL             _lockReady;
+    atomic_bool      _cancelRequested;
 
     // Everything below is guarded by _lock.
     uint8_t         *_snapshot;      // VM_FB_BYTES, last published frame
@@ -294,6 +302,7 @@ static double vm_engine_now_seconds(void) {
     if (!self) return nil;
     if (pthread_mutex_init(&_lock, NULL) != 0) return nil;
     _lockReady = YES;
+    atomic_init(&_cancelRequested, false);
     _pending = [NSMutableString string];
     if (!_pending) return nil;
     _status  = @"idle";
@@ -760,6 +769,7 @@ static double vm_engine_now_seconds(void) {
         return NO;
     }
     _state = VMEngineStateStarting;
+    atomic_store_explicit(&_cancelRequested, false, memory_order_relaxed);
     _stopRequested = NO;
     _stopCompletion = nil;
     _checkpointRequested = NO;
@@ -800,9 +810,49 @@ static double vm_engine_now_seconds(void) {
     memset(&_momentaryHolds, 0, sizeof _momentaryHolds);
     _droppedButtonLogged = NO;
     _status = @"starting";
-    BOOL needSnapshot = (_snapshot == NULL);
     [self publishBlankSnapshotLocked];
+    NSThread *thread = [[NSThread alloc] initWithTarget:self
+        selector:@selector(startupMain:) object:nil];
+    _thread = thread;
     pthread_mutex_unlock(&_lock);
+
+    if (!thread) {
+        [self finishFailedStartup];
+        return NO;
+    }
+    thread.name = @"S5LBox emulator";
+    thread.qualityOfService = NSQualityOfServiceUserInitiated;
+    thread.stackSize = 512 * 1024;
+    [thread start];
+    return YES;
+}
+
+- (void)finishFailedStartup {
+    pthread_mutex_lock(&_lock);
+    VMEngineStopCompletion stopped = _stopCompletion;
+    _stopCompletion = nil;
+    if (!_stopRequested && !_bringUpNote.length)
+        _bringUpNote = @"The machine could not be started.";
+    if (_stopRequested) _status = @"stopped";
+    _state = VMEngineStateIdle;
+    _stopRequested = NO;
+    _thread = nil;
+    _paused = NO;
+    _pauseReason = nil;
+    pthread_mutex_unlock(&_lock);
+    if (stopped) dispatch_async(dispatch_get_main_queue(), stopped);
+}
+
+- (void)startupMain:(id)unused {
+    (void)unused;
+    @autoreleasepool {
+        if ([self prepareMachine]) [self threadMain:nil];
+        else [self finishFailedStartup];
+    }
+}
+
+- (BOOL)prepareMachine {
+    BOOL needSnapshot = (_snapshot == NULL);
 
     if (needSnapshot) {
         uint8_t *snapshot = calloc(1, VM_FB_BYTES);
@@ -810,8 +860,6 @@ static double vm_engine_now_seconds(void) {
         _snapshot = snapshot;
         [self publishBlankSnapshotLocked];
         if (!snapshot) {
-            _state = VMEngineStateIdle;
-            _stopRequested = NO;
             _paused = NO;
             _status = @"out of memory";
         }
@@ -821,22 +869,8 @@ static double vm_engine_now_seconds(void) {
 
     pthread_mutex_lock(&_lock);
     BOOL cancelledEarly = (_state == VMEngineStateStopping || _stopRequested);
-    VMEngineStopCompletion earlyStopCompletion = nil;
-    if (cancelledEarly) {
-        earlyStopCompletion = _stopCompletion;
-        _stopCompletion = nil;
-        _state = VMEngineStateIdle;
-        _stopRequested = NO;
-        _paused = NO;
-        _pauseReason = nil;
-        _status = @"stopped";
-    }
     pthread_mutex_unlock(&_lock);
-    if (cancelledEarly) {
-        if (earlyStopCompletion)
-            dispatch_async(dispatch_get_main_queue(), earlyStopCompletion);
-        return NO;
-    }
+    if (cancelledEarly) return NO;
 
     // Measured either side of the allocation so the guest DRAM's real cost is
     // a number on the screen rather than an assertion in a comment.
@@ -844,8 +878,6 @@ static double vm_engine_now_seconds(void) {
 
     if (!s5l8900_init(&_machine, VM_GUEST_RAM_BASE, VM_GUEST_RAM_SIZE)) {
         pthread_mutex_lock(&_lock);
-        _state = VMEngineStateIdle;
-        _stopRequested = NO;
         _status = @"allocation failed";
         pthread_mutex_unlock(&_lock);
         [self appendConsole:@"[vm] could not allocate 128 MB of guest DRAM\n"];
@@ -855,8 +887,6 @@ static double vm_engine_now_seconds(void) {
         s5l8900_free(&_machine);
         vm_firmware_boot_destroy(&_firmwareBoot);
         pthread_mutex_lock(&_lock);
-        _state = VMEngineStateIdle;
-        _stopRequested = NO;
         _status = @"guest setup failed";
         pthread_mutex_unlock(&_lock);
         [self appendConsole:@"[vm] could not install the guest payload\n"];
@@ -895,30 +925,10 @@ static double vm_engine_now_seconds(void) {
         vm_guest_fb_pa(VM_GUEST_RAM_BASE, VM_GUEST_RAM_SIZE),
         before / 1048576.0, after / 1048576.0]];
 
-    NSThread *thread = [[NSThread alloc] initWithTarget:self
-                                               selector:@selector(threadMain:)
-                                                 object:nil];
-    if (!thread) {
-        [_usbTransport endSession:@"The emulator thread could not be started."];
-        s5l8900_free(&_machine);
-        vm_firmware_boot_destroy(&_firmwareBoot);
-        pthread_mutex_lock(&_lock);
-        _state = VMEngineStateIdle;
-        _stopRequested = NO;
-        _status = @"thread allocation failed";
-        pthread_mutex_unlock(&_lock);
-        [self appendConsole:@"[vm] could not allocate the emulator thread\n"];
-        return NO;
-    }
-    thread.name = @"S5LBox emulator";
-    thread.qualityOfService = NSQualityOfServiceUserInitiated;
-    thread.stackSize = 512 * 1024;
-
     pthread_mutex_lock(&_lock);
     BOOL cancelled = (_state == VMEngineStateStopping || _stopRequested);
     if (!cancelled) {
         _machineReady = YES;
-        _thread = thread;
         _state = VMEngineStateRunning;
     }
     pthread_mutex_unlock(&_lock);
@@ -927,21 +937,9 @@ static double vm_engine_now_seconds(void) {
         [_usbTransport endSession:@"Machine startup was canceled."];
         s5l8900_free(&_machine);
         vm_firmware_boot_destroy(&_firmwareBoot);
-        pthread_mutex_lock(&_lock);
-        VMEngineStopCompletion cancelledStopCompletion = _stopCompletion;
-        _stopCompletion = nil;
-        _state = VMEngineStateIdle;
-        _stopRequested = NO;
-        _paused = NO;
-        _pauseReason = nil;
-        _status = @"stopped";
-        pthread_mutex_unlock(&_lock);
-        if (cancelledStopCompletion)
-            dispatch_async(dispatch_get_main_queue(), cancelledStopCompletion);
         return NO;
     }
 
-    [thread start];
     return YES;
 }
 
@@ -971,6 +969,7 @@ static double vm_engine_now_seconds(void) {
     if (_state == VMEngineStateStarting || _state == VMEngineStateRunning ||
         _state == VMEngineStateCheckpointing) {
         _stopRequested = YES;
+        atomic_store_explicit(&_cancelRequested, true, memory_order_relaxed);
         _paused = NO;
         _pauseReason = nil;
         _state = VMEngineStateStopping;
@@ -1067,7 +1066,7 @@ static double vm_engine_now_seconds(void) {
      * Only when it is actually running: -setPaused: is also reached on the way
      * to the background, and a machine that has already halted must keep
      * saying "halted" rather than being relabelled as merely paused. */
-    if (_state == VMEngineStateRunning && paused != _paused) {
+    if ((_state == VMEngineStateRunning || _state == VMEngineStateStarting) && paused != _paused) {
         _rate = 0.0;
         /* Service is intentionally stopped while the guest is paused. A rate
          * from the last active one-second window would otherwise remain on
@@ -1105,6 +1104,13 @@ static double vm_engine_now_seconds(void) {
                     _state == VMEngineStateCheckpointing);
     pthread_mutex_unlock(&_lock);
     return running;
+}
+
+- (BOOL)isStarting {
+    pthread_mutex_lock(&_lock);
+    BOOL starting = _state == VMEngineStateStarting;
+    pthread_mutex_unlock(&_lock);
+    return starting;
 }
 
 - (void)setInstructionCap:(uint64_t)cap {
@@ -1797,6 +1803,8 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
     _machine.i2s[0].frame = vm_audio_guest_frame;
     _machine.i2s[0].frame_ctx = audioBuffer;
     BOOL audioRunning = NO;
+    BOOL guestRecording = NO;
+    [_audio setGuestRecording:NO];
 
     while (YES) {
         @autoreleasepool {
@@ -1812,6 +1820,12 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
                 break;
             }
             BOOL wantsAudio = !paused && !checkpoint;
+            BOOL wantsMicrophone = wantsAudio &&
+                s5l_i2s_input_active(&_machine.i2s[0], &_machine.codec);
+            if (wantsMicrophone != guestRecording) {
+                guestRecording = wantsMicrophone;
+                [_audio setGuestRecording:guestRecording];
+            }
             if (wantsAudio != audioRunning) {
                 audioRunning = wantsAudio;
                 vm_audio_buffer_active(audioBuffer, audioRunning);
@@ -1868,8 +1882,9 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
                      * UART bytes already shown on this run would be present
                      * again after restore and appear twice. */
                     [self publishRetired:retired rate:0.0 status:ARM_OK];
-                    saved = vm_firmware_boot_save_resume(
-                        _firmwareBoot, &_machine, why, sizeof why);
+                    saved = vm_firmware_boot_save_resume_cancellable(
+                        _firmwareBoot, &_machine, why, sizeof why,
+                        vm_engine_cancelled, &_cancelRequested);
                 } else if (hostTimedOut || guestTimedOut) {
                     (void)snprintf(
                         why, sizeof why,
@@ -1895,7 +1910,7 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
                     VMEngineCheckpointCompletion failed = _checkpointCompletion;
                     _checkpointCompletion = nil;
                     _checkpointRequested = NO;
-                    _state = VMEngineStateRunning;
+                    if (!_stopRequested) _state = VMEngineStateRunning;
                     _status = _paused ? @"paused" : @"running (save failed)";
                     pthread_mutex_unlock(&_lock);
                     checkpointInputPrepared = NO;
@@ -2725,7 +2740,7 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
      * a second flag: two sources of truth is how a UI ends up claiming one
      * thing in the status bar and another in an alert. */
     pthread_mutex_lock(&_lock);
-    BOOL firmware = _firmwareBoot != NULL && _mode.length > 0 &&
+    BOOL firmware = _machineReady && _mode.length > 0 &&
                     ![_mode isEqualToString:@"built-in test guest"];
     pthread_mutex_unlock(&_lock);
     return firmware;
