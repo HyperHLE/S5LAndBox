@@ -174,7 +174,6 @@ static double vm_engine_now_seconds(void) {
     /* The provisioning copy's byte counters; see -rootFilesystemProgress. */
     uint64_t         _prepareDone;
     uint64_t         _prepareTotal;
-    BOOL             _preparedFirmwareBootRequest;
     BOOL             _machineReady;
 
     /*
@@ -498,49 +497,29 @@ static double vm_engine_now_seconds(void) {
             note = @"Not enough memory to start Apple's kernel.";
         }
     } else if (state.readiness == VM_FW_BOOT_NEEDS_WORK_IMAGE) {
-        /*
-         * The three imported files are here but the writable root filesystem
-         * has not been made. That copy is ~450 MB and takes long enough to be
-         * killed by the watchdog if it ran here, so it runs on its own thread
-         * and this machine temporarily gets the demo guest. On success, the
-         * view consumes a one-shot request and uses the normal stop/restart
-         * path to boot the real kernel after ownership is safely released.
-         */
+        /* Startup already runs on the owning worker. Keep disk preparation
+         * on that same worker so stop cannot release ownership while a second
+         * thread is still publishing the image. Cancellation removes only the
+         * unpublished temporary; no synthetic guest or restart is needed. */
         note = @"Preparing this machine's writable disk. iPhone OS will start "
                @"automatically when preparation finishes.";
-        BOOL alreadyRunning;
         pthread_mutex_lock(&_lock);
-        alreadyRunning = _preparingRootFS;
         _preparingRootFS = YES;
         pthread_mutex_unlock(&_lock);
-        if (!alreadyRunning) {
-            /* Two strings rather than the C struct: NSThread wants an object,
-             * and the worker rebuilds the struct itself so nothing on the
-             * emulator side has to outlive this stack frame.
-             * -stringWithUTF8String: rather than @(): these are fixed char
-             * arrays and the explicit form has no decay question in it, and it
-             * returns nil for bytes that are not valid UTF-8 -- which a
-             * dictionary literal would turn into a crash, so it is checked. */
-            NSString *firmwareDir =
-                [NSString stringWithUTF8String:boot_paths.firmware];
-            NSString *workDir = [NSString stringWithUTF8String:boot_paths.work];
-            NSDictionary *where = (firmwareDir && workDir)
-                ? @{ @"firmware": firmwareDir, @"work": workDir } : nil;
-            NSThread *worker = where ? [[NSThread alloc]
-                initWithTarget:self
-                      selector:@selector(provisionRootFilesystem:)
-                        object:where] : nil;
-            if (worker) {
-                worker.name = @"S5LBox rootfs provisioning";
-                worker.qualityOfService = NSQualityOfServiceUtility;
-                [worker start];
-            } else {
-                pthread_mutex_lock(&_lock);
-                _preparingRootFS = NO;
-                pthread_mutex_unlock(&_lock);
-                note = @"Could not start preparing the root filesystem.";
-            }
+        NSString *firmwareDir = [NSString stringWithUTF8String:boot_paths.firmware];
+        NSString *workDir = [NSString stringWithUTF8String:boot_paths.work];
+        if (!firmwareDir || !workDir) {
+            pthread_mutex_lock(&_lock);
+            _preparingRootFS = NO;
+            pthread_mutex_unlock(&_lock);
+            return NO;
         }
+        [self provisionRootFilesystem:@{ @"firmware": firmwareDir, @"work": workDir }];
+        if (vm_engine_cancelled(&_cancelRequested)) return NO;
+        vm_firmware_boot_state_t prepared;
+        vm_firmware_boot_probe(&boot_paths, &prepared);
+        if (prepared.readiness == VM_FW_BOOT_READY) return [self installGuestPayload];
+        return NO;
     } else {
         /* No firmware at all is the ordinary case, not a failure: the demo
          * guest is what this app does for anyone who has imported nothing. */
@@ -600,10 +579,11 @@ static double vm_engine_now_seconds(void) {
                                              capacity:VM_BOOT_OPTION_MAX];
 
         BOOL ok = havePaths
-            ? vm_firmware_boot_provision(&paths, values, (unsigned)count,
+            ? vm_firmware_boot_provision_cancellable(&paths, values, (unsigned)count,
                                          vm_engine_prepare_progress,
                                          (__bridge void *)self,
-                                         detail, sizeof detail)
+                                         detail, sizeof detail,
+                                         vm_engine_cancelled, &_cancelRequested)
             : NO;
         if (!havePaths)
             (void)snprintf(detail, sizeof detail,
@@ -632,7 +612,6 @@ static double vm_engine_now_seconds(void) {
         NSString *said = [NSString stringWithUTF8String:detail];
         pthread_mutex_lock(&_lock);
         _preparingRootFS = NO;
-        _preparedFirmwareBootRequest = ok;
         _bringUpNote = ok
             ? [NSString stringWithFormat:
                 @"The writable disk is ready. Starting iPhone OS. %@", said ?: @""]
@@ -2758,14 +2737,6 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
     BOOL preparing = _preparingRootFS;
     pthread_mutex_unlock(&_lock);
     return preparing;
-}
-
-- (BOOL)takePreparedFirmwareBootRequest {
-    pthread_mutex_lock(&_lock);
-    BOOL ready = _preparedFirmwareBootRequest && !_preparingRootFS;
-    if (ready) _preparedFirmwareBootRequest = NO;
-    pthread_mutex_unlock(&_lock);
-    return ready;
 }
 
 - (double)rootFilesystemProgress {

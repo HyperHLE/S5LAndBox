@@ -210,7 +210,8 @@ typedef enum rootfs_work_status {
     ROOTFS_WORK_FILE_REPAIR_MISMATCH,
     ROOTFS_WORK_RANGE_ERROR,
     ROOTFS_WORK_PUBLISH_FAILED,
-    ROOTFS_WORK_PUBLISH_DURABILITY_FAILED
+    ROOTFS_WORK_PUBLISH_DURABILITY_FAILED,
+    ROOTFS_WORK_CANCELLED
 } rootfs_work_status_t;
 
 typedef enum rootfs_work_stage {
@@ -596,6 +597,10 @@ typedef struct rootfs_work_options {
      */
     void (*progress)(void *ctx, uint64_t done, uint64_t total);
     void  *progress_ctx;
+    /* Cooperative cancellation between copy chunks and before publication.
+     * The unpublished temporary is removed by the ordinary failure cleanup. */
+    bool (*cancel)(void *ctx);
+    void *cancel_ctx;
 } rootfs_work_options_t;
 
 typedef struct rootfs_work_result {

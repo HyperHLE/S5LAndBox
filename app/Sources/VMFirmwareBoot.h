@@ -402,6 +402,10 @@ bool vm_firmware_boot_provision(const vm_firmware_boot_paths_t *paths,
                                                  uint64_t total),
                                 void *progress_ctx,
                                 char *detail, size_t detail_capacity);
+bool vm_firmware_boot_provision_cancellable(const vm_firmware_boot_paths_t *paths,
+    const bool *options, unsigned option_count,
+    void (*progress)(void *, uint64_t, uint64_t), void *progress_ctx,
+    char *detail, size_t detail_capacity, bool (*cancel)(void *), void *cancel_ctx);
 
 #ifdef __cplusplus
 }

@@ -2023,6 +2023,14 @@ bool vm_firmware_boot_provision(const vm_firmware_boot_paths_t *paths,
                                                  uint64_t total),
                                 void *progress_ctx,
                                 char *detail, size_t detail_capacity) {
+    return vm_firmware_boot_provision_cancellable(paths, values, value_count,
+        progress, progress_ctx, detail, detail_capacity, NULL, NULL);
+}
+
+bool vm_firmware_boot_provision_cancellable(const vm_firmware_boot_paths_t *paths,
+    const bool *values, unsigned value_count,
+    void (*progress)(void *, uint64_t, uint64_t), void *progress_ctx,
+    char *detail, size_t detail_capacity, bool (*cancel)(void *), void *cancel_ctx) {
     char source_path[VM_FW_BOOT_PATH_CAPACITY + 64u];
     char work_path[VM_FW_BOOT_PATH_CAPACITY + 64u];
     rootfs_work_options_t options;
@@ -2145,6 +2153,8 @@ bool vm_firmware_boot_provision(const vm_firmware_boot_paths_t *paths,
     /* The caller's bar. NULL is fine and means nobody is watching. */
     options.progress     = progress;
     options.progress_ctx = progress_ctx;
+    options.cancel = cancel;
+    options.cancel_ctx = cancel_ctx;
 
     rootfs_work_status_t status =
         rootfs_work_create(source_path, work_path, &options, &result);

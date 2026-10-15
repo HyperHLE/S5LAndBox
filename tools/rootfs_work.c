@@ -559,6 +559,7 @@ const char *rootfs_work_status_name(rootfs_work_status_t status) {
     case ROOTFS_WORK_OK: return "ok";
     case ROOTFS_WORK_INVALID_ARGUMENT: return "invalid-argument";
     case ROOTFS_WORK_NO_MEMORY: return "no-memory";
+    case ROOTFS_WORK_CANCELLED: return "cancelled";
     case ROOTFS_WORK_PATH_UNSAFE: return "unsafe-path";
     case ROOTFS_WORK_SOURCE_OPEN_FAILED: return "source-open-failed";
     case ROOTFS_WORK_SOURCE_NOT_REGULAR: return "source-not-regular";
@@ -9332,7 +9333,7 @@ static bool copy_source(host_file_t *source, host_file_t *temporary,
                         ios3_sha256_context_t *source_sha256,
                         rootfs_work_result_t *result,
                         void (*progress)(void *, uint64_t, uint64_t),
-                        void *progress_ctx) {
+                        void *progress_ctx, bool (*cancel)(void *), void *cancel_ctx) {
     uint64_t offset = 0;
 
     /* The destination is a newly created, unpublished file. Reserve its logical
@@ -9352,6 +9353,11 @@ static bool copy_source(host_file_t *source, host_file_t *temporary,
     if (progress) progress(progress_ctx, 0u, source_size);
 
     while (offset < source_size) {
+        if (cancel && cancel(cancel_ctx)) {
+            result_fail(result, ROOTFS_WORK_CANCELLED, ROOTFS_WORK_STAGE_COPY,
+                        0, "disk preparation cancelled");
+            return false;
+        }
         uint64_t remaining = source_size - offset;
         size_t amount = remaining > buffer_size ? buffer_size :
                         (size_t)remaining;
@@ -10223,7 +10229,8 @@ rootfs_work_status_t rootfs_work_create(const char *source_path,
     }
     if (!copy_source(&source, &temporary, source_before.size, buffer,
                      selected.io_buffer_bytes, &source_sha256, result,
-                     selected.progress, selected.progress_ctx))
+                     selected.progress, selected.progress_ctx,
+                     selected.cancel, selected.cancel_ctx))
         goto done;
     if (!host_file_stamp(&source, &source_after, &error)) {
         result_fail(result, ROOTFS_WORK_SOURCE_CHANGED,
@@ -10374,6 +10381,11 @@ rootfs_work_status_t rootfs_work_create(const char *source_path,
         result_fail(result, ROOTFS_WORK_SYNC_FAILED,
                     ROOTFS_WORK_STAGE_FLUSH, error,
                     "cannot close flushed temporary work image");
+        goto done;
+    }
+    if (selected.cancel && selected.cancel(selected.cancel_ctx)) {
+        result_fail(result, ROOTFS_WORK_CANCELLED, ROOTFS_WORK_STAGE_PUBLISH,
+                    0, "disk preparation cancelled before publication");
         goto done;
     }
     if (!publish(&destination, result))

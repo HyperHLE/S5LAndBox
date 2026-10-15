@@ -1655,14 +1655,6 @@ static UIGestureRecognizer *VMContentPopGestureRecognizer(
          */
         [self refreshPrepareOverlay];
 
-        if (!_savingCheckpoint && !_restarting && !_shuttingDown && !_forcePowerOffRequested &&
-            !self.presentedViewController && self.navigationController.topViewController == self &&
-            UIApplication.sharedApplication.applicationState == UIApplicationStateActive &&
-            [_engine takePreparedFirmwareBootRequest]) {
-            [self resetTapped:nil];
-            return;
-        }
-
         NSString *note = [_engine bringUpNote];
         if (note.length && ![note isEqualToString:_lastBringUpNote]) {
             _lastBringUpNote = note;
