@@ -2,8 +2,8 @@
  * S5LBox — NXP PCF50635 PMU/RTC at i2c0 address 0x73.
  *
  * The register model stays deliberately bounded. Bytes written by the guest
- * are persistent storage, the RTC bytes are computed from deterministic guest
- * time, and an unwritten/unknown register returns zero while being recorded.
+ * are persistent storage, the RTC uses deterministic guest time unless a host
+ * clock is bound, and unknown reads return zero while being recorded.
  */
 #include "soc.h"
 #include <string.h>

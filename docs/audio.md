@@ -1,4 +1,4 @@
-# Current audio implementation (2026-10-10 candidate)
+# Current audio implementation
 
 The current implementation adds timed codec-side I²S DMA playback
 and capture, plus an iOS 13+ AVAudioEngine backend. Physical-device microphone
@@ -22,6 +22,11 @@ do not describe the current emulator.
   declining does not block setup, boot, or playback. The Advanced opt-out applies
   to later sessions, while Machine Settings > Advanced changes only the current session.
   Denial feeds silence, not fabricated input.
+  Permission alone no longer starts physical capture: the input graph is enabled
+  only while the guest's I²S receiver, ADC and input clock are active. Stopping
+  capture returns the host to playback-only audio; pausing or backgrounding
+  still stops the graph. This demand check does not change the default permission
+  policy. The physical validation notes below predate this change.
 - Snapshot v34 stores unread guest FIFO bytes and clock phases. Tested v32/v33
   migration starts empty FIFOs, since those versions had no PCM transport.
   Host microphone buffers, permission and callback pointers are never saved.
