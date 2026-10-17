@@ -36,6 +36,26 @@ int main(int argc, const char *argv[]) {
             @"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=" options:0];
         NSString *legacy = @"Payload/Test.app/icon.png";
         assert([Inspect(file, @{}, @{legacy:png}).firstObject isEqual:png]);
+        // Both metadata and art may be safe in-bundle links. The archive itself
+        // is still a regular host file; no host symlink is ever followed.
+        NSData *plist = [NSPropertyListSerialization dataWithPropertyList:@{}
+            format:NSPropertyListBinaryFormat_v1_0 options:0 error:NULL];
+        fx_zip_member_t linked[] = {
+            {"Payload/Test.app/Info.plist", (const uint8_t *)"Metadata", 8, false, false},
+            {"Payload/Test.app/Metadata", plist.bytes, plist.length, false, false},
+            {"Payload/Test.app/Icon.png", (const uint8_t *)"Art.png", 7, true, true},
+            {"Payload/Test.app/Art.png", png.bytes, png.length, false, false}
+        };
+        NSMutableData *linkedZIP = [NSMutableData dataWithLength:4096];
+        fx_zip_layout_t linkedLayout;
+        size_t linkedSize = fx_zip_build(linkedZIP.mutableBytes, linkedZIP.length, linked, 4, &linkedLayout);
+        assert(linkedSize); linkedZIP.length = linkedSize;
+        for (unsigned i = 0; i < 4; i += 2) {
+            uint8_t *central = (uint8_t *)linkedZIP.mutableBytes + linkedLayout.central_offset[i];
+            fx_w16le(central + 4, (3u << 8) | 20u); fx_w32le(central + 38, 0120777u << 16);
+        }
+        assert([linkedZIP writeToURL:file options:NSDataWritingAtomic error:NULL]);
+        assert([[VMIPAIcon imageDataCandidatesForURL:file].firstObject isEqual:png]);
         // A real legacy pattern: the plist points at a missing Resources icon.
         assert([Inspect(file, @{@"CFBundleIconFile":@"Resources/icon.png"}, @{legacy:png}).firstObject isEqual:png]);
         NSString *custom = @"Payload/Test.app/Art/Launcher.png";

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Accept validated in-bundle file links in IPAs, including legacy CodeResources
+  links. Preserve links during guest installation; reject unsafe paths, missing
+  targets, cycles and directory links.
 - Install AppSync for OS 3.1 during new jailbreaks by default. Advanced Settings
   includes an independent opt-out alongside Packages with jailbreak. The
   downloaded package is checksum-verified and installed by the guest's dpkg

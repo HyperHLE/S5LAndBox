@@ -30,6 +30,20 @@ typedef struct {
     const char *error;
 } walk_t;
 
+bool vm_ipa_entry_is_symlink(const vmfw_zip_entry_t *entry) {
+    return entry && (entry->unix_mode & 0170000u) == 0120000u;
+}
+
+static unsigned char path_lower(unsigned char c) {
+    return c >= 'A' && c <= 'Z' ? (unsigned char)(c + ('a' - 'A')) : c;
+}
+
+static bool path_prefix(const char *a, const char *b, size_t length) {
+    for (size_t i = 0; i < length; i++)
+        if (!b[i] || path_lower((unsigned char)a[i]) != path_lower((unsigned char)b[i])) return false;
+    return true;
+}
+
 static bool visit(void *opaque, const vmfw_zip_entry_t *entry, uint32_t index) {
     (void)index;
     walk_t *walk = opaque;
@@ -54,10 +68,10 @@ static bool visit(void *opaque, const vmfw_zip_entry_t *entry, uint32_t index) {
         return false;
     }
     unsigned type = entry->unix_mode & 0170000u;
-    if ((type && type != 0100000u && type != 0040000u) ||
+    if ((type && type != 0100000u && type != 0040000u && type != 0120000u) ||
         (type == 0040000u && !entry->is_directory) ||
-        (type == 0100000u && entry->is_directory)) {
-        walk->error = "IPA symlinks and special files are not supported.";
+        ((type == 0100000u || type == 0120000u) && entry->is_directory)) {
+        walk->error = "The IPA contains a special file or inconsistent file type.";
         return false;
     }
     if ((!slash || !slash[1]) && !entry->is_directory) {
@@ -95,6 +109,70 @@ static bool visit(void *opaque, const vmfw_zip_entry_t *entry, uint32_t index) {
     return true;
 }
 
+static bool validate_links(const vmfw_zip_t *zip, vm_ipa_archive_t *p,
+                           char *detail, size_t cap) {
+    /* A link (or regular file) must never be used as an extraction directory,
+     * regardless of ZIP ordering or case differences on the guest filesystem. */
+    for (unsigned i = 0; i < p->count; i++) {
+        if (p->files[i].is_directory) continue;
+        size_t length = strlen(p->files[i].name);
+        for (unsigned j = 0; j < p->count; j++) {
+            if (i != j && path_prefix(p->files[i].name, p->files[j].name, length) &&
+                p->files[j].name[length] == '/')
+                return fail(detail, cap, "The IPA uses a file or symbolic link as a parent directory.");
+        }
+    }
+    p->content_indices = calloc(p->count, sizeof *p->content_indices);
+    if (!p->content_indices) return fail(detail, cap, "Not enough memory to inspect IPA links.");
+    for (unsigned i = 0; i < p->count; i++) p->content_indices[i] = i;
+    for (unsigned i = 0; i < p->count; i++) {
+        const vmfw_zip_entry_t *entry = &p->files[i];
+        if (!vm_ipa_entry_is_symlink(entry)) continue;
+        char target[VMFW_ZIP_MAX_NAME], path[VMFW_ZIP_MAX_NAME];
+        if (!entry->uncompressed_size || entry->uncompressed_size >= sizeof target)
+            return fail(detail, cap, "The IPA contains an empty or oversized symbolic link.");
+        vmfw_mem_sink_t sink;
+        vmfw_mem_sink_init(&sink, (uint8_t *)target, sizeof target - 1);
+        vmfw_zip_status_t status = vmfw_zip_extract(zip, entry, vmfw_mem_sink_write, &sink);
+        if (status != VMFW_ZIP_OK) return fail(detail, cap, vmfw_zip_strerror(status));
+        target[sink.len] = 0;
+        if (sink.len != entry->uncompressed_size || strlen(target) != sink.len ||
+            !vm_ipa_safe_path(target) || target[sink.len - 1] == '/')
+            return fail(detail, cap, "IPA links must use relative file paths inside the app, without dot components.");
+        const char *slash = strrchr(entry->name, '/');
+        size_t parent = slash ? (size_t)(slash - entry->name + 1) : 0;
+        if (parent <= strlen(p->app_root) || parent + sink.len >= sizeof path)
+            return fail(detail, cap, "The IPA contains an invalid symbolic link path.");
+        memcpy(path, entry->name, parent);
+        memcpy(path + parent, target, sink.len + 1);
+        unsigned destination = p->count;
+        for (unsigned j = 0; j < p->count; j++) {
+            /* Require the exact stored spelling; never guess a target using
+             * host filesystem case or Unicode normalization rules. */
+            if (!strcmp(path, p->files[j].name)) { destination = j; break; }
+        }
+        if (destination == p->count || p->files[destination].is_directory)
+            return fail(detail, cap, "The IPA contains a missing target or unsupported directory link.");
+        p->content_indices[i] = destination;
+    }
+    /* Bound chain traversal without recursion. Do not collapse this map until
+     * all chains pass, so order cannot hide an overlong chain or a cycle. */
+    for (unsigned i = 0; i < p->count; i++) {
+        unsigned current = i, hops = 0;
+        while (vm_ipa_entry_is_symlink(&p->files[current])) {
+            if (++hops > 16)
+                return fail(detail, cap, "The IPA contains a symbolic link cycle or a chain longer than 16 links.");
+            current = p->content_indices[current];
+        }
+    }
+    for (unsigned i = 0; i < p->count; i++) {
+        unsigned current = i;
+        while (vm_ipa_entry_is_symlink(&p->files[current])) current = p->content_indices[current];
+        p->content_indices[i] = current;
+    }
+    return true;
+}
+
 bool vm_ipa_archive_open(const vmfw_zip_t *zip, vm_ipa_archive_t *p,
                          char *detail, size_t cap) {
     if (!p) return fail(detail, cap, "No IPA inspection result was supplied.");
@@ -111,6 +189,10 @@ bool vm_ipa_archive_open(const vmfw_zip_t *zip, vm_ipa_archive_t *p,
         vm_ipa_archive_close(p);
         return false;
     }
+    if (!validate_links(zip, p, detail, cap)) {
+        vm_ipa_archive_close(p);
+        return false;
+    }
     if (detail && cap) detail[0] = 0;
     return true;
 }
@@ -118,6 +200,7 @@ bool vm_ipa_archive_open(const vmfw_zip_t *zip, vm_ipa_archive_t *p,
 void vm_ipa_archive_close(vm_ipa_archive_t *p) {
     if (!p) return;
     free(p->files);
+    free(p->content_indices);
     memset(p, 0, sizeof *p);
 }
 

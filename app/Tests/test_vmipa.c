@@ -13,7 +13,7 @@ static size_t read_archive(void *ctx, uint64_t offset, uint8_t *out, size_t coun
 }
 static bool inspect(void) {
     vmfw_zip_t zip;
-    vm_ipa_archive_t plan;
+    vm_ipa_archive_t plan = {0};
     char detail[256];
     if (vmfw_zip_open(&zip, read_archive, NULL, archive_size) != VMFW_ZIP_OK) return false;
     bool ok = vm_ipa_archive_open(&zip, &plan, detail, sizeof detail);
@@ -24,6 +24,89 @@ static void macho(uint8_t *b, uint32_t subtype) {
     memset(b, 0, 64);
     fx_w32le(b, 0xfeedface); fx_w32le(b + 4, 12);
     fx_w32le(b + 8, subtype); fx_w32le(b + 12, 2);
+}
+static void set_mode(const fx_zip_layout_t *layout, unsigned index, unsigned mode) {
+    fx_w16le(archive + layout->central_offset[index] + 4, (3u << 8) | 20u);
+    fx_w32le(archive + layout->central_offset[index] + 38, mode << 16);
+}
+static void links(vmfw_test_t *t) {
+    VMFW_T_SECTION(t, "bounded internal IPA file links");
+    static const uint8_t content[] = "test";
+    static const uint8_t target[] = "_CodeSignature/CodeResources";
+    fx_zip_member_t members[5] = {
+        {"Payload/Test.app/Info.plist", content, 4, false, false},
+        {"Payload/Test.app/CodeResources", target, sizeof target - 1, true, true},
+        {"Payload/Test.app/_CodeSignature/CodeResources", content, 4, false, false},
+        {"Payload/Test.app/Alias", (const uint8_t *)"CodeResources", 13, false, false},
+        {"Payload/Test.app/Other", content, 4, false, false}
+    };
+    fx_zip_layout_t layout;
+    archive_size = fx_zip_build(archive, sizeof archive, members, 5, &layout);
+    set_mode(&layout, 1, 0120755u);
+    set_mode(&layout, 3, 0120777u);
+    VMFW_T_CHECK(t, inspect(), "legacy signature link and chained alias refused");
+    vmfw_zip_t zip;
+    vm_ipa_archive_t plan = {0};
+    char detail[256];
+    VMFW_T_CHECK(t, vmfw_zip_open(&zip, read_archive, NULL, archive_size) == VMFW_ZIP_OK &&
+        vm_ipa_archive_open(&zip, &plan, detail, sizeof detail), "link plan refused");
+    if (plan.files) {
+        VMFW_T_CHECK(t, plan.content_indices[0] == 0 && plan.content_indices[1] == 2 &&
+            plan.content_indices[3] == 2 && vm_ipa_entry_is_symlink(&plan.files[1]) &&
+            plan.files[1].uncompressed_size == sizeof target - 1,
+            "links must resolve for inspection but preserve original install data");
+        vm_ipa_archive_close(&plan);
+    }
+    const char *bad[] = {"", "/etc/passwd", "../outside", "../../Other.app/file", "./Other",
+        "a/../Other", "a//Other", "a\\Other", "a:Other", "a\001Other", "missing",
+        "CodeResources", "Alias", "_CodeSignature", "_CodeSignature/", "other"};
+    for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+        members[1].data = (const uint8_t *)bad[i]; members[1].len = strlen(bad[i]);
+        archive_size = fx_zip_build(archive, sizeof archive, members, 5, &layout);
+        set_mode(&layout, 1, 0120777u); set_mode(&layout, 3, 0120777u);
+        VMFW_T_CHECK(t, !inspect(), "unsafe, missing or cyclic link accepted: %s", bad[i]);
+    }
+    static const uint8_t nul_target[] = "Other\0ignored";
+    members[1].data = nul_target; members[1].len = sizeof nul_target - 1;
+    archive_size = fx_zip_build(archive, sizeof archive, members, 5, &layout);
+    set_mode(&layout, 1, 0120777u);
+    VMFW_T_CHECK(t, !inspect(), "embedded NUL link accepted");
+    members[1].data = target; members[1].len = sizeof target - 1;
+    archive_size = fx_zip_build(archive, sizeof archive, members, 5, &layout);
+    set_mode(&layout, 1, 0120777u);
+    archive[layout.local_offset[1] + 30 + strlen(members[1].name) + 6] ^= 1;
+    VMFW_T_CHECK(t, !inspect(), "corrupt compressed link accepted");
+    archive_size = fx_zip_build(archive, sizeof archive, members, 5, &layout);
+    set_mode(&layout, 1, 0120777u);
+    fx_w32le(archive + layout.central_offset[1] + 24, VMFW_ZIP_MAX_NAME);
+    VMFW_T_CHECK(t, !inspect(), "oversized link accepted");
+    const unsigned special[] = {0010644u, 0020644u, 0060644u, 0140644u, 0040755u};
+    for (size_t i = 0; i < sizeof special / sizeof special[0]; i++) {
+        archive_size = fx_zip_build(archive, sizeof archive, members, 5, &layout);
+        set_mode(&layout, 1, special[i]);
+        VMFW_T_CHECK(t, !inspect(), "special file or inconsistent directory accepted");
+    }
+    const char *children[] = {"Payload/Test.app/CodeResources/child", "Payload/Test.app/coderesources/child"};
+    for (size_t i = 0; i < sizeof children / sizeof children[0]; i++) {
+        members[4].name = children[i];
+        archive_size = fx_zip_build(archive, sizeof archive, members, 5, &layout);
+        set_mode(&layout, 1, 0120777u);
+        VMFW_T_CHECK(t, !inspect(), "symlink extraction parent accepted");
+        set_mode(&layout, 1, 0100644u);
+        VMFW_T_CHECK(t, !inspect(), "regular file extraction parent accepted");
+    }
+    members[4].name = "Payload/Test.app/Other";
+    /* A linked plist must resolve to real content, not parse its path as XML. */
+    members[0].data = (const uint8_t *)"Other"; members[0].len = 5;
+    archive_size = fx_zip_build(archive, sizeof archive, members, 5, &layout);
+    set_mode(&layout, 0, 0120777u); set_mode(&layout, 1, 0120777u);
+    VMFW_T_CHECK(t, inspect(), "linked Info.plist refused");
+    vm_ipa_archive_t info_plan = {0};
+    if (vmfw_zip_open(&zip, read_archive, NULL, archive_size) == VMFW_ZIP_OK &&
+        vm_ipa_archive_open(&zip, &info_plan, detail, sizeof detail)) {
+        VMFW_T_CHECK(t, info_plan.content_indices[info_plan.info_index] == 4, "linked plist not resolved");
+        vm_ipa_archive_close(&info_plan);
+    }
 }
 int main(void) {
     vmfw_test_t state = {0}, *t = &state;
@@ -55,6 +138,8 @@ int main(void) {
     archive_size = fx_zip_build(archive, sizeof archive, members, 3, &layout);
     fx_w32le(archive + layout.cd_offset + 24, VM_IPA_MAX_FILE_BYTES + 1);
     VMFW_T_CHECK(t, !inspect(), "oversize file accepted");
+
+    links(t);
 
     VMFW_T_SECTION(t, "Mach-O compatibility");
     uint8_t thin[64], fat[256];

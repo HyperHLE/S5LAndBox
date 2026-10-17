@@ -4,6 +4,14 @@ Available in development builds through **IPA Library > Legacy Store**.
 Search for an app, tap **Get**, then **Install** when the verified download
 has been added to your library. Manual IPA import remains available.
 
+IPA inspection accepts relative symbolic links to files within the same app
+bundle, including legacy `CodeResources` links. Links stay intact for live and
+powered-off installation; they are never created on the host filesystem.
+Targets must exist with exact spelling, use paths without `.` or `..` components,
+and resolve to a regular file within 16 links. Directory links, cycles, special
+files and extraction through a link are rejected. This fixes archive acceptance,
+not compatibility with an app's online service or every emulated feature.
+
 The native browser uses the public [Legacy Store API](https://legacystore.app/api/),
 not an embedded website. Catalog metadata comes from Legacy Store and IPA files
 come from Internet Archive. S5LBox includes neither those IPAs nor account credentials.
