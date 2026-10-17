@@ -49,6 +49,7 @@ static void VMGuestInstallBuildProgress(
     BOOL _finished;
     BOOL _packageFlow, _jailbreakNeeded, _openForShutdown, _keepsAwake, _previousIdle;
     BOOL _includePackages;
+    BOOL _includeAppSync;
 }
 
 - (instancetype)initWithInstanceID:(NSString *)instanceID
@@ -302,7 +303,9 @@ static void VMGuestInstallBuildProgress(
     }
     if (!_jailbreakNeeded) { [self startInstall]; return; }
     UIAlertController *confirm = [UIAlertController alertControllerWithTitle:@"Jailbreak this machine?"
-        message:@"Install Cydia and set up Packages. The saved running state will be discarded."
+        message:[VMSettings sharedSettings].appSyncWithJailbreak
+            ? @"Install Cydia, AppSync and set up Packages. The saved running state will be discarded."
+            : @"Install Cydia and set up Packages. The saved running state will be discarded."
         preferredStyle:UIAlertControllerStyleAlert];
     [confirm addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
     [confirm addAction:[UIAlertAction actionWithTitle:@"Jailbreak & Set Up" style:UIAlertActionStyleDestructive
@@ -397,6 +400,7 @@ static void VMGuestInstallBuildProgress(
     // Capture once on the main thread; retries get a fresh choice, but an
     // in-flight disk transaction never changes policy halfway through.
     _includePackages = _packageFlow || [VMSettings sharedSettings].packagesWithJailbreak;
+    _includeAppSync = !self.packageManagerOnly && [VMSettings sharedSettings].appSyncWithJailbreak;
     _completionPending = NO;
     _openPackagesWhenReady = NO;
     _jailbreakNotice = nil;
@@ -453,9 +457,9 @@ static void VMGuestInstallBuildProgress(
         vm_guest_install_build_result_t result;
         char detail[VM_GUEST_INSTALL_BUILD_DETAIL_CAPACITY];
         vm_guest_install_build_status_t status =
-            vm_guest_install_build_after_force_off(
+            vm_guest_install_build_after_force_off_with_appsync(
                 self_->_machineDirectory.fileSystemRepresentation,
-                NULL, VMGuestInstallBuildProgress, (__bridge void *)self_,
+                NULL, self_->_includeAppSync, VMGuestInstallBuildProgress, (__bridge void *)self_,
                 &result, detail, sizeof detail);
         if (status == VM_GUEST_INSTALL_BUILD_OK && result.already_installed) {
             NSError *bridgeError = nil;
@@ -480,7 +484,7 @@ static void VMGuestInstallBuildProgress(
         dispatch_async(dispatch_get_main_queue(), ^{
             [self_ setFraction:-1 stage:@"Preparing package download\u2026"];
             self_->_downloader = [[VMGuestPackageDownloader alloc] init];
-            [self_->_downloader startWithProgress:
+            [self_->_downloader startIncludingAppSync:self_->_includeAppSync progress:
                 ^(uint64_t completed, uint64_t total, NSString *stage) {
                     double part = total ? (double)completed / (double)total : 0.0;
                     [self_ setFraction:total ? part : -1 stage:stage];
@@ -505,9 +509,10 @@ static void VMGuestInstallBuildProgress(
         vm_guest_install_build_result_t result;
         char detail[VM_GUEST_INSTALL_BUILD_DETAIL_CAPACITY];
         vm_guest_install_build_status_t status =
-            vm_guest_install_build_after_force_off(
+            vm_guest_install_build_after_force_off_with_appsync(
                 self_->_machineDirectory.fileSystemRepresentation,
                 packageDirectory.fileSystemRepresentation,
+                self_->_includeAppSync,
                 VMGuestInstallBuildProgress, (__bridge void *)self_,
                 &result, detail, sizeof detail);
         if (status != VM_GUEST_INSTALL_BUILD_OK ||

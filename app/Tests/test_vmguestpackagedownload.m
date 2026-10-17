@@ -1,6 +1,7 @@
 // Synthetic transport tests: no public downloads or guest execution.
 #import "VMGuestPackageDownloader.h"
 #import "VMArchiveTransport.h"
+#import "VMGuestPackageManifest.h"
 #include <assert.h>
 
 @interface VMGuestPackageDownloader (TransportTests) <NSURLSessionDownloadDelegate>
@@ -92,6 +93,22 @@ int main(int argc, const char *argv[]) { @autoreleasepool {
     assert(![NSFileManager.defaultManager fileExistsAtPath:incoming.path]);
     [d URLSession:session task:(NSURLSessionTask *)task didCompleteWithError:tls];
     assert(!d.starts && d.finishes == 1 && [d.failure.localizedDescription containsString:@"was rejected"]);
+
+    // The optional last slot uses its own HTTPS source and exact digest; an
+    // unrelated Saurik CDN fallback cannot be applied to an AppSync failure.
+    d = [PackageDownloadFixture new];
+    [d setValue:@YES forKey:@"includeAppSync"];
+    [d setValue:@(vm_guest_package_count()) forKey:@"index"];
+    NSURL *appSyncURL = [NSURL URLWithString:@(vm_guest_package_appsync()->source_url)];
+    task.originalRequest = [NSURLRequest requestWithURL:appSyncURL];
+    assert([[@"corrupt AppSync" dataUsingEncoding:NSUTF8StringEncoding] writeToURL:incoming atomically:YES]);
+    [d setValue:partial forKey:@"partialURL"];
+    task.response = [[NSHTTPURLResponse alloc] initWithURL:appSyncURL statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:nil];
+    [d URLSession:session downloadTask:(NSURLSessionDownloadTask *)task didFinishDownloadingToURL:incoming];
+    assert(![NSFileManager.defaultManager fileExistsAtPath:incoming.path]);
+    assert(![NSFileManager.defaultManager fileExistsAtPath:partial.path]);
+    [d URLSession:session task:(NSURLSessionTask *)task didCompleteWithError:tls];
+    assert(!d.starts && d.finishes == 1 && [d.failure.localizedDescription containsString:@"us.hackulo.appsync31"]);
     puts("Guest package transport: HTTPS alternate, bounded retry, cancellation and identity rejection passed");
     return 0;
 } }

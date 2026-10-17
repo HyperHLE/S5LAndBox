@@ -135,6 +135,37 @@ static void testBackgroundPauseChoice(void) {
     puts("Background pause: default on, invalid preference, opt-out persistence and reset passed");
 }
 
+static void testAppSyncChoice(void) {
+    NSString *suite = [@"S5LBox.AppSyncSettingsTests." stringByAppendingString:NSUUID.UUID.UUIDString];
+    NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
+    TestInterfaceSettings *settings = [TestInterfaceSettings new];
+    settings.testDefaults = defaults;
+    assert(settings.appSyncWithJailbreak);
+    [defaults setObject:@"invalid" forKey:@"VMAppSyncWithJailbreak"];
+    assert(settings.appSyncWithJailbreak);
+    [defaults removeObjectForKey:@"VMAppSyncWithJailbreak"];
+    settings.packagesWithJailbreak = NO;
+    assert(settings.appSyncWithJailbreak); // Independent of the helper.
+    __block NSUInteger changes = 0;
+    id observer = [NSNotificationCenter.defaultCenter addObserverForName:VMSettingsDidChangeNotification
+        object:settings queue:nil usingBlock:^(__unused NSNotification *note) { ++changes; }];
+    settings.appSyncWithJailbreak = NO;
+    TestInterfaceSettings *reopened = [TestInterfaceSettings new];
+    reopened.testDefaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
+    assert(!reopened.appSyncWithJailbreak && changes == 1);
+    settings.packagesWithJailbreak = YES;
+    assert(!reopened.appSyncWithJailbreak && changes == 2);
+    settings.appSyncWithJailbreak = YES;
+    assert(reopened.appSyncWithJailbreak && changes == 3);
+    settings.appSyncWithJailbreak = NO;
+    [settings resetToDefaults];
+    assert(reopened.appSyncWithJailbreak && changes == 5);
+    assert(![defaults objectForKey:@"VMAppSyncWithJailbreak"]);
+    [NSNotificationCenter.defaultCenter removeObserver:observer];
+    [defaults removePersistentDomainForName:suite];
+    puts("AppSync: default on, independent helper opt-out, persistence, notifications and reset passed");
+}
+
 static void testGuestMicrophoneChoice(void) {
     NSString *suite = [@"S5LBox.MicrophoneSettingsTests." stringByAppendingString:NSUUID.UUID.UUIDString];
     NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
@@ -289,6 +320,7 @@ int main(int argc, const char *argv[]) {
         testInterfaceChoice();
         testRingerChoice();
         testPackagesWithJailbreakChoice();
+        testAppSyncChoice();
         testGuestMicrophoneChoice();
         testBackgroundPauseChoice();
         testDiskSizeChoice();

@@ -2280,6 +2280,7 @@ static vm_guest_install_build_status_t build_maintain_install(
 static vm_guest_install_build_status_t
 build_from_directory(
     const char *work_directory, const char *package_directory, bool force_off,
+    bool include_appsync,
     vm_guest_install_build_progress_t progress, void *progress_context,
     vm_guest_install_build_result_t *result,
     char *detail, size_t detail_capacity) {
@@ -2452,8 +2453,8 @@ build_from_directory(
                    VM_GUEST_INSTALL_BUILD_PLANNING, 0u, 1u);
     vm_guest_rootfs_status_t plan_status = VM_GUEST_ROOTFS_ERR_ARGUMENT;
     char plan_detail[VM_GUEST_INSTALL_BUILD_DETAIL_CAPACITY];
-    vm_guest_rootfs_plan_t *plan = vm_guest_rootfs_plan_open_directory(
-        package_directory, &plan_status, plan_detail, sizeof plan_detail);
+    vm_guest_rootfs_plan_t *plan = vm_guest_rootfs_plan_open_directory_with_appsync(
+        package_directory, include_appsync, &plan_status, plan_detail, sizeof plan_detail);
     if (!plan) {
         build_detail(detail, detail_capacity,
                      plan_detail[0] ? plan_detail
@@ -2630,12 +2631,21 @@ vm_guest_install_build_status_t vm_guest_install_build_from_directory(
     vm_guest_install_build_progress_t progress, void *progress_context,
     vm_guest_install_build_result_t *result,
     char *detail, size_t detail_capacity) {
-    return build_from_directory(work_directory, package_directory, false,
+    return build_from_directory(work_directory, package_directory, false, false,
         progress, progress_context, result, detail, detail_capacity);
 }
 
 vm_guest_install_build_status_t vm_guest_install_build_after_force_off(
     const char *work_directory, const char *package_directory,
+    vm_guest_install_build_progress_t progress, void *progress_context,
+    vm_guest_install_build_result_t *result,
+    char *detail, size_t detail_capacity) {
+    return vm_guest_install_build_after_force_off_with_appsync(work_directory,
+        package_directory, false, progress, progress_context, result, detail, detail_capacity);
+}
+
+vm_guest_install_build_status_t vm_guest_install_build_after_force_off_with_appsync(
+    const char *work_directory, const char *package_directory, bool include_appsync,
     vm_guest_install_build_progress_t progress, void *progress_context,
     vm_guest_install_build_result_t *result,
     char *detail, size_t detail_capacity) {
@@ -2650,7 +2660,7 @@ vm_guest_install_build_status_t vm_guest_install_build_after_force_off(
         vm_resume_checkpoint_probe_state(work_directory, size,
             BUILD_CHECKPOINT_RAM_BASE, BUILD_CHECKPOINT_RAM_SIZE, NULL, 0u) ==
                 VM_RESUME_CHECKPOINT_POWERED_OFF;
-    return build_from_directory(work_directory, package_directory, !clean_shutdown,
+    return build_from_directory(work_directory, package_directory, !clean_shutdown, include_appsync,
         progress, progress_context, result ? result : &local_result,
         detail, detail_capacity);
 }

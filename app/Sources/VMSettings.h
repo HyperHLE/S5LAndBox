@@ -83,6 +83,8 @@ typedef NS_ENUM(NSInteger, VMGraphicsMode) {
 /* On unless explicitly disabled. Applies to future jailbreak preparations;
  * never removes an installed helper or blocks an explicit Packages setup. */
 @property(nonatomic) BOOL packagesWithJailbreak;
+/* Default on for new jailbreaks. Never removes AppSync from an existing guest. */
+@property(nonatomic) BOOL appSyncWithJailbreak;
 
 /* Default for new sessions. Actual input still requires iOS permission;
  * the running machine retains its separate session switch. */

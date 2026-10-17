@@ -21,6 +21,12 @@ typedef void (^VMGuestPackageDownloadCompletion)(
 - (void)startWithProgress:(VMGuestPackageDownloadProgress)progress
                completion:(VMGuestPackageDownloadCompletion)completion;
 
+/* Selection is captured for this download. Opt-out neither downloads nor
+ * requires the optional package, even if it is already cached. */
+- (void)startIncludingAppSync:(BOOL)includeAppSync
+                    progress:(VMGuestPackageDownloadProgress)progress
+                  completion:(VMGuestPackageDownloadCompletion)completion;
+
 /* Cancellation never removes already authenticated cache entries. */
 - (void)cancel;
 

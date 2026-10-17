@@ -598,14 +598,37 @@ static bool plan_build_script(vm_guest_rootfs_plan_t *plan,
         for (size_t i = 0u; i < input_count; i++) {
             if ((inputs[i].package->roles & VM_GUEST_PACKAGE_INSTALL) == 0u)
                 continue;
+            if ((inputs[i].package->roles & VM_GUEST_PACKAGE_APPSYNC) != 0u)
+                continue;
             bool foundation =
                 (inputs[i].package->roles & VM_GUEST_PACKAGE_FOUNDATION) != 0u;
             if (foundation != (pass == 0u)) continue;
             if (!plan_script_package(plan, inputs[i].package)) return false;
         }
     }
-    if (!plan_script_append(plan, SCRIPT_CONFIGURE) ||
-        !plan_script_append(plan, SCRIPT_REGISTER_CYDIA)) return false;
+    if (!plan_script_append(plan, SCRIPT_CONFIGURE)) return false;
+    for (size_t i = 0u; i < input_count; i++) {
+        if ((inputs[i].package->roles & VM_GUEST_PACKAGE_APPSYNC) == 0u)
+            continue;
+        /* Respect AppSync's firmware Pre-Depends and run its original
+         * maintainer scripts through dpkg. Keep the archive on failure so
+         * launchd can retry; never mark first-boot setup complete early. */
+        if (!plan_script_append(plan, "appsync_archive=\"$packages/") ||
+            !plan_script_append(plan, inputs[i].package->filename) ||
+            !plan_script_append(plan,
+                "\"\n"
+                "if [ -f \"$appsync_archive\" ]; then\n"
+                "echo 'Installing AppSync for OS 3.1'\n"
+                "/usr/bin/dpkg --install \"$appsync_archive\" || exit 1\n"
+                /* It may already be running with the original executable.
+                 * No process is also normal: launchd starts it on demand. */
+                "/usr/bin/killall installd >/dev/null 2>&1 || true\n"
+                "/bin/rm -f \"$appsync_archive\" || exit 1\n"
+                "/bin/sync\n"
+                "echo 'AppSync installed'\n"
+                "fi\n")) return false;
+    }
+    if (!plan_script_append(plan, SCRIPT_REGISTER_CYDIA)) return false;
     size_t cache_tools = 0u;
     for (size_t i = 0u; i < input_count; i++) {
         if ((inputs[i].package->roles &
@@ -1027,6 +1050,14 @@ vm_guest_rootfs_plan_t *
 vm_guest_rootfs_plan_open_directory(const char *directory,
                                     vm_guest_rootfs_status_t *out_status,
                                     char *detail, size_t detail_capacity) {
+    return vm_guest_rootfs_plan_open_directory_with_appsync(directory, false,
+        out_status, detail, detail_capacity);
+}
+
+vm_guest_rootfs_plan_t *
+vm_guest_rootfs_plan_open_directory_with_appsync(const char *directory,
+    bool include_appsync, vm_guest_rootfs_status_t *out_status,
+    char *detail, size_t detail_capacity) {
     plan_status(out_status, VM_GUEST_ROOTFS_ERR_ARGUMENT);
     plan_detail(detail, detail_capacity, "");
     if (!directory || !*directory ||
@@ -1036,7 +1067,7 @@ vm_guest_rootfs_plan_open_directory(const char *directory,
                                   : VM_GUEST_ROOTFS_ERR_ARGUMENT);
         return NULL;
     }
-    size_t count = vm_guest_package_count();
+    size_t count = vm_guest_package_install_count(include_appsync);
     if (count == 0u || count > VM_GUEST_ROOTFS_MAX_PACKAGES) {
         plan_status(out_status, VM_GUEST_ROOTFS_ERR_MANIFEST);
         plan_detail(detail, detail_capacity,
@@ -1053,7 +1084,7 @@ vm_guest_rootfs_plan_open_directory(const char *directory,
     }
     bool loaded = true;
     for (size_t i = 0u; i < count; i++) {
-        const vm_guest_package_t *package = vm_guest_package_at(i);
+        const vm_guest_package_t *package = vm_guest_package_install_at(i, include_appsync);
         char path[PLAN_PATH_CAPACITY];
         size_t directory_length = strlen(directory);
         const char *separator =

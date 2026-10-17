@@ -408,3 +408,28 @@ ordinary unit-test pass. Physical host coverage remains iOS 15.8.5 only.
 
 The signal fixtures contain no injected tweak code. They prove the finish
 protocol and actions, not compatibility of arbitrary real-world tweaks.
+
+## Default AppSync for new jailbreaks (development builds)
+
+Advanced Settings includes **AppSync with jailbreak**, enabled unless explicitly
+disabled. It is independent of **Packages with jailbreak**. The selection is
+captured when preparation starts; disabling it neither downloads/stages AppSync
+nor removes an existing installation. Repairing an already jailbroken machine
+does not add or replace AppSync; use Packages for those machines.
+
+The optional manifest pins `us.hackulo.appsync31` **1.0.2** from the
+[iOS 3 Party repository](https://ios3.party/Packages):
+`https://ios3.party/debs/appsync31-1.0.2.deb`, 248082 bytes, SHA-256
+`c9ded74192d0e3a78855700f65be3834c53364782343338f336f2315a4e60e89`.
+The repository and archive control record both declare firmware 3.1.x support,
+including 3.1.3. This is not AppSync Unified or a package for other guest profiles.
+Only metadata is bundled; the archive is fetched over HTTPS and verified before
+the jailbreak disk transaction. The base package set/cache remains unchanged.
+
+The guest's first-boot job installs it with ordinary `dpkg --install`, after
+firmware registration and base package configuration, preserving its firmware
+Pre-Depends and original maintainer scripts. It restarts any running `installd`
+before Cydia registration/respring. A failed install retains the archive and
+blocks the completion marker, allowing the existing job to retry. The setting
+does not disable package checksums, change the host iPhone, or guarantee that
+an arbitrary IPA is compatible with the emulator.

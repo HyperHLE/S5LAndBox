@@ -122,6 +122,11 @@ vm_guest_rootfs_plan_open_directory(const char *directory,
                                     vm_guest_rootfs_status_t *out_status,
                                     char *detail, size_t detail_capacity);
 
+vm_guest_rootfs_plan_t *
+vm_guest_rootfs_plan_open_directory_with_appsync(const char *directory,
+    bool include_appsync, vm_guest_rootfs_status_t *out_status,
+    char *detail, size_t detail_capacity);
+
 void vm_guest_rootfs_plan_close(vm_guest_rootfs_plan_t **slot);
 
 const rootfs_work_entry_t *

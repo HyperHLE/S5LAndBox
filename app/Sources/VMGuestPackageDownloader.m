@@ -30,6 +30,7 @@ typedef NS_ENUM(NSInteger, VMGuestPackageDownloadError) {
 @implementation VMGuestPackageDownloader {
     BOOL _running;
     BOOL _cancelled;
+    BOOL _includeAppSync;
     NSUInteger _index;
     uint64_t _verifiedBytes;
     uint64_t _totalBytes;
@@ -152,8 +153,8 @@ static NSString *VMGuestPackageName(const vm_guest_package_t *package) {
     }
 
     NSFileManager *files = [NSFileManager defaultManager];
-    while (_index < vm_guest_package_count()) {
-        const vm_guest_package_t *package = vm_guest_package_at(_index);
+    while (_index < vm_guest_package_install_count(_includeAppSync)) {
+        const vm_guest_package_t *package = vm_guest_package_install_at(_index, _includeAppSync);
         NSString *filename = VMGuestPackageName(package);
         NSURL *final = [_directory URLByAppendingPathComponent:filename
                                                    isDirectory:NO];
@@ -210,6 +211,12 @@ static NSString *VMGuestPackageName(const vm_guest_package_t *package) {
 
 - (void)startWithProgress:(VMGuestPackageDownloadProgress)progress
                completion:(VMGuestPackageDownloadCompletion)completion {
+    [self startIncludingAppSync:NO progress:progress completion:completion];
+}
+
+- (void)startIncludingAppSync:(BOOL)includeAppSync
+                    progress:(VMGuestPackageDownloadProgress)progress
+                  completion:(VMGuestPackageDownloadCompletion)completion {
     NSParameterAssert(completion != nil);
     if (_running) {
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -221,7 +228,8 @@ static NSString *VMGuestPackageName(const vm_guest_package_t *package) {
     }
 
     char why[256];
-    if (!vm_guest_package_manifest_validate(why, sizeof why)) {
+    if (!vm_guest_package_manifest_validate(why, sizeof why) ||
+        (includeAppSync && !vm_guest_package_validate_entry(vm_guest_package_appsync(), why, sizeof why))) {
         NSString *reason = why[0] ? [NSString stringWithUTF8String:why] : nil;
         dispatch_async(dispatch_get_main_queue(), ^{
             completion(nil, VMGuestDownloadError(
@@ -233,10 +241,12 @@ static NSString *VMGuestPackageName(const vm_guest_package_t *package) {
 
     _running = YES;
     _cancelled = NO;
+    _includeAppSync = includeAppSync;
     _index = 0u;
     _verifiedBytes = 0u;
     _currentBytes = 0u;
     _totalBytes = vm_guest_package_total_download_bytes();
+    if (_includeAppSync) _totalBytes += vm_guest_package_appsync()->size;
     _progress = [progress copy];
     _completion = [completion copy];
 
@@ -304,7 +314,7 @@ static NSString *VMGuestPackageName(const vm_guest_package_t *package) {
 totalBytesExpectedToWrite:(int64_t)totalBytesExpectedToWrite {
     (void)session; (void)downloadTask; (void)bytesWritten;
     (void)totalBytesExpectedToWrite;
-    const vm_guest_package_t *package = vm_guest_package_at(_index);
+    const vm_guest_package_t *package = vm_guest_package_install_at(_index, _includeAppSync);
     uint64_t amount = totalBytesWritten > 0 ? (uint64_t)totalBytesWritten : 0u;
     if (package && amount > package->size) amount = package->size;
     _currentBytes = amount;
@@ -317,7 +327,7 @@ totalBytesExpectedToWrite:(int64_t)totalBytesExpectedToWrite {
       downloadTask:(NSURLSessionDownloadTask *)downloadTask
 didFinishDownloadingToURL:(NSURL *)location {
     (void)session;
-    const vm_guest_package_t *package = vm_guest_package_at(_index);
+    const vm_guest_package_t *package = vm_guest_package_install_at(_index, _includeAppSync);
     NSString *filename = VMGuestPackageName(package);
     NSHTTPURLResponse *response = (NSHTTPURLResponse *)downloadTask.response;
     if (![response isKindOfClass:[NSHTTPURLResponse class]] ||
@@ -381,7 +391,7 @@ didCompleteWithError:(NSError *)error {
         ? VMArchiveFallbackURL(task.originalRequest.URL, error) : nil;
     if (alternative) {
         _triedArchiveFallback = YES;
-        [self startDownloadAtURL:alternative filename:VMGuestPackageName(vm_guest_package_at(_index))];
+        [self startDownloadAtURL:alternative filename:VMGuestPackageName(vm_guest_package_install_at(_index, _includeAppSync))];
         return;
     }
     NSError *failure = _transferError ?: error;
@@ -395,7 +405,7 @@ didCompleteWithError:(NSError *)error {
         return;
     }
 
-    const vm_guest_package_t *package = vm_guest_package_at(_index);
+    const vm_guest_package_t *package = vm_guest_package_install_at(_index, _includeAppSync);
     if (package) _verifiedBytes += package->size;
     _index++;
     _currentBytes = 0u;

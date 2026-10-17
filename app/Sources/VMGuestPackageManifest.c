@@ -139,6 +139,29 @@ static const vm_guest_package_t PACKAGES[] = {
 
 static const size_t PACKAGE_COUNT = sizeof PACKAGES / sizeof PACKAGES[0];
 
+/* ios3.party/Packages: OS 3.1.x, no obsolete source-GUI dependency. Payloads
+ * are downloaded at setup time; no third-party executable is bundled. */
+static const vm_guest_package_t APPSYNC = {
+    "us.hackulo.appsync31", "1.0.2",
+    "us.hackulo.appsync31_1.0.2_iphoneos-arm.deb",
+    "https://ios3.party/debs/appsync31-1.0.2.deb",
+    UINT64_C(248082),
+    "c9ded74192d0e3a78855700f65be3834c53364782343338f336f2315a4e60e89",
+    VM_GUEST_PACKAGE_INSTALL | VM_GUEST_PACKAGE_APPSYNC
+};
+
+const vm_guest_package_t *vm_guest_package_appsync(void) { return &APPSYNC; }
+
+size_t vm_guest_package_install_count(bool include_appsync) {
+    return PACKAGE_COUNT + (include_appsync ? 1u : 0u);
+}
+
+const vm_guest_package_t *vm_guest_package_install_at(size_t index,
+                                                      bool include_appsync) {
+    if (index < PACKAGE_COUNT) return &PACKAGES[index];
+    return include_appsync && index == PACKAGE_COUNT ? &APPSYNC : NULL;
+}
+
 static void package_reason(char *why, size_t capacity,
                            const char *package, const char *message) {
     if (!why || capacity == 0u) return;
@@ -205,8 +228,13 @@ bool vm_guest_package_validate_entry(const vm_guest_package_t *package,
     }
 
     size_t base_length = strlen(PACKAGE_ARCHIVE_BASE);
-    if (strncmp(package->source_url, PACKAGE_ARCHIVE_BASE, base_length) != 0 ||
-        strcmp(package->source_url + base_length, package->filename) != 0) {
+    bool saurik_source = strncmp(package->source_url, PACKAGE_ARCHIVE_BASE, base_length) == 0 &&
+        strcmp(package->source_url + base_length, package->filename) == 0;
+    bool appsync_source = strcmp(package->source_url, APPSYNC.source_url) == 0 &&
+        strcmp(package->package, APPSYNC.package) == 0 &&
+        strcmp(package->version, APPSYNC.version) == 0 &&
+        strcmp(package->filename, APPSYNC.filename) == 0;
+    if (!saurik_source && !appsync_source) {
         package_reason(why, why_capacity, package->package,
                        "is not on the pinned HTTPS archive");
         return false;
@@ -225,14 +253,19 @@ bool vm_guest_package_validate_entry(const vm_guest_package_t *package,
     }
     const uint32_t allowed = VM_GUEST_PACKAGE_INSTALL |
                              VM_GUEST_PACKAGE_FOUNDATION |
-                             VM_GUEST_PACKAGE_APT_CACHE_TOOL;
+                             VM_GUEST_PACKAGE_APT_CACHE_TOOL |
+                             VM_GUEST_PACKAGE_APPSYNC;
     const bool installed =
         (package->roles & VM_GUEST_PACKAGE_INSTALL) != 0u;
     const bool cache_tool =
         (package->roles & VM_GUEST_PACKAGE_APT_CACHE_TOOL) != 0u;
     if ((package->roles & ~allowed) != 0u || installed == cache_tool ||
         ((package->roles & VM_GUEST_PACKAGE_FOUNDATION) != 0u &&
-         !installed)) {
+         !installed) ||
+        ((package->roles & VM_GUEST_PACKAGE_APPSYNC) != 0u &&
+         (!installed || (package->roles & VM_GUEST_PACKAGE_FOUNDATION) != 0u ||
+          strcmp(package->package, APPSYNC.package) != 0 ||
+          strcmp(package->version, APPSYNC.version) != 0))) {
         package_reason(why, why_capacity, package->package,
                        "has invalid install roles");
         return false;
