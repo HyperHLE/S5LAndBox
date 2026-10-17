@@ -29,6 +29,7 @@ static void metadataTests(void) {
     assert([URL.queryItems[0].value isEqual:@"iPhone1,2"] && [URL.queryItems[1].value isEqual:@"3.1.3"]);
     assert([URL.queryItems.lastObject.value isEqual:@"a&os=99"]);
     assert(parse(@[row()]).count == 1);
+    assert(![VMLegacyStoreApp appsFromData:NSData.data target:target error:NULL]);
     assert(parse(@[row(), row()]).count == 1);
     NSMutableDictionary *stringID = row(); stringID[@"ipa_id"] = @"123";
     assert(parse(@[stringID]).count == 1);

@@ -52,7 +52,7 @@ BOOL VMLegacyStoreAllowsURL(NSURL *URL, VMLegacyStoreRequestKind kind) {
 
 @implementation VMLegacyStoreTarget
 + (instancetype)supportedGuest {
-    // Mainline currently boots only this profile. Keep iOS 6 work isolated.
+    // The compiled boot path currently supports only this profile.
     return [[self alloc] initWithModel:@"iPhone1,2" OSVersion:@"3.1.3" architectures:@[@"armv6"] family:@"1"];
 }
 - (instancetype)initWithModel:(NSString *)model OSVersion:(NSString *)version
@@ -79,7 +79,7 @@ BOOL VMLegacyStoreAllowsURL(NSURL *URL, VMLegacyStoreRequestKind kind) {
 
 @implementation VMLegacyStoreApp
 + (NSArray<VMLegacyStoreApp *> *)appsFromData:(NSData *)data target:(VMLegacyStoreTarget *)target error:(NSError **)error {
-    id root = data.length <= 2 * 1024 * 1024 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL] : nil;
+    id root = data.length > 0 && data.length <= 2 * 1024 * 1024 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL] : nil;
     NSDictionary *identity = [root isKindOfClass:NSDictionary.class] ? root[@"target"] : nil;
     id rows = [root isKindOfClass:NSDictionary.class] ? root[@"apps"] : nil;
     if (![identity isKindOfClass:NSDictionary.class] || ![identity[@"model"] isEqual:target.model] ||
@@ -195,7 +195,12 @@ BOOL VMLegacyStoreAllowsURL(NSURL *URL, VMLegacyStoreRequestKind kind) {
     void (^completion)(NSData *, NSError *) = _completion; _completion = nil;
     NSData *data = error ? nil : [_data copy]; _data = nil; _progress = nil;
     [_session invalidateAndCancel]; _session = nil; _task = nil;
-    dispatch_async(dispatch_get_main_queue(), ^{ completion(data, error); });
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self.cancelled) {
+            if (self->_destination) [NSFileManager.defaultManager removeItemAtURL:self->_destination error:NULL];
+            completion(nil, [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCancelled userInfo:nil]);
+        } else completion(data, error);
+    });
 }
 - (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task
     willPerformHTTPRedirection:(NSHTTPURLResponse *)response newRequest:(NSURLRequest *)request
@@ -214,7 +219,13 @@ BOOL VMLegacyStoreAllowsURL(NSURL *URL, VMLegacyStoreRequestKind kind) {
     if (!http || !VMLegacyStoreAllowsURL(http.URL, _kind) || http.statusCode != 200) {
         NSString *message = http.statusCode == 429 ? @"Legacy Store is busy. Wait a minute before trying again." :
             http.statusCode == 404 ? @"This archived app is no longer available." : @"The server could not complete the request. Try again later.";
-        error = VMLegacyStoreError(message);
+        NSMutableDictionary *details = [@{NSLocalizedDescriptionKey:message} mutableCopy];
+        if (http.statusCode == 429 || http.statusCode == 503) {
+            NSString *retry = [http valueForHTTPHeaderField:@"Retry-After"];
+            NSTimeInterval seconds = Digits(retry, 5) ? MIN(3600, MAX(60, retry.integerValue)) : 60;
+            details[@"retryAfter"] = [NSDate dateWithTimeIntervalSinceNow:seconds];
+        }
+        error = [NSError errorWithDomain:@"S5LBox.LegacyStore" code:http ? http.statusCode : 1 userInfo:details];
     } else if (response.expectedContentLength > (int64_t)_limit ||
         (_expected && response.expectedContentLength >= 0 && (uint64_t)response.expectedContentLength != _expected)) {
         error = VMLegacyStoreError(@"The server returned an unexpected file size.");
@@ -292,7 +303,7 @@ BOOL VMLegacyStoreAllowsURL(NSURL *URL, VMLegacyStoreRequestKind kind) {
             if (apps) {
                 if (owner->_cache.count >= 16) [owner->_cache removeAllObjects];
                 owner->_cache[key] = @{@"date":NSDate.date, @"apps":apps};
-            } else owner->_retryAfter = [NSDate dateWithTimeIntervalSinceNow:15];
+            } else owner->_retryAfter = error.userInfo[@"retryAfter"] ?: [NSDate dateWithTimeIntervalSinceNow:15];
             completion(apps ?: cached[@"apps"] ?: @[], !apps && cached != nil, error);
         }];
 }
