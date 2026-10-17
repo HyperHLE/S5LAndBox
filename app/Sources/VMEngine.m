@@ -42,6 +42,7 @@
 #import "VMInstanceStore.h"
 #import "VMSettings.h"
 #import "VMUSBTransport.h"
+#import "VMUSBClockSync.h"
 #import "VMUSBRecovery.h"
 #include "usb_host.h"
 #include "usb_mux.h"
@@ -1774,6 +1775,13 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
     uint64_t hostPauseStartNS = 0u;
     uint64_t checkpointInputStartNS = 0u;
     uint64_t checkpointInputStartRetired = 0u;
+    // This thread owns scheduling, never the asynchronous worker's lifetime.
+    // Each attempt has its own cancellation flag, so an old run cannot use a
+    // later run's USB session. Calendar updates never touch the core timebase.
+    VMUSBClockSync *clockSync = nil;
+    BOOL clockSyncPending = YES;
+    unsigned clockSyncAttempts = 0;
+    double clockSyncRetryAt = 0;
 
     /* Emulator-thread only, so it is a local and not an ivar: nothing else may
      * read it and no lock can be forgotten. */
@@ -1801,6 +1809,12 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
                 stoppedByRequest = YES;
                 break;
             }
+            if ((paused || checkpoint || shutdownRequested) && clockSync) {
+                clockSync.canceled = YES;
+                clockSync = nil;
+                clockSyncPending = YES;
+                clockSyncAttempts = 0;
+            }
             BOOL wantsAudio = !paused && !checkpoint;
             BOOL wantsMicrophone = wantsAudio &&
                 s5l_i2s_input_active(&_machine.i2s[0], &_machine.codec);
@@ -1819,6 +1833,12 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
              * thread only requests the pause and never mutates core clocks. */
             if (hostPausePending && (!paused || checkpoint)) {
                 uint64_t resumedNS = vm_now_ns();
+                if (resumedNS >= hostPauseStartNS &&
+                    resumedNS - hostPauseStartNS >= UINT64_C(2000000000)) {
+                    clockSyncPending = YES;
+                    clockSyncAttempts = 0;
+                    clockSyncRetryAt = 0;
+                }
                 (void)s5l8900_resume_active_host_clock(
                     &_machine, hostPauseStartNS, resumedNS);
                 /* A stopped guest cannot sample a held pin. Its release floor
@@ -2048,6 +2068,11 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
             if (_usbHostActive && !checkpoint) {
                 uint64_t generation = vm_firmware_boot_restart_count(_firmwareBoot);
                 if (generation != _usbBootGeneration) {
+                    clockSync.canceled = YES;
+                    clockSync = nil;
+                    clockSyncPending = YES;
+                    clockSyncAttempts = 0;
+                    clockSyncRetryAt = 0;
                     // A replacement kernel must never inherit the previous
                     // host's usbmux sequences or open service channels. Use
                     // the actual reboot boundary, not just USB register state.
@@ -2129,6 +2154,19 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
                         _usbMuxReported = NO;
                         usb_host_disconnect(&_usbHost, &_machine);
                     }
+                }
+                if (clockSync.finished) {
+                    [self appendConsole:[NSString stringWithFormat:@"[clock] %@\n", clockSync.message]];
+                    clockSyncPending = !clockSync.succeeded && clockSyncAttempts < 3;
+                    clockSyncRetryAt = vm_now() + 15;
+                    clockSync = nil;
+                }
+                if (clockSyncPending && !clockSync && !shutdownRequested &&
+                    !_usbRecovery.disconnected && _usbMux && usb_mux_ready(_usbMux) &&
+                    vm_now() >= clockSyncRetryAt) {
+                    clockSyncAttempts++;
+                    clockSync = [[VMUSBClockSync alloc] initWithTransport:_usbTransport instanceID:_instanceID];
+                    [clockSync start];
                 }
             }
 
@@ -2286,6 +2324,7 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
             (int)status, _machine.cpu.r[15], _machine.cpu.cpsr,
             (unsigned long long)retired]];
 
+    clockSync.canceled = YES;
     [_usbTransport endSession:@"The machine stopped. The USB service session was closed."];
     vm_audio_buffer_active(audioBuffer, false);
     [_audio setRunning:NO];

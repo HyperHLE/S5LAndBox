@@ -347,8 +347,15 @@ rebooting, Packages saw the generated `firmware` 3.1.3 record. An early AppSync
 attempt was correctly refused while first-boot APT caches were still being
 prepared. After the guest log recorded completion, AppSync for OS 3.1 1.0.2
 installed successfully through virtual USB. The v5 readiness change addresses
-the premature install affordance observed in that test; its physical validation
-is separate from this v4 result.
+the premature install affordance observed in that test.
+
+The same phone subsequently passed a fresh v5 test on `9cce79c`, disposable
+`Cancellation test`: Packages stayed in its finishing-setup state, then changed
+to Connected automatically. No Cydia launch, guest unlock or manual reboot was
+needed. The guest's log confirmed Cydia registration, repository HTTP/DNS
+activity and completed APT cache preparation. AppSync for OS 3.1 1.0.2 then
+installed successfully. This does not establish a first-boot duration on other
+host devices; cache preparation still took several minutes on this phone.
 
 ARMv6 cross-compilation passes. At `4e3d2fb`, 60 host planning checks, 48
 synthetic executor checks, 41 USB checks, the iOS 13 availability gate and the

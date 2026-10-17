@@ -5,6 +5,9 @@
 #import "VMUSBTransport.h"
 #import "VMUSBPairing.h"
 #import "VMUSBAFC.h"
+#import "VMUSBLockdown.h"
+#import <dispatch/dispatch.h>
+#include <math.h>
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -31,6 +34,94 @@ static int nextFD = -1;
 - (BOOL)hasServiceActivity { return NO; }
 - (void)pollWithMux:(usb_mux_t *)mux { (void)mux; }
 @end
+@interface ClockService : VMUSBService
+@property (nonatomic, strong) NSMutableArray *replies;
+@property (nonatomic, strong) NSMutableArray *queries;
+@end
+@implementation ClockService
+- (instancetype)init {
+    self = [super init];
+    if (self) { _replies = [NSMutableArray array]; _queries = [NSMutableArray array]; }
+    return self;
+}
+- (void)close {} // no descriptor in this synthetic guest
+- (NSDictionary *)request:(NSDictionary *)query error:(NSError **)error {
+    if (self.canceled && self.canceled()) {
+        if (error) *error = [NSError errorWithDomain:@"fixture" code:1
+            userInfo:@{NSLocalizedDescriptionKey:@"Operation canceled."}];
+        return nil;
+    }
+    [_queries addObject:query];
+    if (!_replies.count) return nil;
+    NSDictionary *reply = _replies.firstObject; [_replies removeObjectAtIndex:0]; return reply;
+}
+@end
+static void testClock(void) {
+    const NSTimeInterval epoch = 1792198800.75;
+    for (NSNumber *old in @[@1000000000ULL, @1000000000.5]) {
+        ClockService *s = [ClockService new];
+        [s.replies addObjectsFromArray:@[@{@"Request":@"GetValue", @"Value":old},
+            @{@"Request":@"SetValue", @"Result":@"Success"},
+            @{@"Request":@"GetValue", @"Value":@(floor(epoch))}]];
+        VMUSBLockdown *client = [[VMUSBLockdown alloc] initWithService:s];
+        __block unsigned samples = 0;
+        CHECK([client synchronizeClockWithNow:^NSTimeInterval{
+            // The wall clock is sampled after the query, never at job creation.
+            CHECK(s.queries.count >= 1); samples++; return epoch;
+        } error:NULL]);
+        CHECK(samples == 2 && s.queries.count == 3);
+        NSDictionary *set = s.queries[1];
+        CHECK([set[@"Request"] isEqual:@"SetValue"]);
+        CHECK(CFNumberIsFloatType((__bridge CFNumberRef)set[@"Value"]) ==
+              CFNumberIsFloatType((__bridge CFNumberRef)old));
+        CHECK(fabs([set[@"Value"] doubleValue] - epoch) < 1);
+        for (NSDictionary *query in s.queries) {
+            CHECK([query[@"Key"] isEqual:@"TimeIntervalSince1970"] && !query[@"Domain"]);
+        }
+    }
+    for (id value in @[@YES, @"1000000000", NSNull.null, @(-1), @(NAN), @(INFINITY)]) {
+        ClockService *s = [ClockService new];
+        [s.replies addObject:@{@"Request":@"GetValue", @"Value":value}];
+        VMUSBLockdown *client = [[VMUSBLockdown alloc] initWithService:s];
+        NSError *error = nil;
+        CHECK(![client synchronizeClockWithNow:^NSTimeInterval{ return epoch; } error:&error]);
+        CHECK(error && s.queries.count == 1); // Invalid data never reaches SetValue.
+    }
+    for (NSNumber *host in @[@(NAN), @(INFINITY), @946684799.0, @4102444800.0]) {
+        ClockService *s = [ClockService new];
+        [s.replies addObject:@{@"Request":@"GetValue", @"Value":@1000000000}];
+        VMUSBLockdown *client = [[VMUSBLockdown alloc] initWithService:s];
+        CHECK(![client synchronizeClockWithNow:^NSTimeInterval{ return host.doubleValue; } error:NULL]);
+        CHECK(s.queries.count == 1);
+    }
+    for (NSDictionary *bad in @[@{@"Request":@"GetValue", @"Error":@"MissingValue"},
+            @{@"Request":@"SetValue", @"Value":@1000000000},
+            @{@"Request":@"GetValue", @"Result":@"Failure", @"Value":@1000000000}]) {
+        ClockService *s = [ClockService new]; [s.replies addObject:bad];
+        VMUSBLockdown *client = [[VMUSBLockdown alloc] initWithService:s];
+        CHECK(![client synchronizeClockWithNow:^NSTimeInterval{ return epoch; } error:NULL]);
+        CHECK(s.queries.count == 1);
+    }
+    for (id actual in @[@1000000000, @(epoch+60), @(epoch-60), @YES, NSNull.null]) {
+        ClockService *s = [ClockService new];
+        [s.replies addObjectsFromArray:@[@{@"Request":@"GetValue", @"Value":@1000000000},
+            @{@"Request":@"SetValue"}, @{@"Request":@"GetValue", @"Value":actual}]];
+        VMUSBLockdown *client = [[VMUSBLockdown alloc] initWithService:s];
+        CHECK(![client synchronizeClockWithNow:^NSTimeInterval{ return epoch; } error:NULL]);
+        CHECK(s.queries.count == 3); // A SetValue acknowledgement alone is not success.
+    }
+    ClockService *s = [ClockService new];
+    [s.replies addObjectsFromArray:@[@{@"Request":@"GetValue", @"Value":@1000000000},
+        @{@"Request":@"SetValue", @"Error":@"SetProhibited"}]];
+    VMUSBLockdown *client = [[VMUSBLockdown alloc] initWithService:s];
+    CHECK(![client synchronizeClockWithNow:^NSTimeInterval{ return epoch; } error:NULL]);
+    CHECK(s.queries.count == 2);
+    [s.queries removeAllObjects]; s.canceled = ^BOOL{ return YES; };
+    CHECK(![client synchronizeClockWithNow:^NSTimeInterval{ return epoch; } error:NULL]);
+    CHECK(s.queries.count == 0);
+    CHECK(![VMUSBLockdown openWithTransport:[VMUSBTransport new] instanceID:@"abc"
+        canceled:^BOOL{ return YES; } deadline:0 error:NULL]);
+}
 
 @interface FixtureService : VMUSBService
 @property (nonatomic, strong) NSMutableData *input;
@@ -164,12 +255,24 @@ static void testPairing(NSURL *folder) {
     NSDictionary *saved = [NSPropertyListSerialization propertyListWithData:stored options:0 format:nil error:NULL];
     CHECK([saved[@"HostPrivateKey"] isKindOfClass:NSData.class]);
     CHECK(!saved[@"RootPrivateKey"]);
+    // Two first-time users must not generate different host records for one
+    // guest. Each worker uses the actual atomic persistence implementation.
+    NSString *concurrentID = NSUUID.UUID.UUIDString;
+    NSMutableArray *records = [NSMutableArray array];
+    dispatch_apply(4, dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^(size_t i) {
+        (void)i;
+        VMUSBPairing *other = [[VMUSBPairing alloc] initWithInstanceID:concurrentID
+            devicePublicKey:der directory:folder error:NULL];
+        @synchronized(records) { [records addObject:other.record ?: @{}]; }
+    });
+    CHECK(records.count == 4 && [records[0] count] > 0);
+    for (NSDictionary *record in records) CHECK([record isEqual:records[0]]);
     CFRelease(publicKey); CFRelease(key);
 }
 int main(int argc, char **argv) {
     @autoreleasepool {
         if (argc != 2) return 2;
-        testAFC(); testService();
+        testAFC(); testService(); testClock();
         testPairing([NSURL fileURLWithPath:[NSString stringWithUTF8String:argv[1]] isDirectory:YES]);
         printf("Native USB services: %u checks, %u failures\n", checks, failures);
         return failures ? 1 : 0;

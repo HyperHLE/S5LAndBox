@@ -92,6 +92,15 @@ static NSError *PairingError(NSString *message) {
 }
 - (instancetype)initWithInstanceID:(NSString *)identifier devicePublicKey:(NSData *)key
                          directory:(NSURL *)folder error:(NSError **)error {
+    // Calendar sync and IPA installation may pair concurrently. Serialize the
+    // read/create/write transaction so both get the same trusted host identity.
+    // No network I/O is performed while this process-local lock is held.
+    @synchronized(VMUSBPairing.class) {
+        return [self initSerializedWithInstanceID:identifier devicePublicKey:key directory:folder error:error];
+    }
+}
+- (instancetype)initSerializedWithInstanceID:(NSString *)identifier devicePublicKey:(NSData *)key
+                                  directory:(NSURL *)folder error:(NSError **)error {
     self = [super init];
     if (!self) return nil;
     NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdefABCDEF-"];

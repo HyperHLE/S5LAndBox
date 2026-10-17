@@ -1,0 +1,113 @@
+// Copyright (c) 2026 j0shua-SYSON. MIT licensed.
+#import "VMUSBLockdown.h"
+#import "VMUSBService.h"
+#import "VMUSBPairing.h"
+#include <math.h>
+
+static NSError *LockdownError(NSString *message) {
+    return [NSError errorWithDomain:@"S5LBox.GuestServices" code:1
+                          userInfo:@{NSLocalizedDescriptionKey:message}];
+}
+static BOOL TimeValue(id value) {
+    return [value isKindOfClass:NSNumber.class] &&
+        CFGetTypeID((__bridge CFTypeRef)value) != CFBooleanGetTypeID() &&
+        isfinite([value doubleValue]) && [value doubleValue] >= 0;
+}
+@implementation VMUSBLockdown {
+    VMUSBService *_service;
+    VMUSBTransport *_transport;
+    VMUSBPairing *_pairing;
+    BOOL (^_canceled)(void);
+    NSTimeInterval _deadline;
+}
+- (instancetype)initWithService:(VMUSBService *)service {
+    self = [super init]; if (self) _service = service; return self;
+}
+- (void)dealloc { [self close]; }
+- (void)close { [_service close]; _service = nil; }
+- (NSDictionary *)request:(NSString *)request values:(NSDictionary *)values error:(NSError **)error {
+    NSMutableDictionary *query = [@{@"Label":@"S5LBox", @"Request":request} mutableCopy];
+    if (values) [query addEntriesFromDictionary:values];
+    NSDictionary *reply = [_service request:query error:error];
+    if (!reply) return nil;
+    if (![reply[@"Request"] isEqual:request] || reply[@"Error"] ||
+        (reply[@"Result"] && ![reply[@"Result"] isEqual:@"Success"])) {
+        if (error) *error = LockdownError([NSString stringWithFormat:@"Guest %@ failed: %@.", request,
+            reply[@"Error"] ?: reply[@"Result"] ?: @"invalid response"]);
+        return nil;
+    }
+    return reply;
+}
++ (instancetype)openWithTransport:(VMUSBTransport *)transport instanceID:(NSString *)identifier
+                         canceled:(BOOL (^)(void))canceled deadline:(NSTimeInterval)deadline
+                            error:(NSError **)error {
+    VMUSBService *service = [[VMUSBService alloc] initWithTransport:transport port:62078
+        canceled:canceled deadline:deadline error:error];
+    if (!service) return nil;
+    VMUSBLockdown *client = [[self alloc] initWithService:service];
+    client->_transport = transport; client->_canceled = [canceled copy]; client->_deadline = deadline;
+    NSDictionary *type = [client request:@"QueryType" values:nil error:error];
+    if (!type) return nil;
+    if (![type[@"Type"] isEqual:@"com.apple.mobile.lockdown"]) {
+        if (error) *error = LockdownError(@"The guest did not identify its pairing service."); return nil;
+    }
+    NSDictionary *key = [client request:@"GetValue" values:@{@"Key":@"DevicePublicKey"} error:error];
+    if (!key) return nil;
+    if (![key[@"Value"] isKindOfClass:NSData.class]) {
+        if (error) *error = LockdownError(@"The guest did not return a pairing key."); return nil;
+    }
+    client->_pairing = [[VMUSBPairing alloc] initWithInstanceID:identifier devicePublicKey:key[@"Value"] error:error];
+    if (!client->_pairing) return nil;
+    NSDictionary *record = client->_pairing.record;
+    NSDictionary *pairValues = @{@"PairRecord":record, @"ProtocolVersion":@"2"};
+    // A host identity does not prove this guest checkpoint has accepted it.
+    if (![client request:@"Pair" values:pairValues error:error] ||
+        ![client request:@"ValidatePair" values:pairValues error:error]) return nil;
+    NSDictionary *session = [client request:@"StartSession"
+        values:@{@"HostID":record[@"HostID"], @"SystemBUID":record[@"SystemBUID"]} error:error];
+    if (!session) return nil;
+    if (![session[@"SessionID"] isKindOfClass:NSString.class] || ![session[@"SessionID"] length]) {
+        if (error) *error = LockdownError(@"The guest returned an invalid session."); return nil;
+    }
+    if ([session[@"EnableSessionSSL"] boolValue] &&
+        ![service enableTLSWithIdentity:client->_pairing.identity expectedKey:client->_pairing.deviceKey error:error]) return nil;
+    return client;
+}
+- (VMUSBService *)openService:(NSString *)name error:(NSError **)error {
+    if (!_pairing) { if (error) *error = LockdownError(@"The guest session is not paired."); return nil; }
+    NSDictionary *reply = [self request:@"StartService" values:@{@"Service":name} error:error];
+    if (!reply) return nil;
+    NSNumber *port = reply[@"Port"];
+    if (![port isKindOfClass:NSNumber.class] || port.integerValue < 1 || port.integerValue > 65535) {
+        if (error) *error = LockdownError(@"The guest returned an invalid service port."); return nil;
+    }
+    VMUSBService *service = [[VMUSBService alloc] initWithTransport:_transport port:port.unsignedShortValue
+        canceled:_canceled deadline:_deadline error:error];
+    if ([reply[@"EnableServiceSSL"] boolValue] &&
+        ![service enableTLSWithIdentity:_pairing.identity expectedKey:_pairing.deviceKey error:error]) return nil;
+    return service;
+}
+- (BOOL)synchronizeClockWithNow:(NSTimeInterval (^)(void))now error:(NSError **)error {
+    NSDictionary *reply = [self request:@"GetValue" values:@{@"Key":@"TimeIntervalSince1970"} error:error];
+    if (!reply) return NO;
+    NSNumber *old = reply[@"Value"];
+    NSTimeInterval target = now ? now() : NAN;
+    if (!TimeValue(old) || !isfinite(target) || target < 946684800.0 || target >= 4102444800.0) {
+        if (error) *error = LockdownError(@"The guest or host returned an invalid calendar time."); return NO;
+    }
+    // Legacy lockdown expects the original plist number type (integer/real).
+    BOOL real = CFNumberIsFloatType((__bridge CFNumberRef)old);
+    NSNumber *value = real ? @(target) : @((uint64_t)target);
+    if (![self request:@"SetValue" values:@{@"Key":@"TimeIntervalSince1970", @"Value":value} error:error]) return NO;
+    reply = [self request:@"GetValue" values:@{@"Key":@"TimeIntervalSince1970"} error:error];
+    if (!reply) return NO;
+    NSNumber *actual = reply[@"Value"];
+    NSTimeInterval current = now();
+    if (!TimeValue(actual) || !isfinite(current) || current < target ||
+        actual.doubleValue < target - 2 || actual.doubleValue > current + 2 ||
+        fabs(actual.doubleValue - current) > 10) {
+        if (error) *error = LockdownError(@"The guest calendar did not confirm the current time."); return NO;
+    }
+    return YES;
+}
+@end
