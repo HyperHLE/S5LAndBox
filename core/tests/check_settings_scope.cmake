@@ -286,9 +286,21 @@ string(FIND "${package_bridge}" "choose Repair package setup" misleading_repair_
 if(NOT misleading_repair_hint EQUAL -1)
     message(FATAL_ERROR "A transient connection error must not recommend reinstalling the helper")
 endif()
-string(FIND "${jailbreak}" "vm_guest_install_build_after_force_off(" force_builder)
+string(FIND "${jailbreak}" "vm_guest_install_build_after_force_off_with_appsync(" force_builder)
 string(FIND "${app}" "Force Off & Jailbreak" force_choice)
 string(FIND "${machines}" "[self_ prepareGuestInstall:install" boot_to_shutdown)
 if(force_builder EQUAL -1 OR force_choice EQUAL -1 OR NOT boot_to_shutdown EQUAL -1)
     message(FATAL_ERROR "Jailbreak must use explicit stopped-disk preflight, not boot-to-shutdown")
 endif()
+
+# The optional package choice must be captured alongside helper policy and
+# passed to both download and disk planning, not read again mid-transaction.
+foreach(required "_includeAppSync = !self.packageManagerOnly && [VMSettings sharedSettings].appSyncWithJailbreak;"
+        "startIncludingAppSync:self_->_includeAppSync progress:"
+        "NULL, self_->_includeAppSync, VMGuestInstallBuildProgress"
+        "packageDirectory.fileSystemRepresentation,\n                self_->_includeAppSync,")
+    string(FIND "${jailbreak}" "${required}" found)
+    if(found EQUAL -1)
+        message(FATAL_ERROR "Jailbreak lost its captured optional AppSync policy: ${required}")
+    endif()
+endforeach()
