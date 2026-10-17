@@ -421,8 +421,14 @@ jobs:
       - name: Fetch exact public library input without installing it
         run: |
           mkdir -p build-apt-input
-          curl --fail --location --retry 2 --max-time 60 \
+          # The archive's custom-domain certificate can expire independently
+          # of its own CDN endpoint. Both requests still require valid HTTPS;
+          # the pinned digest below authenticates the exact binary input.
+          curl --fail --location --proto '=https' --proto-redir '=https' --retry 2 --max-time 60 \
             https://apt.saurik.com/cydia-3.7/debs/apt7-lib_0.7.20.2-1_iphoneos-arm.deb \
+            --output build-apt-input/library.deb || \
+          curl --fail --location --proto '=https' --proto-redir '=https' --retry 2 --max-time 60 \
+            https://d35rlteizluyd2.cloudfront.net/cydia-3.7/debs/apt7-lib_0.7.20.2-1_iphoneos-arm.deb \
             --output build-apt-input/library.deb
           printf '%s  %s\n' \
             b8fb485c786e5a83abf4710778fb5c89bd9f6dcd9ced56fc50f363169f9132b7 \

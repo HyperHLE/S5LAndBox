@@ -7,6 +7,7 @@
 
 #import "VMGuestPackageFile.h"
 #import "VMGuestPackageManifest.h"
+#import "VMArchiveTransport.h"
 
 static NSString *const VMGuestPackageDownloadErrorDomain =
     @"com.j0shua.S5LBox.GuestPackageDownload";
@@ -40,6 +41,7 @@ typedef NS_ENUM(NSInteger, VMGuestPackageDownloadError) {
     NSOperationQueue *_delegateQueue;
     NSError *_transferError;
     BOOL _downloadPrepared;
+    BOOL _triedArchiveFallback;
     VMGuestPackageDownloadProgress _progress;
     VMGuestPackageDownloadCompletion _completion;
 }
@@ -127,6 +129,20 @@ static NSString *VMGuestPackageName(const vm_guest_package_t *package) {
     return NO;
 }
 
+- (void)startDownloadAtURL:(NSURL *)url filename:(NSString *)filename {
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+    request.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+    request.timeoutInterval = 90.0;
+    [request setValue:@"S5LBox/1" forHTTPHeaderField:@"User-Agent"];
+    _currentBytes = 0u;
+    _transferError = nil;
+    _downloadPrepared = NO;
+    _task = [_session downloadTaskWithRequest:request];
+    [self reportCompleted:_verifiedBytes
+                    stage:[@"Downloading " stringByAppendingString:filename]];
+    [_task resume];
+}
+
 - (void)advance {
     NSAssert(![NSThread isMainThread], @"package I/O belongs off the main thread");
     if (_cancelled) {
@@ -182,18 +198,9 @@ static NSString *VMGuestPackageName(const vm_guest_package_t *package) {
             return;
         }
 
-        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
-        request.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
-        request.timeoutInterval = 90.0;
-        [request setValue:@"S5LBox/1" forHTTPHeaderField:@"User-Agent"];
         _partialURL = partial;
-        _currentBytes = 0u;
-        _transferError = nil;
-        _downloadPrepared = NO;
-        _task = [_session downloadTaskWithRequest:request];
-        [self reportCompleted:_verifiedBytes
-                        stage:[@"Downloading " stringByAppendingString:filename]];
-        [_task resume];
+        _triedArchiveFallback = NO;
+        [self startDownloadAtURL:url filename:filename];
         return;
     }
 
@@ -363,11 +370,18 @@ didFinishDownloadingToURL:(NSURL *)location {
 - (void)URLSession:(NSURLSession *)session
               task:(NSURLSessionTask *)task
 didCompleteWithError:(NSError *)error {
-    (void)session; (void)task;
+    (void)session;
     _task = nil;
     if (_cancelled) {
         [self finishWithDirectory:nil error:VMGuestDownloadError(
             VMGuestPackageDownloadCancelled, @"The package download was cancelled.")];
+        return;
+    }
+    NSURL *alternative = !_triedArchiveFallback && !_transferError && !_downloadPrepared
+        ? VMArchiveFallbackURL(task.originalRequest.URL, error) : nil;
+    if (alternative) {
+        _triedArchiveFallback = YES;
+        [self startDownloadAtURL:alternative filename:VMGuestPackageName(vm_guest_package_at(_index))];
         return;
     }
     NSError *failure = _transferError ?: error;
