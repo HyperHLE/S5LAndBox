@@ -91,6 +91,13 @@ bool vm_button_queue_peek(const vm_button_queue_t *q, vm_button_event_t *out) {
     return true;
 }
 
+bool vm_button_home_wake_hold_needed(const vm_button_event_t *event,
+                                    bool display_running, bool hibernating,
+                                    bool standby) {
+    return event && event->which == S5L_BUTTON_MENU && event->pressed &&
+           !standby && (!display_running || hibernating);
+}
+
 bool vm_button_power_release_ready(const vm_button_event_t *event,
                                    const vm_button_power_hold_t *hold,
                                    uint64_t now_ns,

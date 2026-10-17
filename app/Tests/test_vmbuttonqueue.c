@@ -603,6 +603,36 @@ static void test_button_pulses_exclude_host_pause(void) {
     vm_button_holds_resume(NULL, NULL, 0u, 0u);
 }
 
+static void test_home_wake_includes_display_sleep(void) {
+    CHECK(!vm_button_home_wake_hold_needed(NULL, false, true, false),
+          "missing Home event requested a wake hold");
+    for (unsigned button = 0; button < S5L_BUTTON_COUNT; button++) {
+        for (unsigned bits = 0; bits < 16; bits++) {
+            vm_button_event_t event = { (uint8_t)button, (bits & 1u) != 0 };
+            bool display = (bits & 2u) != 0, hibernating = (bits & 4u) != 0;
+            bool standby = (bits & 8u) != 0;
+            bool expected = button == S5L_BUTTON_MENU && event.pressed &&
+                            !standby && (!display || hibernating);
+            CHECK(vm_button_home_wake_hold_needed(&event, display, hibernating, standby) == expected,
+                  "wrong Home wake policy for button %u state %u", button, bits);
+        }
+    }
+    vm_button_event_t down = { S5L_BUTTON_MENU, true }, up = { S5L_BUTTON_MENU, false };
+    vm_button_momentary_holds_t holds = {0};
+    const uint64_t start = UINT64_C(1000000000);
+    vm_button_momentary_note_accepted(&down, &holds, start,
+        vm_button_home_wake_hold_needed(&down, false, false, false));
+    CHECK(!vm_button_momentary_release_ready(&up, &holds,
+              start + VM_BUTTON_MOMENTARY_MIN_HOLD_NS, false),
+          "display-only sleep lost its Home pulse before the wake callback");
+    CHECK(vm_button_momentary_release_ready(&up, &holds,
+              start + VM_BUTTON_MOMENTARY_MIN_HOLD_NS, true),
+          "Home did not release after the display woke");
+    CHECK(vm_button_momentary_release_ready(&up, &holds,
+              start + VM_BUTTON_HOME_WAKE_MAX_HOLD_NS, false),
+          "display-only Home wake ignored the absolute cap");
+}
+
 int main(void) {
     printf("S5LBox app button queue tests\n");
     test_the_two_orders_are_not_the_same_and_map_correctly();
@@ -614,6 +644,7 @@ int main(void) {
     test_home_and_volume_survive_the_guest_debounce();
     test_home_wake_waits_for_display_with_a_host_cap();
     test_button_pulses_exclude_host_pause();
+    test_home_wake_includes_display_sleep();
     printf("  %d passed, %d failed\n", g_pass, g_fail);
     return g_fail ? 1 : 0;
 }

@@ -1370,9 +1370,9 @@ static double vm_engine_now_seconds(void) {
                                        displayRunning))
         return;
 
-    bool wakingHome = e.which == S5L_BUTTON_MENU && e.pressed &&
-        s5l_pcf50635_in_hibernation(&_machine.pmu) &&
-        !s5l_pcf50635_in_standby(&_machine.pmu);
+    bool wakingHome = vm_button_home_wake_hold_needed(&e, displayRunning,
+        s5l_pcf50635_in_hibernation(&_machine.pmu),
+        s5l_pcf50635_in_standby(&_machine.pmu));
     if (s5l8900_set_button(&_machine, e.which, e.pressed)) {
         if (nowNS == 0u) nowNS = vm_now_ns();
         nowCycles = _machine.cpu.cycles;

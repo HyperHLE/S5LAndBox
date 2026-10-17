@@ -111,6 +111,12 @@ typedef struct {
     bool     pressed;   /* what the guest should end up reporting */
 } vm_button_event_t;
 
+/* Display sleep need not reach PMU hibernation (e.g. with USB services active).
+ * Both need the bounded Home wake pulse; a shut-down board must not be woken. */
+bool vm_button_home_wake_hold_needed(const vm_button_event_t *event,
+                                    bool display_running, bool hibernating,
+                                    bool standby);
+
 /* The two clock anchors captured when the board, not UIKit, accepts Power. */
 typedef struct {
     bool     active;
