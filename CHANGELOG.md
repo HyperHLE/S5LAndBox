@@ -4,6 +4,10 @@
 
 - Optional Home-only interface in Advanced, with margin-tap and VoiceOver access
   to the hidden controls. Modern remains the default; Legacy remains available.
+- Apply the bounded Home wake pulse when the guest display is asleep, even if
+  the guest has not entered full PMU hibernation.
+- Update Machine Settings availability when boot or restore finishes while
+  the screen is open; IPA and Packages no longer need the screen reopened.
 - Firmware preparation runs off the main thread on the machine's owning worker.
   Force Power Off stays available during startup, saving and restart, and cancels
   unfinished disk copies and checkpoint writes before releasing the machine.

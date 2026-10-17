@@ -17,9 +17,13 @@ typedef NS_ENUM(NSInteger, VMRuntimeSection) {
 
 @interface VMRuntimeSettingsViewController ()
 @property (nonatomic) BOOL advanced;
+- (void)refreshRuntimeState;
 @end
 
-@implementation VMRuntimeSettingsViewController
+@implementation VMRuntimeSettingsViewController {
+    NSTimer *_stateTimer;
+    NSArray *_lastRuntimeState;
+}
 
 - (instancetype)init {
     return [self initWithStyle:UITableViewStyleInsetGrouped];
@@ -40,6 +44,40 @@ typedef NS_ENUM(NSInteger, VMRuntimeSection) {
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
+    _lastRuntimeState = nil;
+    [self refreshRuntimeState];
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    [_stateTimer invalidate];
+    __weak VMRuntimeSettingsViewController *weakSelf = self;
+    _stateTimer = [NSTimer scheduledTimerWithTimeInterval:0.25 repeats:YES block:^(__unused NSTimer *timer) {
+        [weakSelf refreshRuntimeState];
+    }];
+    _stateTimer.tolerance = 0.05;
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    [_stateTimer invalidate];
+    _stateTimer = nil;
+}
+
+- (void)dealloc { [_stateTimer invalidate]; }
+
+- (void)refreshRuntimeState {
+    id<VMRuntimeSettingsDelegate> owner = self.runtimeDelegate;
+    NSArray *state = @[@(owner != nil), @(self.usbTransport != nil),
+        @([owner runtimeCanControlGuest]), @([owner runtimeCanShutDown]),
+        @([owner runtimeCanForcePowerOff]), @([owner runtimePaused]),
+        @([owner runtimeMicrophoneEnabled]), [owner runtimeAudioStatus] ?: @"",
+        @([owner runtimePausesInBackground]), @([owner runtimeInlineConsole]),
+        @([owner runtimeInstructionCap])];
+    // Boot/restore can finish while this sheet is open. Refresh only actual
+    // state changes, not every tick (which would disrupt scrolling/VoiceOver).
+    if ([_lastRuntimeState isEqual:state]) return;
+    _lastRuntimeState = state;
     [self.tableView reloadData];
 }
 

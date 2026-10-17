@@ -192,6 +192,13 @@ updated to October 16, 2026, 18:54 Pacific (October 17, 01:54 UTC). The console
 reported `guest calendar synchronized`, which requires successful read-back.
 This result does not establish arbitrary firmware or timezone compatibility.
 
+On the same build, a roughly 59-second user pause followed by resume produced
+a second successful calendar read-back. A separate saved v5 guest then installed
+the supplied 15 MB Geekbench 2.2.8 IPA through the refactored pairing/AFC/
+installation_proxy path. Cydia and Geekbench were visible in SpringBoard.
+No manual guest reboot, respring or Cydia launch was used to make that install
+work. These are physical regression checks, not a throughput benchmark.
+
 ## References
 
 - Synopsys DWC2 register definitions in Linux `drivers/usb/dwc2/hw.h`.
