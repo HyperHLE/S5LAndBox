@@ -26,6 +26,14 @@ foreach(required "Machine Settings" "runtimeDelegate" "snapshotsDirectory"
         message(FATAL_ERROR "Runtime settings lost its scoped control: ${required}")
     endif()
 endforeach()
+foreach(required "refreshRuntimeState" "[weakSelf refreshRuntimeState]"
+        "[_lastRuntimeState isEqual:state]" "[_stateTimer invalidate]"
+        "viewWillDisappear:")
+    string(FIND "${runtime}" "${required}" found)
+    if(found EQUAL -1)
+        message(FATAL_ERROR "Runtime settings lost visible-only lifecycle refresh: ${required}")
+    endif()
+endforeach()
 foreach(forbidden "VMGeneralRowSnapshots" "VMSnapshotListViewController")
     string(FIND "${app}" "${forbidden}" found)
     if(NOT found EQUAL -1)

@@ -30,6 +30,21 @@ hardware equivalence, performance on other host phones, or universal app
 compatibility. The slow execution remains relevant even though this run was
 not a permanent hang. Packages also reconnected after the saved-state restore.
 
+On `631891d`, Force Power Off interrupted an in-progress Restart from the
+Back button and returned to Machines at the next one-second observation. The
+old checkpoint remained on disk but its automatic-restore marker was disarmed.
+The same disposable guest cold-booted on `0b840bc`, ran its filesystem check,
+and loaded a page in guest Safari. Guest counters showed DNS 3/3 and host
+socket errors 0:0. This is connectivity evidence, not a speed measurement.
+
+The Home wake policy now also covers a dark display before PMU hibernation.
+On the test phone, a short Home tap woke the guest after cold-boot Auto-Lock
+and after an explicit Sleep/Wake-button sleep. Previously, short taps were
+missed in the observed state while 500 ms holds woke it. The fix retains the
+existing 500 ms cap and releases when the display wakes; awake Home and volume
+pulses are unchanged. The button suite passed 264 checks and the full local
+suite passed 84/84. Arbitrary sleep-state and host-device coverage is not implied.
+
 Current lifecycle evidence is recorded in [live IPA installation](live-ipa-usb.md),
 [Packages](native-package-manager.md) and [audio](audio.md). The historical
 results below retain their original, narrower validation boundaries.

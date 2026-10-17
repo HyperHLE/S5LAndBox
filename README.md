@@ -38,8 +38,8 @@ Your iPhone doesn't need to be jailbroken.
   you need to, and connect your machine to the internet. Sound and microphone
   support are also available, though still experimental.
 
-Everyday controls stay simple. Extra options—including the classic S5LBox
-interface—live in **Advanced**.
+Everyday controls stay simple. Choose the modern, Home-only, or classic
+interface in **Advanced**, alongside the extra options.
 
 ## Get started
 
