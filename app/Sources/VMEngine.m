@@ -248,6 +248,7 @@ static double vm_engine_now_seconds(void) {
     BOOL             _shutdownRequested;
     VMEngineCheckpointCompletion _shutdownCompletion;
     BOOL             _paused;
+    BOOL             _clockSyncRequested;
     NSString        *_pauseReason;
     uint64_t         _instructionCap; // 0: run until stopped or halted
     BOOL             _buttons[VMButtonCount];
@@ -313,7 +314,18 @@ static double vm_engine_now_seconds(void) {
     _audio = [VMAudioOutput new];
     [_audio setMicrophoneEnabled:[VMSettings sharedSettings].guestMicrophoneEnabled
                      completion:nil];
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(hostTimeZoneChanged:)
+        name:NSSystemTimeZoneDidChangeNotification object:nil];
     return self;
+}
+
+- (void)hostTimeZoneChanged:(NSNotification *)notification {
+    (void)notification;
+    // The callback requests work only; the emulator thread owns cancellation
+    // and scheduling. A change received while paused stays pending until resume.
+    pthread_mutex_lock(&_lock);
+    _clockSyncRequested = YES;
+    pthread_mutex_unlock(&_lock);
 }
 
 - (VMUSBTransport *)usbTransport { return _usbTransport; }
@@ -325,6 +337,7 @@ static double vm_engine_now_seconds(void) {
 }
 
 - (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
     // Safe without any handshake: NSThread holds a strong reference to its
     // target for as long as the thread is alive, so -dealloc cannot possibly
     // run while -threadMain is still using the snapshot buffer or the lock.
@@ -1803,11 +1816,20 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
             BOOL checkpoint = _checkpointRequested;
             BOOL shutdownRequested = _shutdownRequested;
             BOOL paused = _paused;
+            BOOL clockSyncRequested = _clockSyncRequested && !paused && !checkpoint && !shutdownRequested;
+            if (clockSyncRequested) _clockSyncRequested = NO;
             pthread_mutex_unlock(&_lock);
 
             if (stop) {
                 stoppedByRequest = YES;
                 break;
+            }
+            if (clockSyncRequested) {
+                clockSync.canceled = YES;
+                clockSync = nil;
+                clockSyncPending = YES;
+                clockSyncAttempts = 0;
+                clockSyncRetryAt = 0;
             }
             if ((paused || checkpoint || shutdownRequested) && clockSync) {
                 clockSync.canceled = YES;

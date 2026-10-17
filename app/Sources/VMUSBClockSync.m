@@ -23,11 +23,19 @@
             VMUSBLockdown *client = [VMUSBLockdown openWithTransport:self->_transport instanceID:self->_identifier
                 canceled:^BOOL{ return self.canceled; }
                 deadline:NSProcessInfo.processInfo.systemUptime + 45 error:&error];
-            self.succeeded = client && [client synchronizeClockWithNow:^NSTimeInterval{
+            BOOL calendarOK = client && [client synchronizeClockWithNow:^NSTimeInterval{
+                return NSDate.date.timeIntervalSince1970;
+            } error:&error];
+            // Obtain the system zone after pairing, not when the task was queued.
+            // systemTimeZone follows the host setting, not an app-local override.
+            NSString *zone = NSTimeZone.systemTimeZone.name;
+            self.succeeded = calendarOK && [client synchronizeTimeZone:zone now:^NSTimeInterval{
                 return NSDate.date.timeIntervalSince1970;
             } error:&error];
             [client close];
-            self.message = self.succeeded ? @"guest calendar synchronized" :
+            self.message = self.succeeded ? [NSString stringWithFormat:@"guest calendar synchronized; timezone %@", zone] :
+                calendarOK ? [NSString stringWithFormat:@"guest calendar synchronized; timezone sync unavailable: %@",
+                    error.localizedDescription ?: @"no confirmation"] :
                 error.localizedDescription ?: @"guest calendar sync unavailable";
             self.finished = YES; // Publish the result last.
         }
