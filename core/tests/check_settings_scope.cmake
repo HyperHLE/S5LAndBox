@@ -21,6 +21,12 @@ foreach(required "selector:@selector(hostTimeZoneChanged:)"
     endif()
 endforeach()
 
+file(READ "${APP_DIR}/Sources/VMUSBClockSync.m" clock_sync)
+string(FIND "${clock_sync}" "[NSTimeZone resetSystemTimeZone];\n            NSString *zone = NSTimeZone.systemTimeZone.name;" fresh_host_zone)
+if(fresh_host_zone EQUAL -1)
+    message(FATAL_ERROR "Timezone sync must not reuse Foundation's cached system timezone")
+endif()
+
 foreach(forbidden "sharedSettings" "NSUserDefaults" "resetToDefaults"
         "VMFirmwareImportViewController" "VMGuestInstallViewController"
         "chooseGraphicsMode" "VMJitProbe")

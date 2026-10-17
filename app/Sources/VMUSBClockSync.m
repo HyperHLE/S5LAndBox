@@ -28,6 +28,8 @@
             } error:&error];
             // Obtain the system zone after pairing, not when the task was queued.
             // systemTimeZone follows the host setting, not an app-local override.
+            // Foundation caches it until explicitly reset (including on resume).
+            [NSTimeZone resetSystemTimeZone];
             NSString *zone = NSTimeZone.systemTimeZone.name;
             self.succeeded = calendarOK && [client synchronizeTimeZone:zone now:^NSTimeInterval{
                 return NSDate.date.timeIntervalSince1970;
