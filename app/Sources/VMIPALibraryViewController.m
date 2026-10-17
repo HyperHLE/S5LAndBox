@@ -2,6 +2,7 @@
 #import "VMIPALibraryViewController.h"
 #import "VMIPALibrary.h"
 #import "VMIPAIcon.h"
+#import "VMLegacyStoreViewController.h"
 #import <ImageIO/ImageIO.h>
 
 static UIImage *LibraryIconThumbnail(NSArray<NSData *> *candidates, CGFloat scale) {
@@ -48,6 +49,7 @@ static UIImage *LibraryIconThumbnail(NSArray<NSData *> *candidates, CGFloat scal
     self = [super initWithStyle:UITableViewStyleInsetGrouped];
     if (!self) return nil;
     _files = @[];
+    _storeTarget = [VMLegacyStoreTarget supportedGuest];
     _icons = [NSCache new];
     _icons.countLimit = 128;
     _iconQueue = [NSOperationQueue new];
@@ -111,7 +113,7 @@ static UIImage *LibraryIconThumbnail(NSArray<NSData *> *candidates, CGFloat scal
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return 2; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return section == 0 ? 1 : MAX((NSUInteger)1, _files.count);
+    return section == 0 ? 2 : MAX((NSUInteger)1, _files.count);
 }
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
     return section == 1 ? @"Apps" : nil;
@@ -124,7 +126,14 @@ static UIImage *LibraryIconThumbnail(NSArray<NSData *> *candidates, CGFloat scal
     cell.textLabel.numberOfLines = cell.detailTextLabel.numberOfLines = 0;
     cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
-    if (path.section == 0) {
+    if (path.section == 0 && path.row == 1) {
+        cell.textLabel.text = @"Legacy Store";
+        cell.detailTextLabel.text = @"Find apps for your guest";
+        cell.imageView.image = [UIImage systemImageNamed:@"bag"];
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        cell.accessibilityIdentifier = @"s5lbox.ipa-library.legacy-store";
+    } else if (path.section == 0) {
         cell.textLabel.text = @"Add apps";
         NSString *hint = @"Tap Import, or add files to S5LBox → IPAs in Files.";
         cell.detailTextLabel.text = _status.length ? [NSString stringWithFormat:@"%@\n\n%@", hint, _status] : hint;
@@ -176,6 +185,20 @@ static UIImage *LibraryIconThumbnail(NSArray<NSData *> *candidates, CGFloat scal
     if (self.selectionHandler) self.selectionHandler(_files[(NSUInteger)button.tag]);
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)path {
+    [tableView deselectRowAtIndexPath:path animated:YES];
+    if (!_importing && path.section == 0 && path.row == 1) {
+        VMLegacyStoreViewController *store = [[VMLegacyStoreViewController alloc] initWithTarget:self.storeTarget];
+        __weak VMIPALibraryViewController *weakSelf = self;
+        store.selectionHandler = ^(NSURL *URL) {
+            VMIPALibraryViewController *library = weakSelf;
+            UINavigationController *navigation = library.navigationController;
+            if (!library || ![navigation.viewControllers containsObject:library]) return;
+            [navigation popToViewController:library animated:NO];
+            if (library.selectionHandler) library.selectionHandler(URL);
+        };
+        [self.navigationController pushViewController:store animated:YES];
+        return;
+    }
     if (!_importing && path.section == 1 && (NSUInteger)path.row < _files.count && self.selectionHandler)
         self.selectionHandler(_files[(NSUInteger)path.row]);
 }
