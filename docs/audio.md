@@ -28,11 +28,27 @@ choice exists. Cold boot, saved-state resume and watchdog replacement reconcile
 the desired position through the existing GPIO/interrupt path. Saving releases
 momentary keys but preserves the slider, including a pending slider change.
 Portable lifecycle tests cover all held-button combinations and both positions;
-native Foundation tests cover persistence and machine isolation. The native
-tests and updated app's physical-device validation are pending for this candidate.
+native Foundation tests cover persistence and machine isolation.
 The controls sheet also stops assigning the switch's value on every timer tick:
 only a changed engine value is reflected, without overwriting active tracking.
 Refused changes still restore the engine's actual choice.
+
+Validation on 2026-10-17 (`76cfbf27`, isolated SetupTest, iPhone 6s Plus /
+iOS 15.8.5): the [iOS build](https://github.com/j0shua-SYSON/S5LBox/actions/runs/39001471205)
+and [complete core matrix](https://github.com/j0shua-SYSON/S5LBox/actions/runs/39001471310)
+passed, including native preference tests, the iOS 13 API baseline, sanitizers,
+and both macOS JIT jobs. Installing over SetupTest preserved its machine list.
+Normal taps switched Silent mode on and off. The on setting survived Save &
+Close, reopening the guest, terminating/relaunching the app, and a completed
+guest restart; the off preference was also persisted. These physical checks
+used a disposable test guest, not the original machine.
+
+Ringtone selection and the running host output callback were exercised, but
+speaker quality is still unverified. A bounded queue read after a preview held
+silence; it does not establish continuous audible playback. Debugger pauses also
+make those counters unsuitable for an underrun-rate comparison. The deterministic
+before/after sample test above remains the evidence for the buffering improvement,
+not a claim that all ringtone crackle is resolved.
 
 ## Existing transport and validation
 
