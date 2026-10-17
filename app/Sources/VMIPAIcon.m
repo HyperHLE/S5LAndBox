@@ -65,7 +65,7 @@ static NSString *IconIdentity(NSURL *url, const struct stat *st) {
         vmfw_zip_t zip;
         if (vmfw_zip_open(&zip, IconRead, &fd, (uint64_t)before.st_size) != VMFW_ZIP_OK ||
             !vm_ipa_archive_open(&zip, &plan, NULL, 0)) return @[];
-        NSData *plist = IconExtract(&zip, &plan.files[plan.info_index], 1024u * 1024u);
+        NSData *plist = IconExtract(&zip, &plan.files[plan.content_indices[plan.info_index]], 1024u * 1024u);
         id parsed = plist ? [NSPropertyListSerialization propertyListWithData:plist
             options:NSPropertyListImmutable format:NULL error:NULL] : nil;
         if (![parsed isKindOfClass:NSDictionary.class]) return @[];
@@ -93,7 +93,7 @@ static NSString *IconIdentity(NSURL *url, const struct stat *st) {
             NSNumber *index = entries[[root stringByAppendingPathComponent:name].lowercaseString];
             if (!index || [seen containsIndex:index.unsignedIntegerValue]) continue;
             [seen addIndex:index.unsignedIntegerValue];
-            const vmfw_zip_entry_t *entry = &plan.files[index.unsignedIntValue];
+            const vmfw_zip_entry_t *entry = &plan.files[plan.content_indices[index.unsignedIntValue]];
             if (entry->uncompressed_size > 4u * 1024u * 1024u - total) continue;
             NSData *data = IconExtract(&zip, entry, 2u * 1024u * 1024u);
             if (!data || !vm_ipa_icon_png_dimensions(data.bytes, data.length, NULL, NULL)) continue;

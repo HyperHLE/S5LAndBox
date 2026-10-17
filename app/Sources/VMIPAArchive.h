@@ -9,16 +9,23 @@
 
 typedef struct {
     vmfw_zip_entry_t *files;
+    /* For a validated file link, the final regular-file entry. Other entries
+     * map to themselves. Original link bytes are retained for guest install. */
+    unsigned *content_indices;
     unsigned count;
     unsigned info_index;
     uint64_t unpacked_bytes;
     char app_root[VMFW_ZIP_MAX_NAME];
 } vm_ipa_archive_t;
 
-/* No extraction or disk writes. Free a successful plan with close. */
+/* Reads bounded link targets into memory; never extracts paths onto the host.
+ * Supports canonical relative file links inside this app (including chains).
+ * Directory links, dot components, dangling links and cycles fail closed.
+ * Free a successful plan with close. */
 bool vm_ipa_archive_open(const vmfw_zip_t *zip, vm_ipa_archive_t *plan,
                          char *detail, size_t capacity);
 void vm_ipa_archive_close(vm_ipa_archive_t *plan);
+bool vm_ipa_entry_is_symlink(const vmfw_zip_entry_t *entry);
 bool vm_ipa_safe_path(const char *path);
 /* A bounded PNG header check before handing untrusted icon bytes to the native
  * image decoder. Accepts both ordinary PNG and Apple's legacy CgBI prefix. */

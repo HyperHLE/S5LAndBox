@@ -50,6 +50,7 @@ static BOOL IPAVersionSupported(id version) {
     NSMutableArray<NSNumber *> *_offsets;
     NSURL *_stagingDirectory;
     NSString *_executable;
+    unsigned _executableIndex;
     NSString *_slug;
     uint8_t _identity[32];
 }
@@ -92,7 +93,8 @@ static BOOL IPAVersionSupported(id version) {
         if (status != VMFW_ZIP_OK) return IPAError(error, [NSString stringWithUTF8String:vmfw_zip_strerror(status)]);
         if (!vm_ipa_archive_open(&zip, &_plan, detail, sizeof detail))
             return IPAError(error, [NSString stringWithUTF8String:detail]);
-        if (_plan.files[_plan.info_index].uncompressed_size > 1024u * 1024u)
+        unsigned infoIndex = _plan.content_indices[_plan.info_index];
+        if (_plan.files[infoIndex].uncompressed_size > 1024u * 1024u)
             return IPAError(error, @"This app's Info.plist is too large.");
         NSURL *cache = [[NSFileManager defaultManager] URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask].firstObject;
         _stagingDirectory = [cache URLByAppendingPathComponent:
@@ -117,8 +119,8 @@ static BOOL IPAVersionSupported(id version) {
         _packed = [NSData dataWithContentsOfURL:packedURL options:NSDataReadingMappedAlways error:error];
         if (!_packed || _packed.length != offset) return NO;
         const uint8_t *bytes = _packed.bytes;
-        NSData *infoData = [NSData dataWithBytes:bytes + _offsets[_plan.info_index].unsignedLongLongValue
-            length:(NSUInteger)_plan.files[_plan.info_index].uncompressed_size];
+        NSData *infoData = [NSData dataWithBytes:bytes + _offsets[infoIndex].unsignedLongLongValue
+            length:(NSUInteger)_plan.files[infoIndex].uncompressed_size];
         id parsed = [NSPropertyListSerialization propertyListWithData:infoData
             options:NSPropertyListImmutable format:NULL error:error];
         if (![parsed isKindOfClass:[NSDictionary class]])
@@ -156,8 +158,10 @@ static BOOL IPAVersionSupported(id version) {
         for (unsigned i = 0; i < _plan.count; i++) {
             if (strcmp(_plan.files[i].name, mainPath.UTF8String)) continue;
             found = YES;
-            if (!vm_ipa_check_executable(bytes + _offsets[i].unsignedLongLongValue,
-                (size_t)_plan.files[i].uncompressed_size, detail, sizeof detail))
+            unsigned contentIndex = _plan.content_indices[i];
+            _executableIndex = contentIndex;
+            if (!vm_ipa_check_executable(bytes + _offsets[contentIndex].unsignedLongLongValue,
+                (size_t)_plan.files[contentIndex].uncompressed_size, detail, sizeof detail))
                 return IPAError(error, [NSString stringWithUTF8String:detail]);
         }
         if (!found) return IPAError(error, @"The executable named by Info.plist is missing.");
@@ -268,8 +272,12 @@ static BOOL IPAVersionSupported(id version) {
                 unsigned index = [object[@"index"] unsignedIntValue];
                 entries[i].content = (const uint8_t *)_packed.bytes + _offsets[index].unsignedLongLongValue;
                 entries[i].content_size = (size_t)_plan.files[index].uncompressed_size;
-                if ((_plan.files[index].unix_mode & 0111u) || [path isEqual:[app stringByAppendingPathComponent:_executable]])
+                if (vm_ipa_entry_is_symlink(&_plan.files[index])) {
+                    entries[i].kind = ROOTFS_WORK_ENTRY_SYMLINK;
+                    entries[i].permissions = 0777;
+                } else if ((_plan.files[index].unix_mode & 0111u) || index == _executableIndex) {
                     entries[i].permissions = 0755;
+                }
             } else if (object[@"data"]) {
                 NSData *data = object[@"data"];
                 entries[i].content = data.bytes;
