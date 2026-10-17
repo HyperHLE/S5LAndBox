@@ -8,7 +8,7 @@ static NSError *LockdownError(NSString *message) {
     return [NSError errorWithDomain:@"S5LBox.GuestServices" code:1
                           userInfo:@{NSLocalizedDescriptionKey:message}];
 }
-static BOOL TimeValue(id value) {
+static BOOL VMUSBValidCalendarValue(id value) {
     return [value isKindOfClass:NSNumber.class] &&
         CFGetTypeID((__bridge CFTypeRef)value) != CFBooleanGetTypeID() &&
         isfinite([value doubleValue]) && [value doubleValue] >= 0;
@@ -92,7 +92,7 @@ static BOOL TimeValue(id value) {
     if (!reply) return NO;
     NSNumber *old = reply[@"Value"];
     NSTimeInterval target = now ? now() : NAN;
-    if (!TimeValue(old) || !isfinite(target) || target < 946684800.0 || target >= 4102444800.0) {
+    if (!VMUSBValidCalendarValue(old) || !isfinite(target) || target < 946684800.0 || target >= 4102444800.0) {
         if (error) *error = LockdownError(@"The guest or host returned an invalid calendar time."); return NO;
     }
     // Legacy lockdown expects the original plist number type (integer/real).
@@ -103,7 +103,7 @@ static BOOL TimeValue(id value) {
     if (!reply) return NO;
     NSNumber *actual = reply[@"Value"];
     NSTimeInterval current = now();
-    if (!TimeValue(actual) || !isfinite(current) || current < target ||
+    if (!VMUSBValidCalendarValue(actual) || !isfinite(current) || current < target ||
         actual.doubleValue < target - 2 || actual.doubleValue > current + 2 ||
         fabs(actual.doubleValue - current) > 10) {
         if (error) *error = LockdownError(@"The guest calendar did not confirm the current time."); return NO;
