@@ -13,6 +13,27 @@ a green unit test nor a later lifecycle callback is presented as a rendered
 SpringBoard. Later test-only commits are recorded separately and do not inherit
 run21's firmware evidence.
 
+## 2026-10-17 non-game compatibility check
+
+The supplied Geekbench 2.2.8 IPA (minimum iPhone OS 3.1, unencrypted ARMv6
+slice) installed through virtual USB after AppSync for OS 3.1 was installed
+inside the disposable guest. On the physical iPhone 6s Plus / iOS 15.8.5,
+SetupTest build `ab99d1e`, the apparent freeze progressed through real benchmark
+work: an earlier checkpoint was in Mandelbrot code; after resume it reached
+floating-point convolution and then the results screen. Results appeared about
+192 host seconds after that resume, not 192 seconds from the benchmark's start.
+
+Displayed scores were 129 overall, Integer 231, Floating Point 56, Memory 125
+and Stream 45. No app-specific benchmark bypass or timing patch was applied.
+This establishes completion of this fixture, not score accuracy, original
+hardware equivalence, performance on other host phones, or universal app
+compatibility. The slow execution remains relevant even though this run was
+not a permanent hang. Packages also reconnected after the saved-state restore.
+
+Current lifecycle evidence is recorded in [live IPA installation](live-ipa-usb.md),
+[Packages](native-package-manager.md) and [audio](audio.md). The historical
+results below retain their original, narrower validation boundaries.
+
 ## 2026-09-14 full-extent mirrored sprite regression
 
 Home/Settings transitions rejected vertically mirrored row-major dock sprites

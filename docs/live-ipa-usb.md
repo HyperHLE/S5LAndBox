@@ -163,6 +163,35 @@ The originally reported Test2 guest also connected Packages after restore,
 without changing its installed packages. These are bounded regression results,
 not a guarantee for every guest state or app.
 
+## Calendar time after resume
+
+The hardware RTC supplies current UTC time during boot. That alone does not
+update the kernel's software calendar restored from a saved guest. The engine
+therefore also schedules a bounded background synchronization through the same
+paired lockdownd connection used by IPA installation. It reads and sets
+`TimeIntervalSince1970`, preserving the guest's integer/real plist type, then
+reads the value back before reporting success. The host time is sampled after
+connection and pairing, not when the job was scheduled.
+
+This changes neither the guest's timezone nor the emulator's monotonic clock,
+CPU timing, animation timing or saved-state format. It does not modify the disk
+image directly. Pausing, saving, shutting down, stopping or rebooting cancels
+the current attempt; a later run never adopts an old worker's cancellation
+state. Each attempt has a 45-second deadline and at most three attempts are
+made per start/resume. Sleeping guests use the existing service wake path,
+without unlocking. USB-disabled or unsupported guests cannot use this path.
+Pairing-record creation is serialized so simultaneous calendar and IPA requests
+do not generate competing host identities.
+
+Native tests cover malformed responses, integer/real preservation, invalid host
+time, rejected updates, read-back disagreement, cancellation and concurrent
+identity creation. Build `631891d` passed 118 native USB checks and the iOS 13
+API/build gates. On the physical iPhone 6s Plus / iOS 15.8.5, the saved
+`Reliability test` guest restored with an October 15 calendar and automatically
+updated to October 16, 2026, 18:54 Pacific (October 17, 01:54 UTC). The console
+reported `guest calendar synchronized`, which requires successful read-back.
+This result does not establish arbitrary firmware or timezone compatibility.
+
 ## References
 
 - Synopsys DWC2 register definitions in Linux `drivers/usb/dwc2/hw.h`.
@@ -170,5 +199,7 @@ not a guarantee for every guest state or app.
   USB supply detection, cross-checked with PCF5063x register definitions.
 - libimobiledevice/usbmuxd `usb.c` and `device.c` for the wire protocol, and
   ideviceinstaller for the AFC/installation_proxy service sequence.
+- libimobiledevice [idevicedate.c](https://github.com/libimobiledevice/libimobiledevice/blob/master/tools/idevicedate.c)
+  for the paired calendar-time service and legacy integer/real handling.
 
 Reference implementations are not vendored into this MIT-licensed code.

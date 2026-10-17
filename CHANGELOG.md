@@ -9,7 +9,9 @@
   unfinished disk copies and checkpoint writes before releasing the machine.
   It remains an unclean shutdown and can lose unsaved guest work.
 - Supply the guest hardware clock with the host date instead of the fixed 2010
-  default, independently of CPU and animation timing.
+  default, independently of CPU and animation timing. Resynchronize calendar
+  time through the guest's virtual USB service after saved-state restore or
+  a host pause, without changing the guest's timezone.
 - Start physical microphone capture only when the guest audio hardware requests
   input, rather than whenever microphone access is allowed.
 - Initialize firmware dependency records during first-boot jailbreak setup,
