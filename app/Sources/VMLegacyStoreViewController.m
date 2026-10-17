@@ -184,7 +184,10 @@ static UIImage *StoreIcon(NSData *data) {
 @property (nonatomic, strong) UILabel *subtitleLabel;
 @property (nonatomic, strong) UIButton *getButton;
 @end
-@implementation VMLegacyStoreCell
+@implementation VMLegacyStoreCell {
+    NSLayoutConstraint *_buttonWidth;
+    UIStackView *_row;
+}
 - (instancetype)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)identifier {
     self = [super initWithStyle:style reuseIdentifier:identifier]; if (!self) return nil;
     _artwork = [UIImageView new]; _artwork.contentMode = UIViewContentModeScaleAspectFit;
@@ -192,11 +195,14 @@ static UIImage *StoreIcon(NSData *data) {
     _nameLabel = StoreLabel(UIFontTextStyleHeadline, UIColor.labelColor);
     _subtitleLabel = StoreLabel(UIFontTextStyleSubheadline, UIColor.secondaryLabelColor);
     _getButton = StoreButton(nil, NULL); [_getButton setTitle:@"Get" forState:UIControlStateNormal];
+    _getButton.contentEdgeInsets = UIEdgeInsetsMake(10, 12, 10, 12);
+    _buttonWidth = [_getButton.widthAnchor constraintEqualToConstant:84]; _buttonWidth.active = YES;
     [_getButton setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
     [_getButton setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
     UIStackView *labels = [[UIStackView alloc] initWithArrangedSubviews:@[_nameLabel, _subtitleLabel]];
     labels.axis = UILayoutConstraintAxisVertical; labels.spacing = 3;
     UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[_artwork, labels, _getButton]];
+    _row = row;
     row.axis = UILayoutConstraintAxisHorizontal; row.alignment = UIStackViewAlignmentCenter; row.spacing = 14;
     row.translatesAutoresizingMaskIntoConstraints = NO; [self.contentView addSubview:row];
     [NSLayoutConstraint activateConstraints:@[
@@ -207,7 +213,18 @@ static UIImage *StoreIcon(NSData *data) {
         [row.trailingAnchor constraintEqualToAnchor:self.contentView.layoutMarginsGuide.trailingAnchor]
     ]];
     self.separatorInset = UIEdgeInsetsMake(0, 94, 0, 0);
+    [self updateMetrics];
     return self;
+}
+- (void)updateMetrics {
+    _buttonWidth.constant = [[UIFontMetrics metricsForTextStyle:UIFontTextStyleHeadline] scaledValueForValue:84];
+    BOOL accessible = UIContentSizeCategoryIsAccessibilityCategory(self.traitCollection.preferredContentSizeCategory);
+    _row.axis = accessible ? UILayoutConstraintAxisVertical : UILayoutConstraintAxisHorizontal;
+    _row.alignment = accessible ? UIStackViewAlignmentLeading : UIStackViewAlignmentCenter;
+    _getButton.layer.cornerRadius = 22;
+}
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    [super traitCollectionDidChange:previousTraitCollection]; [self updateMetrics];
 }
 @end
 
@@ -266,7 +283,31 @@ static UIImage *StoreIcon(NSData *data) {
         name:VMLegacyStoreDownloadDidChangeNotification object:StoreDownload()];
     [self downloadChanged]; [self searchNow];
 }
-- (void)downloadChanged { self.navigationItem.rightBarButtonItem.enabled = StoreDownload().app != nil; }
+- (void)downloadChanged {
+    self.navigationItem.rightBarButtonItem.enabled = StoreDownload().app != nil;
+    for (NSIndexPath *path in self.tableView.indexPathsForVisibleRows) {
+        if ((NSUInteger)path.row >= _apps.count) continue;
+        VMLegacyStoreCell *cell = (id)[self.tableView cellForRowAtIndexPath:path];
+        [self configureButton:cell.getButton app:_apps[(NSUInteger)path.row]];
+    }
+}
+- (BOOL)downloadReadyForApp:(VMLegacyStoreApp *)app {
+    VMLegacyStoreDownload *download = StoreDownload();
+    return [download.app.identifier isEqual:app.identifier] && download.state == VMLegacyStoreDownloaded &&
+        [NSFileManager.defaultManager fileExistsAtPath:download.libraryURL.path];
+}
+- (void)configureButton:(UIButton *)button app:(VMLegacyStoreApp *)app {
+    VMLegacyStoreDownload *download = StoreDownload();
+    BOOL current = [download.app.identifier isEqual:app.identifier];
+    NSString *title = [self downloadReadyForApp:app] ? @"Install" :
+        current && download.state == VMLegacyStoreDownloading ? [NSString stringWithFormat:@"%.0f%%", download.fraction * 100] :
+        current && download.state == VMLegacyStoreChecking ? @"…" :
+        current && download.state == VMLegacyStoreDownloadFailed ? @"Retry" : @"Get";
+    [button setTitle:title forState:UIControlStateNormal];
+    button.enabled = !download.busy || current;
+    button.accessibilityLabel = [NSString stringWithFormat:@"%@ %@", current && download.busy ? @"Download" : title, app.name];
+    button.accessibilityValue = current && download.busy ? (download.state == VMLegacyStoreChecking ? @"Checking app" : title) : nil;
+}
 - (void)updateSearchResultsForSearchController:(UISearchController *)searchController {
     (void)searchController;
     [_debounce invalidate]; [_catalog cancel];
@@ -308,7 +349,7 @@ static UIImage *StoreIcon(NSData *data) {
     cell.subtitleLabel.text = app.developer.length ? [NSString stringWithFormat:@"%@\nVersion %@", app.developer, app.version] : [@"Version " stringByAppendingString:app.version];
     cell.artwork.image = app.iconURL ? [_icons objectForKey:app.iconURL] : nil;
     if (!cell.artwork.image) cell.artwork.image = [UIImage systemImageNamed:@"app"];
-    cell.getButton.tag = path.row; cell.getButton.accessibilityLabel = [@"Get " stringByAppendingString:app.name];
+    cell.getButton.tag = path.row; [self configureButton:cell.getButton app:app];
     [cell.getButton removeTarget:nil action:NULL forControlEvents:UIControlEventTouchUpInside];
     [cell.getButton addTarget:self action:@selector(appButtonTapped:) forControlEvents:UIControlEventTouchUpInside];
     return cell;
@@ -359,11 +400,13 @@ static UIImage *StoreIcon(NSData *data) {
 - (void)appButtonTapped:(UIButton *)button {
     if (button.tag < 0 || (NSUInteger)button.tag >= _apps.count) return;
     VMLegacyStoreApp *app = _apps[(NSUInteger)button.tag];
+    if ([self downloadReadyForApp:app]) {
+        if (self.selectionHandler) self.selectionHandler(StoreDownload().libraryURL);
+        return;
+    }
     [self showApp:app];
     VMLegacyStoreDownload *download = StoreDownload();
-    BOOL ready = [download.app.identifier isEqual:app.identifier] && download.state == VMLegacyStoreDownloaded &&
-        [NSFileManager.defaultManager fileExistsAtPath:download.libraryURL.path];
-    if (!download.busy && !ready) [download startApp:app];
+    if (!download.busy) [download startApp:app];
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)path {
     [tableView deselectRowAtIndexPath:path animated:YES]; if ((NSUInteger)path.row < _apps.count) [self showApp:_apps[(NSUInteger)path.row]];
