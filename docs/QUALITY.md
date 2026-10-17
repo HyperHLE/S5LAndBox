@@ -45,6 +45,19 @@ existing 500 ms cap and releases when the display wakes; awake Home and volume
 pulses are unchanged. The button suite passed 264 checks and the full local
 suite passed 84/84. Arbitrary sleep-state and host-device coverage is not implied.
 
+After saving and reopening that guest, Packages again listed 31 installed
+records. Safari reload generated a new guest TCP connection: host socket
+counters changed from 0/0 to 828 bytes sent / 1,050 received, DNS from 1/1 to
+2/2, with errors still 0:0. This distinguishes a working restored guest network
+from merely showing a cached page or downloading through native Packages.
+
+Build `c03ed54` also passed the stale Machine Settings regression physically:
+opened during restore, it initially showed “Start the guest first”; without
+dismissing the screen, IPA/Packages became available and “Close machine” became
+“Save & close” after the guest started. The full local suite passed 84/84 in
+26.41 seconds and the native iOS build passed. macOS matrix completion is tracked
+separately from these device results.
+
 Current lifecycle evidence is recorded in [live IPA installation](live-ipa-usb.md),
 [Packages](native-package-manager.md) and [audio](audio.md). The historical
 results below retain their original, narrower validation boundaries.
