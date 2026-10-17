@@ -35,6 +35,8 @@
 #define OWNER getuid()
 #define SPRINGBOARD STATE "/SpringBoard.plist"
 #define NOTIFY_CONFIG STATE "/notify.conf"
+#define SETUP_SCRIPT STATE "/install-script"
+#define SETUP_COMPLETE STATE "/setup-complete"
 #else
 #define STATE "/private/var/lib/s5lbox-package-manager-v1"
 #define STATUS "/private/var/lib/dpkg/status"
@@ -43,6 +45,8 @@
 #define OWNER 0
 #define SPRINGBOARD "/System/Library/LaunchDaemons/com.apple.SpringBoard.plist"
 #define NOTIFY_CONFIG "/etc/notify.conf"
+#define SETUP_SCRIPT "/usr/libexec/s5lbox-guest-install"
+#define SETUP_COMPLETE "/private/var/lib/s5lbox/complete"
 #endif
 #define MAX_STATUS (4u*1024u*1024u)
 #define MAX_DEB (64u*1024u*1024u)
@@ -74,6 +78,15 @@ static int frame(char kind, const void *bytes, size_t length) {
     return connected;
 }
 static int failure(const char *why) { frame('E',why,strlen(why)); return 0; }
+static int setup_ready(void) {
+    struct stat st;
+    // First-boot setup also replaces dpkg's status outside dpkg itself (Cydia's
+    // firmware.sh). A momentarily free dpkg lock is not a completion witness.
+    // Keep status reads available, but never mutate or restart during setup.
+    if (lstat(SETUP_SCRIPT,&st) && errno==ENOENT) return 1;
+    if (!lstat(SETUP_COMPLETE,&st) && S_ISREG(st.st_mode)) return 1;
+    return failure("Jailbreak setup is still finishing. Wait for it to complete, then refresh Packages and retry.");
+}
 static int save_finish(void) {
     unsigned char state[10] = {pending,finish_ready};
     memcpy(state+2,&boot_id,8);
@@ -204,6 +217,7 @@ static int transaction(char op) {
     if (!io(peer,expected,32,0)) return 0;
     unsigned char hint=0;
     if (modern && (!io(peer,&hint,1,0) || (hint!=0 && hint!=2))) return failure("Invalid finish hint.");
+    if (!setup_ready()) return 0;
     unsigned char *status = status_data(&status_size);
     if (!status) return failure("No guest package database.");
     ios3_sha256(status,status_size,current); free(status);
@@ -242,6 +256,7 @@ static int transaction(char op) {
         if (!read_number(&length) || length < 2 || length > 200 || !io(peer,name,length,0) || strlen(name) != length || !valid_name(name)) goto done;
     }
     // Recheck the status after upload, before permitting any mutation.
+    if (!setup_ready()) goto done;
     status = status_data(&status_size);
     if (!status) goto done;
     ios3_sha256(status,status_size,current); free(status);
@@ -283,6 +298,7 @@ done:
 static void apply_finish(void) {
     unsigned char action, expected[32], actual[32]; size_t size;
     if (!io(peer,&action,1,0) || !io(peer,expected,32,0)) return;
+    if (!setup_ready()) return;
     int lockfd=open(DPKG_LOCK,O_RDWR|O_NOFOLLOW);
     struct flock lock; memset(&lock,0,sizeof lock); lock.l_type=F_WRLCK; lock.l_whence=SEEK_SET;
     if (lockfd<0 || fcntl(lockfd,F_SETLK,&lock)) { if (lockfd>=0) close(lockfd); failure("dpkg is busy. Finish that operation first."); return; }

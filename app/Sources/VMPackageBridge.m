@@ -223,13 +223,13 @@ static void AwaitFirstConnection(NSString *identifier) {
     NSString *root = @"/private/var/lib/s5lbox-package-manager-v1";
     // Immutable executable generations avoid resizing an existing HFS fork.
     // Upgrade only the exact previous launch job in the staged transaction.
-    NSString *program = [root stringByAppendingPathComponent:@"service-finish-v3"];
+    NSString *program = [root stringByAppendingPathComponent:@"service-finish-v4"];
     NSDictionary *job = @{@"Label":@"com.j0shua.s5lbox.packages", @"ProgramArguments":@[program],
         @"RunAtLoad":@YES, @"KeepAlive":@YES, @"ThrottleInterval":@10};
     NSData *plist = [NSPropertyListSerialization dataWithPropertyList:job format:NSPropertyListXMLFormat_v1_0 options:0 error:error];
     if (!plist) return NO;
     NSMutableArray<NSData *> *legacyPlists=[NSMutableArray array];
-    for (NSString *legacy in @[@"service",@"service-finish-v2"]) {
+    for (NSString *legacy in @[@"service",@"service-finish-v2",@"service-finish-v3"]) {
         NSMutableDictionary *legacyJob=[job mutableCopy]; legacyJob[@"ProgramArguments"]=@[[root stringByAppendingPathComponent:legacy]];
         NSData *bytes=[NSPropertyListSerialization dataWithPropertyList:legacyJob format:NSPropertyListXMLFormat_v1_0 options:0 error:error];
         if (!bytes) return NO; [legacyPlists addObject:bytes];
