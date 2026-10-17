@@ -320,12 +320,23 @@ reboot. The host app never runs host restart commands. A reboot acknowledgment
 means requested, not proven boot completion. Synthetic builds substitute a
 fixture executable and cannot run these real commands.
 
-Existing v1/v2 setups require App Settings > Set up package manager again. Setup
-stages a new immutable `service-finish-v3` executable and rewrites only an exact
-recognized v1/v2 launch job in the existing crash-safe image transaction. It does
+Existing v1/v2/v3 setups require App Settings > Set up package manager again. Setup
+stages a new immutable `service-finish-v4` executable and rewrites only an exact
+recognized v1/v2/v3 launch job in the existing crash-safe image transaction. It does
 not overwrite an unknown helper, resize its fork, or edit a running disk. The
 old approximately 50 KiB executable generations are retained but no longer
 launched. The capability is kept.
+
+New jailbreak setups run Cydia's bundled `firmware.sh` before configuring the
+packages. This records the guest's actual firmware version and GraphicsServices
+capabilities in dpkg, so native dependency resolution need not wait for Cydia's
+first launch. A durable `packages-configured` checkpoint avoids repeating that
+database rewrite when only icon publication or cache preparation needs a retry.
+The v4 helper still permits status reads during setup, but refuses installation,
+removal and finish actions until the first-boot completion marker exists.
+An app update alone does not rewrite an already-completed guest's first-boot
+script. If an older guest has no `firmware` record, let its setup finish, open
+Cydia once, then refresh Installed in Packages.
 
 ARMv6 cross-compilation passes. At `4e3d2fb`, 60 host planning checks, 48
 synthetic executor checks, 41 USB checks, the iOS 13 availability gate and the
