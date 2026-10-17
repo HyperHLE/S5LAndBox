@@ -99,6 +99,10 @@ foreach(required "@interface VMMachineHeadingView : UIView"
 endforeach()
 
 file(READ "${APP_DIR}/Sources/VMEngine.m" engine)
+string(FIND "${engine}" "_bringUpNote = ok\n            ? @\"\"" preparation_success_note)
+if(preparation_success_note EQUAL -1)
+    message(FATAL_ERROR "Successful disk preparation must not publish a transient bring-up error")
+endif()
 file(READ "${APP_DIR}/Sources/AppDelegate.m" delegate)
 foreach(required "setMicrophoneEnabled:[VMSettings sharedSettings].guestMicrophoneEnabled")
     string(FIND "${engine}" "${required}" found)

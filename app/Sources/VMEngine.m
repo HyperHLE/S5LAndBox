@@ -612,9 +612,11 @@ static double vm_engine_now_seconds(void) {
         NSString *said = [NSString stringWithUTF8String:detail];
         pthread_mutex_lock(&_lock);
         _preparingRootFS = NO;
+        /* Success is a progress transition, not a bring-up problem. The UI
+         * can sample this before the owning worker finishes firmware loading;
+         * publishing a success note here caused a false "Not running" alert. */
         _bringUpNote = ok
-            ? [NSString stringWithFormat:
-                @"The writable disk is ready. Starting iPhone OS. %@", said ?: @""]
+            ? @""
             : (said ?: @"The root filesystem could not be prepared.");
         pthread_mutex_unlock(&_lock);
         /* Two literal format strings rather than one chosen by a ternary: a
