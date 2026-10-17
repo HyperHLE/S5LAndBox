@@ -26,10 +26,18 @@ do not describe the current emulator.
   only while the guest's I²S receiver, ADC and input clock are active. Stopping
   capture returns the host to playback-only audio; pausing or backgrounding
   still stops the graph. This demand check does not change the default permission
-  policy. The physical validation notes below predate this change.
+  policy.
 - Snapshot v34 stores unread guest FIFO bytes and clock phases. Tested v32/v33
   migration starts empty FIFOs, since those versions had no PCM transport.
   Host microphone buffers, permission and callback pointers are never saved.
+
+Demand-driven capture validation on 2026-10-17 (`ab99d1e`, isolated SetupTest,
+iPhone 6s Plus / iOS 15.8.5): boot and navigation left the host microphone
+indicator off. Opening Voice Memos enabled it for the live input meter, before
+Record was pressed. An 18-second memo was recorded and appeared in the list;
+playback advanced through it with the microphone indicator off. This verifies
+the capture-demand transition and guest record/playback flow, not subjective
+audio quality or every output route.
 
 Default-policy validation on 2026-10-12 (`db9bbd6`, isolated SetupTest, iPhone 6s
 Plus / iOS 15.8.5): first launch displayed the native microphone permission prompt.
