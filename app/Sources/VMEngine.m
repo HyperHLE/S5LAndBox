@@ -469,13 +469,14 @@ static double vm_engine_now_seconds(void) {
                         @"[vm] device tree: %u nub(s) hidden from the guest: "
                         @"%@\n", report.options.unmatch_count, nubs]];
                 }
-                /* Actionable, not merely alarming: the settings screen is
-                 * where each of these now says what happens instead. */
-                NSString *said = report.options.overridden && switches.length
-                    ? [switches stringByAppendingString:
-                        @" Each one says what the machine does instead, under "
-                        @"its own switch in Settings."]
-                    : nil;
+                /* A completed jailbreak intentionally overrides its old
+                 * developer defaults. Keep that account in the console,
+                 * without interrupting every successful jailbroken boot. */
+                char warning[VM_BOOT_OPTIONS_SUMMARY_CAPACITY];
+                vm_boot_options_startup_warning(&report.options, warning,
+                                                 sizeof warning);
+                NSString *said = warning[0]
+                    ? [NSString stringWithUTF8String:warning] : nil;
                 pthread_mutex_lock(&_lock);
                 _mode = summary ?: @"Apple firmware";
                 _bringUpNote = said ?: (note ?: @"");

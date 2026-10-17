@@ -144,11 +144,9 @@ static const struct {
      *
      * The code-signing half IS implemented in shared bring-up and bootkernel:
      * the boot args gain cs_enforcement_disable, amfi_get_out_of_my_way and
-     * amfi_allow_any_signature, and /chosen/debug-enabled is set. It has never
-     * been DEMONSTRATED: nothing unsigned has been executed under it. Offering
-     * a switch labelled "jailbreak" that has never once produced a jailbreak
-     * is the declared-but-silent failure this project refuses elsewhere, so a
-     * switch alone stays off until an unsigned binary actually runs.
+     * amfi_allow_any_signature, and /chosen/debug-enabled is set. The app
+     * enables it only together with the committed filesystem payload, never
+     * from this developer switch alone.
      *
      * The normal Settings action now downloads an exact, pinned package set,
      * builds a complete stopped-machine disk and publishes one durable marker.
@@ -158,8 +156,7 @@ static const struct {
      */
     { "jb-codesign", MAP_FIXED_OFF,
       "A switch cannot relax guest code signing. A completed per-machine "
-      "install record can arm the shared policy, but unsigned execution is "
-      "still not demonstrated.", NULL },
+      "install record enables the matching guest policy.", NULL },
     { "jb-payload", MAP_FIXED_OFF,
       "A switch cannot install guest files during boot. The normal Jailbreak "
       "action builds a verified stopped-machine disk and records both halves "
@@ -389,6 +386,34 @@ void vm_boot_options_apply(const bool *values, unsigned count,
     }
 
     recount_and_summarize(report);
+}
+
+unsigned vm_boot_options_startup_warning(const vm_boot_options_report_t *report,
+                                          char *out, size_t capacity) {
+    if (out && capacity) out[0] = '\0';
+    if (!report) return 0u;
+    unsigned rows = report->count;
+    if (rows > VM_BOOT_OPTION_MAX) rows = VM_BOOT_OPTION_MAX;
+    const int codesign = vm_option_index("jb-codesign");
+    const int payload = vm_option_index("jb-payload");
+    const bool installed = codesign >= 0 && payload >= 0 &&
+        (unsigned)codesign < rows && (unsigned)payload < rows &&
+        report->row[codesign].outcome == VM_BOOT_OPTION_APPLIED &&
+        report->row[payload].outcome == VM_BOOT_OPTION_PROVISIONED &&
+        report->row[codesign].effective && report->row[payload].effective;
+    unsigned warnings = 0u;
+    size_t used = 0u;
+    for (unsigned i = 0u; i < rows; i++) {
+        const vm_boot_option_status_t *row = &report->row[i];
+        if (row->effective == row->requested) continue;
+        if (installed && ((int)i == codesign || (int)i == payload)) continue;
+        append(out, capacity, &used, warnings++ ? ", " :
+               "Settings not applied as requested: ");
+        const vm_option_t *option = vm_option_at(i);
+        append(out, capacity, &used, option ? option->name : "?");
+    }
+    if (warnings) append(out, capacity, &used, ". Review Advanced settings.");
+    return warnings;
 }
 
 void vm_boot_options_for_provisioning(const bool *values, unsigned count,

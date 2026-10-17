@@ -75,14 +75,12 @@ static const vm_option_t VM_OPTIONS[] = {
       "and none is verified. Toggling it later needs a fresh work image.",
       true, VM_OPT_GROUP_GUEST_STATE, VM_OPT_IMPL_HARNESS },
     { "jb-codesign", "Jailbreak: kernel half",
-      "Off in this app. The desktop harness can request relaxed guest code "
-      "signing, but no unsigned binary has been demonstrated under it, so the "
-      "phone does not present that experiment as a working jailbreak.",
+      "Controlled by the machine's completed Jailbreak transaction. This "
+      "developer switch alone cannot change guest code-signing policy.",
       false, VM_OPT_GROUP_GUEST_STATE, VM_OPT_IMPL_HARNESS },
     { "jb-payload", "Jailbreak: filesystem half",
-      "Off in this app. The shared provisioner can install a payload, but the "
-      "app has no payload import flow and the guest code-signing half it needs "
-      "has not been demonstrated.",
+      "Use the Jailbreak action to install the payload. Its completed "
+      "transaction, not this developer switch, records the machine's state.",
       false, VM_OPT_GROUP_GUEST_STATE, VM_OPT_IMPL_HARNESS },
     { "ppp", "Guest networking (PPP over uart4)",
       "On by default for new machines. Runs the guest's own pppd "
