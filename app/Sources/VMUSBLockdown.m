@@ -13,6 +13,17 @@ static BOOL VMUSBValidCalendarValue(id value) {
         CFGetTypeID((__bridge CFTypeRef)value) != CFBooleanGetTypeID() &&
         isfinite([value doubleValue]) && [value doubleValue] >= 0;
 }
+static NSTimeZone *VMUSBValidatedTimeZone(id identifier) {
+    if (![identifier isKindOfClass:NSString.class] || ![identifier length] || [identifier length] > 128) return nil;
+    // Legacy lockdownd resolves this name below /usr/share/zoneinfo. Reject
+    // path traversal and anything other than timezone identifier characters.
+    NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:
+        @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/_+-"];
+    if ([identifier rangeOfCharacterFromSet:allowed.invertedSet].location != NSNotFound) return nil;
+    for (NSString *component in [identifier componentsSeparatedByString:@"/"])
+        if (!component.length) return nil;
+    return [NSTimeZone timeZoneWithName:identifier];
+}
 @implementation VMUSBLockdown {
     VMUSBService *_service;
     VMUSBTransport *_transport;
@@ -107,6 +118,41 @@ static BOOL VMUSBValidCalendarValue(id value) {
         actual.doubleValue < target - 2 || actual.doubleValue > current + 2 ||
         fabs(actual.doubleValue - current) > 10) {
         if (error) *error = LockdownError(@"The guest calendar did not confirm the current time."); return NO;
+    }
+    return YES;
+}
+- (BOOL)synchronizeTimeZone:(NSString *)identifier now:(NSTimeInterval (^)(void))now error:(NSError **)error {
+    NSTimeZone *zone = VMUSBValidatedTimeZone(identifier);
+    if (!zone || !now) {
+        if (error) *error = LockdownError(@"The host returned an invalid timezone."); return NO;
+    }
+    NSDictionary *reply = [self request:@"GetValue" values:@{@"Key":@"TimeZone"} error:error];
+    if (!reply) return NO;
+    NSString *old = reply[@"Value"];
+    if (![old isKindOfClass:NSString.class] || !old.length) {
+        if (error) *error = LockdownError(@"The guest returned an invalid timezone."); return NO;
+    }
+    if (![old isEqualToString:identifier]) {
+        if (![self request:@"SetValue" values:@{@"Key":@"TimeZone", @"Value":identifier} error:error]) return NO;
+        reply = [self request:@"GetValue" values:@{@"Key":@"TimeZone"} error:error];
+        if (!reply) return NO;
+        if (![reply[@"Value"] isEqual:identifier]) {
+            if (error) *error = LockdownError(@"The guest did not confirm the host timezone."); return NO;
+        }
+    }
+    reply = [self request:@"GetValue" values:@{@"Key":@"TimeZoneOffsetFromUTC"} error:error];
+    if (!reply) return NO;
+    id offset = reply[@"Value"];
+    NSTimeInterval current = now();
+    if (![offset isKindOfClass:NSNumber.class] ||
+        CFGetTypeID((__bridge CFTypeRef)offset) == CFBooleanGetTypeID() ||
+        !isfinite([offset doubleValue]) || !isfinite(current) ||
+        current < 946684800.0 || current >= 4102444800.0) {
+        if (error) *error = LockdownError(@"The guest or host returned an invalid timezone offset."); return NO;
+    }
+    NSInteger expected = [zone secondsFromGMTForDate:[NSDate dateWithTimeIntervalSince1970:current]];
+    if ([offset doubleValue] != expected) {
+        if (error) *error = LockdownError(@"The guest timezone rules do not match the host's current UTC offset."); return NO;
     }
     return YES;
 }

@@ -123,6 +123,98 @@ static void testClock(void) {
         canceled:^BOOL{ return YES; } deadline:0 error:NULL]);
 }
 
+static void testTimeZone(void) {
+    const NSTimeInterval october = 1792198800.0;
+    // Real named zones, including DST, negative and non-whole-hour offsets.
+    for (NSArray *fixture in @[@[@"Europe/Paris", @(october), @7200],
+            @[@"America/Los_Angeles", @1768435200.0, @(-28800)],
+            @[@"America/Los_Angeles", @1784073600.0, @(-25200)],
+            @[@"Asia/Kathmandu", @(october), @20700],
+            @[@"Etc/UTC", @(october), @0]]) {
+        NSString *zone = fixture[0]; NSNumber *epoch = fixture[1], *offset = fixture[2];
+        for (NSNumber *alreadySet in @[@NO, @YES]) {
+            ClockService *s = [ClockService new];
+            [s.replies addObject:@{@"Request":@"GetValue", @"Value":alreadySet.boolValue ? zone : @"US/Pacific"}];
+            if (!alreadySet.boolValue) [s.replies addObjectsFromArray:@[
+                @{@"Request":@"SetValue", @"Result":@"Success"}, @{@"Request":@"GetValue", @"Value":zone}]];
+            [s.replies addObject:@{@"Request":@"GetValue", @"Value":offset}];
+            VMUSBLockdown *client = [[VMUSBLockdown alloc] initWithService:s];
+            CHECK([client synchronizeTimeZone:zone now:^NSTimeInterval{ return epoch.doubleValue; } error:NULL]);
+            CHECK(s.queries.count == (alreadySet.boolValue ? 2 : 4));
+            for (NSDictionary *query in s.queries) {
+                CHECK(!query[@"Domain"]);
+                CHECK([query[@"Key"] isEqual:@"TimeZone"] || [query[@"Key"] isEqual:@"TimeZoneOffsetFromUTC"]);
+                if ([query[@"Request"] isEqual:@"SetValue"])
+                    CHECK([query[@"Key"] isEqual:@"TimeZone"] && [query[@"Value"] isEqual:zone]);
+            }
+        }
+    }
+    for (id invalid in @[@"", @"../Europe/Paris", @"/Europe/Paris", @"Europe//Paris", @"Europe/Paris/",
+            @"Europe/Paris\n", @"Unknown/NotAZone", @42, NSNull.null]) {
+        ClockService *s = [ClockService new];
+        VMUSBLockdown *client = [[VMUSBLockdown alloc] initWithService:s];
+        NSError *error = nil;
+        CHECK(![client synchronizeTimeZone:invalid now:^NSTimeInterval{ return october; } error:&error]);
+        CHECK(error && !s.queries.count);
+    }
+    for (id invalid in @[@YES, @42, @"", NSNull.null]) {
+        ClockService *s = [ClockService new];
+        [s.replies addObject:@{@"Request":@"GetValue", @"Value":invalid}];
+        VMUSBLockdown *client = [[VMUSBLockdown alloc] initWithService:s];
+        CHECK(![client synchronizeTimeZone:@"Europe/Paris" now:^NSTimeInterval{ return october; } error:NULL]);
+        CHECK(s.queries.count == 1);
+    }
+    for (NSDictionary *bad in @[@{@"Request":@"GetValue", @"Error":@"MissingValue"},
+            @{@"Request":@"SetValue", @"Value":@"Europe/Paris"}]) {
+        ClockService *s = [ClockService new]; [s.replies addObject:bad];
+        VMUSBLockdown *client = [[VMUSBLockdown alloc] initWithService:s];
+        CHECK(![client synchronizeTimeZone:@"Europe/Paris" now:^NSTimeInterval{ return october; } error:NULL]);
+        CHECK(s.queries.count == 1);
+    }
+    for (id actual in @[@"US/Pacific", @YES, NSNull.null]) {
+        ClockService *s = [ClockService new];
+        [s.replies addObjectsFromArray:@[@{@"Request":@"GetValue", @"Value":@"US/Pacific"},
+            @{@"Request":@"SetValue"}, @{@"Request":@"GetValue", @"Value":actual}]];
+        VMUSBLockdown *client = [[VMUSBLockdown alloc] initWithService:s];
+        CHECK(![client synchronizeTimeZone:@"Europe/Paris" now:^NSTimeInterval{ return october; } error:NULL]);
+        CHECK(s.queries.count == 3);
+    }
+    for (id offset in @[@YES, @"32400", NSNull.null, @(NAN), @(INFINITY), @0, @(-25200), @86400]) {
+        ClockService *s = [ClockService new];
+        [s.replies addObjectsFromArray:@[@{@"Request":@"GetValue", @"Value":@"Europe/Paris"},
+            @{@"Request":@"GetValue", @"Value":offset}]];
+        VMUSBLockdown *client = [[VMUSBLockdown alloc] initWithService:s];
+        CHECK(![client synchronizeTimeZone:@"Europe/Paris" now:^NSTimeInterval{ return october; } error:NULL]);
+        CHECK(s.queries.count == 2); // Matching name alone cannot confirm current rules.
+    }
+    for (NSNumber *host in @[@(NAN), @(INFINITY), @946684799.0, @4102444800.0]) {
+        ClockService *s = [ClockService new];
+        [s.replies addObjectsFromArray:@[@{@"Request":@"GetValue", @"Value":@"Europe/Paris"},
+            @{@"Request":@"GetValue", @"Value":@7200}]];
+        VMUSBLockdown *client = [[VMUSBLockdown alloc] initWithService:s];
+        CHECK(![client synchronizeTimeZone:@"Europe/Paris" now:^NSTimeInterval{ return host.doubleValue; } error:NULL]);
+    }
+    ClockService *s = [ClockService new];
+    [s.replies addObjectsFromArray:@[@{@"Request":@"GetValue", @"Value":@"US/Pacific"},
+        @{@"Request":@"SetValue", @"Error":@"SetProhibited"}]];
+    VMUSBLockdown *client = [[VMUSBLockdown alloc] initWithService:s];
+    CHECK(![client synchronizeTimeZone:@"Europe/Paris" now:^NSTimeInterval{ return october; } error:NULL]);
+    CHECK(s.queries.count == 2);
+    CHECK(![client synchronizeTimeZone:nil now:nil error:NULL]);
+    for (NSUInteger cancelAfter = 0; cancelAfter < 4; cancelAfter++) {
+        ClockService *peer = [ClockService new];
+        [peer.replies addObjectsFromArray:@[@{@"Request":@"GetValue", @"Value":@"US/Pacific"},
+            @{@"Request":@"SetValue"}, @{@"Request":@"GetValue", @"Value":@"Europe/Paris"},
+            @{@"Request":@"GetValue", @"Value":@7200}]];
+        __weak ClockService *weakPeer = peer;
+        peer.canceled = ^BOOL{ return weakPeer.queries.count >= cancelAfter; };
+        VMUSBLockdown *c = [[VMUSBLockdown alloc] initWithService:peer];
+        NSError *error = nil;
+        CHECK(![c synchronizeTimeZone:@"Europe/Paris" now:^NSTimeInterval{ return october; } error:&error]);
+        CHECK(error && peer.queries.count == cancelAfter);
+    }
+}
+
 @interface FixtureService : VMUSBService
 @property (nonatomic, strong) NSMutableData *input;
 @property (nonatomic, strong) NSMutableData *output;
@@ -272,7 +364,7 @@ static void testPairing(NSURL *folder) {
 int main(int argc, char **argv) {
     @autoreleasepool {
         if (argc != 2) return 2;
-        testAFC(); testService(); testClock();
+        testAFC(); testService(); testClock(); testTimeZone();
         testPairing([NSURL fileURLWithPath:[NSString stringWithUTF8String:argv[1]] isDirectory:YES]);
         printf("Native USB services: %u checks, %u failures\n", checks, failures);
         return failures ? 1 : 0;

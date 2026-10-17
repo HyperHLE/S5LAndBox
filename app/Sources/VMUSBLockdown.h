@@ -12,5 +12,8 @@
 // Unix UTC seconds only: never change timezone, uptime, or emulator clocks.
 // Sample now after the guest GetValue response, not before connecting/pairing.
 - (BOOL)synchronizeClockWithNow:(NSTimeInterval (^)(void))now error:(NSError **)error;
+// Use the guest's timezone setter, never a UTC adjustment or a live disk edit.
+// Confirm the named zone and its current offset; old firmware may lack new zones.
+- (BOOL)synchronizeTimeZone:(NSString *)identifier now:(NSTimeInterval (^)(void))now error:(NSError **)error;
 - (void)close;
 @end

@@ -6,6 +6,20 @@ file(READ "${APP_DIR}/Sources/VMRuntimeSettingsViewController.m" runtime)
 file(READ "${APP_DIR}/Sources/VMSettingsViewController.m" app)
 file(READ "${APP_DIR}/Sources/EmulatorViewController.m" emulator)
 file(READ "${APP_DIR}/Sources/VMInstanceListViewController.m" machines)
+file(READ "${APP_DIR}/Sources/VMEngine.m" engine)
+# Host timezone notifications only enqueue work. USB synchronization remains
+# owned/canceled by the emulator thread and changes received during pause wait.
+foreach(required "selector:@selector(hostTimeZoneChanged:)"
+        "name:NSSystemTimeZoneDidChangeNotification object:nil]"
+        "[NSNotificationCenter.defaultCenter removeObserver:self]"
+        "BOOL clockSyncRequested = _clockSyncRequested && !paused && !checkpoint && !shutdownRequested;"
+        "if (clockSyncRequested) _clockSyncRequested = NO;"
+        "if (clockSyncRequested) {\n                clockSync.canceled = YES;")
+    string(FIND "${engine}" "${required}" found)
+    if(found EQUAL -1)
+        message(FATAL_ERROR "Host timezone synchronization lost its lifecycle guard: ${required}")
+    endif()
+endforeach()
 
 foreach(forbidden "sharedSettings" "NSUserDefaults" "resetToDefaults"
         "VMFirmwareImportViewController" "VMGuestInstallViewController"

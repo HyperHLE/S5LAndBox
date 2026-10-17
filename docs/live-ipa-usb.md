@@ -163,7 +163,7 @@ The originally reported Test2 guest also connected Packages after restore,
 without changing its installed packages. These are bounded regression results,
 not a guarantee for every guest state or app.
 
-## Calendar time after resume
+## Calendar and timezone synchronization
 
 The hardware RTC supplies current UTC time during boot. That alone does not
 update the kernel's software calendar restored from a saved guest. The engine
@@ -173,19 +173,33 @@ paired lockdownd connection used by IPA installation. It reads and sets
 reads the value back before reporting success. The host time is sampled after
 connection and pairing, not when the job was scheduled.
 
-This changes neither the guest's timezone nor the emulator's monotonic clock,
-CPU timing, animation timing or saved-state format. It does not modify the disk
-image directly. Pausing, saving, shutting down, stopping or rebooting cancels
+The same session synchronizes `TimeZone` to `NSTimeZone.systemTimeZone.name`.
+It skips the write when the name already matches, then verifies both the name
+and `TimeZoneOffsetFromUTC` against the host zone's current rules. Host timezone
+change notifications schedule a fresh attempt; a change during pause waits
+until resume. This uses the guest's own setter, including its notifications,
+not direct disk edits or an offset added to UTC. It works independently of the
+Packages helper and does not require guest jailbreak. Invalid host identifiers,
+unsupported guest zones and offset disagreement are reported in the console;
+there is no fallback to an arbitrary timezone. The old guest timezone database
+may not contain recently introduced zone names or current rules for every region.
+
+This does not change the emulator's monotonic clock, CPU timing, animation
+timing or saved-state format. Pausing, saving, shutting down, stopping or rebooting cancels
 the current attempt; a later run never adopts an old worker's cancellation
 state. Each attempt has a 45-second deadline and at most three attempts are
-made per start/resume. Sleeping guests use the existing service wake path,
+made per start/resume or host timezone change. Sleeping guests use the existing service wake path,
 without unlocking. USB-disabled or unsupported guests cannot use this path.
 Pairing-record creation is serialized so simultaneous calendar and IPA requests
 do not generate competing host identities.
 
 Native tests cover malformed responses, integer/real preservation, invalid host
 time, rejected updates, read-back disagreement, cancellation and concurrent
-identity creation. Build `631891d` passed 118 native USB checks and the iOS 13
+identity creation. Timezone cases include matching-name no-op, DST/winter,
+negative and fractional-hour offsets, invalid names, rejection, cancellation
+at each request, and incorrect offset confirmation.
+
+Before timezone synchronization was added, build `631891d` passed 118 native USB checks and the iOS 13
 API/build gates. On the physical iPhone 6s Plus / iOS 15.8.5, the saved
 `Reliability test` guest restored with an October 15 calendar and automatically
 updated to October 16, 2026, 18:54 Pacific (October 17, 01:54 UTC). The console
@@ -208,5 +222,8 @@ work. These are physical regression checks, not a throughput benchmark.
   ideviceinstaller for the AFC/installation_proxy service sequence.
 - libimobiledevice [idevicedate.c](https://github.com/libimobiledevice/libimobiledevice/blob/master/tools/idevicedate.c)
   for the paired calendar-time service and legacy integer/real handling.
+- pymobiledevice3 [lockdown.py](https://github.com/doronz88/pymobiledevice3/blob/master/pymobiledevice3/lockdown.py)
+  for the named `TimeZone` service key; the setter and offset getter were also
+  checked against the imported iPhone OS 3.1.3 lockdownd binary.
 
 Reference implementations are not vendored into this MIT-licensed code.
