@@ -700,6 +700,55 @@ static void test_summary_bounds(void) {
     vm_boot_options_for_provisioning(values, vm_option_count(), NULL);
 }
 
+static void test_startup_warning_preserves_diagnostics(void) {
+    bool values[VM_BOOT_OPTION_MAX];
+    vm_boot_options_report_t report;
+    char warning[VM_BOOT_OPTIONS_SUMMARY_CAPACITY];
+    const int codesign = index_of("jb-codesign");
+    const int payload = index_of("jb-payload");
+    const int vram = index_of("vram");
+    if (codesign < 0 || payload < 0 || vram < 0) return;
+    for (unsigned i = 0; i < vm_option_count(); i++)
+        values[i] = vm_option_new_machine_value(i, false, false);
+    vm_boot_options_apply(values, vm_option_count(), NULL, &report);
+    vm_boot_options_reconcile_network(&report, NULL, true);
+    vm_boot_options_reconcile_jailbreak(&report, NULL, true);
+    const vm_boot_options_report_t before = report;
+    CHECK(vm_boot_options_startup_warning(&report, warning, sizeof warning) == 0u &&
+          !warning[0], "a committed jailbreak still interrupts normal startup");
+    CHECK(report.overridden == 2u && strstr(report.summary, "jb-codesign") &&
+          strstr(report.summary, "jb-payload") &&
+          memcmp(&before, &report, sizeof report) == 0,
+          "filtering a startup alert changed the complete diagnostic report");
+
+    report.row[vram].requested = false;
+    CHECK(vm_boot_options_startup_warning(&report, warning, sizeof warning) == 1u &&
+          strstr(warning, "vram") && !strstr(warning, "jb-"),
+          "a committed jailbreak hid an unrelated mismatch: %s", warning);
+    char tiny[2] = { 'x', 'x' };
+    CHECK(vm_boot_options_startup_warning(&report, tiny, sizeof tiny) == 1u &&
+          tiny[1] == '\0', "a short warning buffer was not terminated");
+    CHECK(vm_boot_options_startup_warning(&report, NULL, 0) == 1u,
+          "count-only warning query changed the result");
+    char untouched = 'x';
+    vm_boot_options_startup_warning(&report, &untouched, 0);
+    CHECK(untouched == 'x', "zero-capacity warning wrote into its output");
+
+    report = before;
+    report.row[payload].effective = false;
+    CHECK(vm_boot_options_startup_warning(&report, warning, sizeof warning) == 1u &&
+          strstr(warning, "jb-codesign"),
+          "a half-installed state was mistaken for a committed jailbreak");
+    values[codesign] = values[payload] = true;
+    vm_boot_options_apply(values, vm_option_count(), NULL, &report);
+    vm_boot_options_reconcile_jailbreak(&report, NULL, false);
+    CHECK(vm_boot_options_startup_warning(&report, warning, sizeof warning) == 2u &&
+          strstr(warning, "jb-codesign") && strstr(warning, "jb-payload"),
+          "a settings-only jailbreak request was silently ignored");
+    CHECK(vm_boot_options_startup_warning(NULL, warning, sizeof warning) == 0u &&
+          !warning[0], "NULL report left a stale warning");
+}
+
 int main(void) {
     printf("== vm boot options ==\n");
 
@@ -711,6 +760,7 @@ int main(void) {
     test_network_state_is_reconciled_with_the_work_image();
     test_product_defaults_reach_boot_and_provisioning();
     test_jailbreak_state_is_reconciled_with_the_work_image();
+    test_startup_warning_preserves_diagnostics();
     test_missing_and_short_value_arrays();
     test_every_note_is_usable();
     test_summary_bounds();

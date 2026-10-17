@@ -195,6 +195,14 @@ void vm_boot_options_reconcile_jailbreak(vm_boot_options_report_t *report,
                                          s5l_bringup_request_t *request,
                                          bool installed);
 
+/* Startup alert, distinct from the complete diagnostic summary. A committed
+ * jailbreak owns both halves even when old developer switches are off; that
+ * expected reconciliation needs no alert. Other mismatches remain visible.
+ * Does not mutate the report. Returns the number of actionable mismatches;
+ * out may be NULL, and a nonzero capacity is always NUL-terminated. */
+unsigned vm_boot_options_startup_warning(const vm_boot_options_report_t *report,
+                                          char *out, size_t capacity);
+
 /*
  * The map, for its own test only. The app calls neither: the property they
  * defend is that the map and VMOptions.c's table are the SAME SET of names,
