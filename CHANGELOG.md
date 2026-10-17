@@ -15,6 +15,12 @@
 - Initialize firmware dependency records during first-boot jailbreak setup,
   without requiring Cydia to be opened first. Packages waits for setup to
   complete before changing packages or applying a restart.
+- Keep the package connection screen waiting until first-boot setup finishes,
+  rather than offering installations that are not ready to run.
+- Avoid misleading boot alerts after successful disk preparation or a completed
+  jailbreak. Genuine settings mismatches remain visible.
+- Retry affected Saurik archive downloads through its HTTPS CDN on TLS errors,
+  retaining certificate validation and the existing archive checks.
 
 ## 1.0.0 — 2026-10-15
 

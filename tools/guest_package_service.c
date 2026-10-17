@@ -82,7 +82,7 @@ static int setup_ready(void) {
     struct stat st;
     // First-boot setup also replaces dpkg's status outside dpkg itself (Cydia's
     // firmware.sh). A momentarily free dpkg lock is not a completion witness.
-    // Keep status reads available, but never mutate or restart during setup.
+    // Do not advertise an installable database while setup still owns it.
     if (lstat(SETUP_SCRIPT,&st) && errno==ENOENT) return 1;
     if (!lstat(SETUP_COMPLETE,&st) && S_ISREG(st.st_mode)) return 1;
     return failure("Jailbreak setup is still finishing. Wait for it to complete, then refresh Packages and retry.");
@@ -354,7 +354,9 @@ static void connection(void) {
     modern=!memcmp(request,"SPM2",4);
     if ((!modern && memcmp(request,"SPM1",4)) || mismatch) return;
     if (!load_finish()) { failure("Guest finish state is invalid; repair package setup before continuing."); return; }
-    if (request[36] == 'S') { send_finish(); send_status('S'); }
+    if (request[36] == 'S') {
+        if (setup_ready()) { send_finish(); send_status('S'); }
+    }
     else if (request[36] == 'I' || request[36] == 'R') transaction(request[36]);
     else if (modern && request[36]=='F') apply_finish();
 }

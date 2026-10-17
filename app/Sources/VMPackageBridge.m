@@ -114,7 +114,10 @@ static void AwaitFirstConnection(NSString *identifier) {
             if (value[0]<=4 && value[1]<=1) { _finishAction=value[0]; _finishReady=value[1]!=0; continue; }
         }
         NSString *message = [[NSString alloc] initWithData:payload encoding:NSUTF8StringEncoding] ?: @"Guest output could not be decoded.";
-        if (kind == 'E') { if (error) *error = VMPackageError(message); return nil; }
+        if (kind == 'E') {
+            _setupPending=[message isEqualToString:@"Jailbreak setup is still finishing. Wait for it to complete, then refresh Packages and retry."];
+            if (error) *error = VMPackageError(message); return nil;
+        }
         if (kind != 'L') { if (error) *error = VMPackageError(@"Unexpected guest package response."); return nil; }
         if (message.length && self.progress) self.progress(message);
     }
@@ -122,10 +125,10 @@ static void AwaitFirstConnection(NSString *identifier) {
     return nil;
 }
 - (NSData *)status:(NSError **)error {
-    _finishAction=0; _finishReady=NO;
+    _finishAction=0; _finishReady=NO; _setupPending=NO;
     VMUSBService *service = [self connect:'S' error:error];
     NSData *data = service ? [self receive:service terminal:'S' error:error] : nil; [service close];
-    if (!data && !self.canceled && error) *error=VMPackageError([NSString stringWithFormat:
+    if (!data && !self.canceled && !_setupPending && error) *error=VMPackageError([NSString stringWithFormat:
         @"Cannot connect to iPhone OS. %@",(*error).localizedDescription ?: @"Let it finish starting, then try again."]);
     return data;
 }
@@ -223,13 +226,13 @@ static void AwaitFirstConnection(NSString *identifier) {
     NSString *root = @"/private/var/lib/s5lbox-package-manager-v1";
     // Immutable executable generations avoid resizing an existing HFS fork.
     // Upgrade only the exact previous launch job in the staged transaction.
-    NSString *program = [root stringByAppendingPathComponent:@"service-finish-v4"];
+    NSString *program = [root stringByAppendingPathComponent:@"service-finish-v5"];
     NSDictionary *job = @{@"Label":@"com.j0shua.s5lbox.packages", @"ProgramArguments":@[program],
         @"RunAtLoad":@YES, @"KeepAlive":@YES, @"ThrottleInterval":@10};
     NSData *plist = [NSPropertyListSerialization dataWithPropertyList:job format:NSPropertyListXMLFormat_v1_0 options:0 error:error];
     if (!plist) return NO;
     NSMutableArray<NSData *> *legacyPlists=[NSMutableArray array];
-    for (NSString *legacy in @[@"service",@"service-finish-v2",@"service-finish-v3"]) {
+    for (NSString *legacy in @[@"service",@"service-finish-v2",@"service-finish-v3",@"service-finish-v4"]) {
         NSMutableDictionary *legacyJob=[job mutableCopy]; legacyJob[@"ProgramArguments"]=@[[root stringByAppendingPathComponent:legacy]];
         NSData *bytes=[NSPropertyListSerialization dataWithPropertyList:legacyJob format:NSPropertyListXMLFormat_v1_0 options:0 error:error];
         if (!bytes) return NO; [legacyPlists addObject:bytes];
