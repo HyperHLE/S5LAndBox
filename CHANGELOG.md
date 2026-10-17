@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add a native **Legacy Store** browser inside IPA Library, with search, app
+  artwork, automatic guest compatibility filtering, individual downloads and
+  installation through the existing IPA flow. Downloads are size/checksum
+  checked and locally validated before publication; failed or cancelled
+  downloads do not appear in the library.
 - Add an opt-in **Skip stock checksums** switch to Advanced > Firmware, available
   before importing an IPSW. The choice stays with the imported firmware; archive
   integrity, supported-device and kernel patch-safety checks remain required.

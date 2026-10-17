@@ -136,6 +136,11 @@ jobs:
             app/Sources/VMIPAIcon.m app/Tests/test_vmipaicon.m work/ipa-library-tests/*.o \
             -o work/ipa-library-tests/test_vmipaicon
           work/ipa-library-tests/test_vmipaicon "$GITHUB_WORKSPACE/work/ipa-library-tests"
+          xcrun clang -fobjc-arc -Wall -Wextra -Werror -framework Foundation \
+            -I app/Sources app/Sources/VMLegacyStore.m app/Sources/VMLegacyStoreDownload.m \
+            app/Tests/test_vmlegacystore.m work/ipa-library-tests/VMFirmwareDigest.o \
+            -o work/ipa-library-tests/test_vmlegacystore
+          work/ipa-library-tests/test_vmlegacystore "$GITHUB_WORKSPACE/work/ipa-library-tests"
 
       - name: Test native guest USB services
         run: |
@@ -270,7 +275,9 @@ jobs:
             app/Sources/VMSetupViewController.m app/Sources/VMFirmwareImportViewController.m \
             app/Sources/VMGuestInstallViewController.m \
             app/Sources/VMFirmwareImporter.m app/Sources/VMFirmwareStore.m \
-            app/Sources/VMFirmwareDownloader.m
+            app/Sources/VMFirmwareDownloader.m \
+            app/Sources/VMIPALibraryViewController.m app/Sources/VMLegacyStoreViewController.m \
+            app/Sources/VMLegacyStore.m app/Sources/VMLegacyStoreDownload.m
 
       - name: Compile-check every JIT source for iphoneos
         # The app deliberately excludes jit/** until the run loop owns a code
