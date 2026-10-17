@@ -298,6 +298,7 @@ typedef struct {
      * state is possible at all. Everything still works without it; the
      * artefacts just come out EXTRACTED. */
     bool     reference_build;
+    bool     stock_checksums_skipped;
 
     uint32_t member_count;
     char     detail[VM_FW_DETAIL_LEN];
@@ -330,10 +331,15 @@ typedef struct {
     /* Refuse before opening outputs unless both the resolver and the reference
      * digest catalog recognize this identity. Enabled by the shipping app. */
     bool require_supported;
+    /* Explicit import-time opt-out of stock reference hashes only. ZIP CRC,
+     * decoding, device/build identity and output completeness still apply. */
+    bool skip_stock_checksums;
 } vm_fw_import_t;
 
 /* Completion is not readiness: VM_FW_OK alone may mean identify-only. */
 bool vm_fw_report_is_verified(const vm_fw_report_t *report);
+/* Accepts a complete explicitly unchecked import without calling it verified. */
+bool vm_fw_report_is_prepared(const vm_fw_report_t *report);
 
 /*
  * Run the whole import. Always fills `report` -- including on failure, because

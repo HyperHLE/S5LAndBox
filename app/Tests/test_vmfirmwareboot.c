@@ -17,6 +17,7 @@
  * Copyright (c) 2026 j0shua-SYSON. MIT licensed.
  */
 #include "VMFirmwareBoot.h"
+#include "VMFirmwarePolicy.h"
 #include "md_snapshot.h"
 
 #include <stdio.h>
@@ -84,6 +85,42 @@ static bool make_dir(const char *path) {
 
 static bool mentions(const char *haystack, const char *needle) {
     return strstr(haystack, needle) != NULL;
+}
+
+static void test_import_policy(void) {
+    vm_fw_policy_t policy, expected = {true, {7942144, 40544, 433274880}};
+    remove_file(VM_FW_POLICY_FILE);
+    CHECK(vm_fw_policy_read(DIR, &policy) == 0 && !policy.skip_stock_checksums,
+          "legacy firmware must retain strict verification");
+    for (unsigned skip = 0; skip < 2; skip++) {
+        expected.skip_stock_checksums = skip != 0;
+        CHECK(vm_fw_policy_write(DIR, &expected), "write policy");
+        CHECK(vm_fw_policy_read(DIR, &policy) == 1 &&
+              policy.skip_stock_checksums == expected.skip_stock_checksums &&
+              !memcmp(policy.sizes, expected.sizes, sizeof policy.sizes), "policy round trip");
+    }
+    char path[512];
+    snprintf(path, sizeof path, "%s/%s", DIR, VM_FW_POLICY_FILE);
+    const unsigned offsets[] = {0, 16, 17, 23, 31, 39, 47};
+    for (unsigned i = 0; i < sizeof offsets / sizeof offsets[0]; i++) {
+        CHECK(vm_fw_policy_write(DIR, &expected), "restore policy fixture");
+        FILE *f = fopen(path, "r+b");
+        CHECK(f != NULL, "open policy fixture");
+        if (f) { fseek(f, (long)offsets[i], SEEK_SET); fputc(255, f); fclose(f); }
+        CHECK(vm_fw_policy_read(DIR, &policy) == -1 && !policy.skip_stock_checksums,
+              "invalid policy must not enable checksum skip");
+    }
+    for (size_t n = 0; n < 48; n++) {
+        write_file(VM_FW_POLICY_FILE, n);
+        CHECK(vm_fw_policy_read(DIR, &policy) == -1, "truncated policy must refuse");
+    }
+    CHECK(vm_fw_policy_write(DIR, &expected), "restore complete policy");
+    FILE *f = fopen(path, "ab");
+    if (f) { fputc(0, f); fclose(f); }
+    CHECK(vm_fw_policy_read(DIR, &policy) == -1, "trailing data must refuse");
+    expected.sizes[1] = 0;
+    CHECK(!vm_fw_policy_write(DIR, &expected), "empty component must refuse");
+    remove_file(VM_FW_POLICY_FILE);
 }
 
 /*
@@ -714,6 +751,7 @@ int main(void) {
     }
     CHECK(vm_firmware_boot_paths_shared(&SHARED, DIR),
           "the one-directory layout was refused");
+    test_import_policy();
 
     remove_file(VM_FW_BOOT_KERNEL_FILE);
     remove_file(VM_FW_BOOT_DEVICETREE_FILE);

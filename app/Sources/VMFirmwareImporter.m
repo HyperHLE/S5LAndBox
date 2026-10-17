@@ -8,6 +8,7 @@
 #import "VMSettings.h"
 #import "VMFirmwareKeys.h"
 #import "VMFirmwareStore.h"
+#import "VMFirmwarePolicy.h"
 
 #import <errno.h>
 #import <fcntl.h>
@@ -318,6 +319,7 @@ static void vmfw_strip_trailing_slash(char *path) {
     vm_fw_report_t _lastReport;
     BOOL _haveReport;
     NSString *_lastDetectedSignature;
+    BOOL _skipChecksumsForRun;
 }
 
 #pragma mark - Lifecycle
@@ -377,13 +379,42 @@ static void vmfw_strip_trailing_slash(char *path) {
     @synchronized (self) { [_fileCoordinator cancel]; }
 }
 
+- (BOOL)hasImportedFirmware {
+    NSString *root = [self firmwareRootDirectory];
+    return root.length && ([NSFileManager.defaultManager fileExistsAtPath:
+        [root stringByAppendingPathComponent:@"current-firmware.txt"]] ||
+        [VMFirmwareStore hasPreparedFilesInDirectory:root]);
+}
+
+- (BOOL)canChangeChecksumVerification {
+    return !self.isRunning && ![self hasImportedFirmware];
+}
+
+- (BOOL)skipStockChecksums {
+    if (self.isRunning) return _skipChecksumsForRun;
+    if ([self hasImportedFirmware]) {
+        NSString *directory = [VMFirmwareStore activeDirectoryInRoot:[self firmwareRootDirectory]];
+        vm_fw_policy_t policy;
+        return vm_fw_policy_read(directory.fileSystemRepresentation, &policy) == 1 &&
+            policy.skip_stock_checksums;
+    }
+    return VMSettings.sharedSettings.skipFirmwareChecksums;
+}
+
+- (void)setSkipStockChecksums:(BOOL)skip {
+    if (self.canChangeChecksumVerification)
+        VMSettings.sharedSettings.skipFirmwareChecksums = skip;
+}
+
 - (void)importIPSWAtURL:(NSURL *)url {
     if (!url || !_state) return;
+    const BOOL skip = self.skipStockChecksums;
 
     /* Test-and-set rather than a read then a write, so two taps landing in the
      * same turn of the run loop cannot both get through. */
     bool idle = false;
     if (!atomic_compare_exchange_strong(&_state->running, &idle, true)) return;
+    _skipChecksumsForRun = skip;
     atomic_store(&_state->cancel, false);
     _selectedURL = url;
     _haveReport = NO;
@@ -491,8 +522,12 @@ static void vmfw_strip_trailing_slash(char *path) {
     if (atomic_load(&_state->cancel)) {
         status = VM_FW_ERR_CANCELLED;
         snprintf(report->detail, sizeof report->detail, "Import cancelled. Existing firmware was kept.");
-    } else if (status == VM_FW_OK && vm_fw_report_is_verified(report)) {
-        published = [VMFirmwareStore publishDirectory:staging inRoot:root error:&error];
+    } else if (status == VM_FW_OK && vm_fw_report_is_prepared(report)) {
+        vm_fw_policy_t policy = {.skip_stock_checksums = _skipChecksumsForRun};
+        for (unsigned i = 0; i < VM_FW_ARTEFACT_COUNT; i++)
+            policy.sizes[i] = report->artefacts[i].produced;
+        if (vm_fw_policy_write(staging.fileSystemRepresentation, &policy))
+            published = [VMFirmwareStore publishDirectory:staging inRoot:root error:&error];
         if (!published) {
             status = VM_FW_ERR_OUTPUT_REFUSED;
             snprintf(report->detail, sizeof report->detail, "Firmware could not be saved: %s",
@@ -605,6 +640,7 @@ static void vmfw_strip_trailing_slash(char *path) {
     cfg.cancel_ctx   = _state;
     cfg.resolve_keys = vm_fw_resolve_public_keys;
     cfg.require_supported = true;
+    cfg.skip_stock_checksums = _skipChecksumsForRun;
 
     vm_fw_status_t status = vm_fw_import_run(&cfg, report);
 

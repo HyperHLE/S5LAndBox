@@ -58,6 +58,10 @@ bool ios3_bringup_gate(void *context,
 void ios3_bringup_gate_configure(s5l_bringup_request_t *request,
                                  ios3_bringup_gate_report_t *gate_report);
 
+/* Policy frozen when firmware was imported. Existing callers remain strict. */
+void ios3_bringup_gate_configure_with_policy(s5l_bringup_request_t *request,
+    ios3_bringup_gate_report_t *gate_report, bool skip_stock_checksum);
+
 #ifdef __cplusplus
 }
 #endif

@@ -586,7 +586,7 @@ static void finish_hash(const run_t *r, vm_fw_artefact_report_t *ar,
     ar->sha256_valid = true;
     ar->produced = o->total;
 
-    if (!r->ref) {
+    if (!r->ref || r->cfg->skip_stock_checksums) {
         ar->state = VM_FW_STATE_EXTRACTED;
         return;
     }
@@ -858,7 +858,7 @@ static void import_img3_artefact(run_t *r, vm_fw_artefact_t which,
                  r->rep->build);
     } else {
         snprintf(ar->detail, sizeof ar->detail,
-                 "Extracted %llu bytes. S5LBox has no reference hash for "
+                 "Extracted %llu bytes. Stock checksum verification was not performed for "
                  "%s %s, so this is unpacked but unverified.",
                  (unsigned long long)ar->produced,
                  r->rep->product_type, r->rep->build);
@@ -1112,7 +1112,7 @@ static void import_root_filesystem(run_t *r, const vmfw_zip_entry_t *entry,
                  r->rep->product_type, r->rep->build);
     } else {
         snprintf(ar->detail, sizeof ar->detail,
-                 "Produced %llu bytes. S5LBox has no reference hash for "
+                 "Produced %llu bytes. Stock checksum verification was not performed for "
                  "%s %s, so this is unpacked but unverified.",
                  (unsigned long long)ar->produced,
                  r->rep->product_type, r->rep->build);
@@ -1204,6 +1204,7 @@ vm_fw_status_t vm_fw_import_run(const vm_fw_import_t *cfg,
 
     r.ref = find_reference(report->product_type, report->build);
     report->reference_build = (r.ref != NULL);
+    report->stock_checksums_skipped = cfg->skip_stock_checksums;
 
     vm_fw_keys_t resolved;
     vm_fw_keys_clear(&resolved);
@@ -1328,16 +1329,32 @@ vm_fw_status_t vm_fw_import_run(const vm_fw_import_t *cfg,
              verified, waiting, failed);
 
     report->status = VM_FW_OK;
+    if (report->stock_checksums_skipped && vm_fw_report_is_prepared(report))
+        snprintf(report->detail, sizeof report->detail,
+                 "%s %s: prepared without stock checksum verification.",
+                 report->product_type, report->build);
     return VM_FW_OK;
 }
 
 bool vm_fw_report_is_verified(const vm_fw_report_t *report) {
     if (!report || report->status != VM_FW_OK || !report->manifest_read ||
-        !report->reference_build) return false;
+        !report->reference_build || report->stock_checksums_skipped) return false;
     for (unsigned i = 0; i < VM_FW_ARTEFACT_COUNT; ++i) {
         const vm_fw_artefact_report_t *a = &report->artefacts[i];
         if (a->state != VM_FW_STATE_VERIFIED || !a->sha256_valid ||
             !a->reference_known || !a->matches_reference || !a->produced) return false;
+    }
+    return true;
+}
+
+bool vm_fw_report_is_prepared(const vm_fw_report_t *report) {
+    if (vm_fw_report_is_verified(report)) return true;
+    if (!report || report->status != VM_FW_OK || !report->manifest_read ||
+        !report->reference_build || !report->stock_checksums_skipped) return false;
+    for (unsigned i = 0; i < VM_FW_ARTEFACT_COUNT; i++) {
+        const vm_fw_artefact_report_t *a = &report->artefacts[i];
+        if (a->state != VM_FW_STATE_EXTRACTED || a->reason != VM_FW_OK ||
+            !a->sha256_valid || !a->produced || a->awaiting_key) return false;
     }
     return true;
 }

@@ -1,5 +1,6 @@
 // Copyright (c) 2026 j0shua-SYSON. MIT licensed.
 #import "VMFirmwareStore.h"
+#import "VMFirmwarePolicy.h"
 
 static NSString *const pointerName = @"current-firmware.txt";
 static NSString *const generationPrefix = @"prepared-";
@@ -22,16 +23,19 @@ static NSString *selectedGeneration(NSString *root) {
 @implementation VMFirmwareStore
 + (BOOL)hasPreparedFilesInDirectory:(NSString *)directory {
     if (!directory.length) return NO;
-    // Availability only; boot independently authenticates contents. Imports may
-    // publish only after the C pipeline's complete SHA-256 verification.
-    NSDictionary<NSString *, NSNumber *> *sizes = @{
-        @"kernel.macho": @7942144, @"devicetree.bin": @40544, @"rootfs.img": @433274880
-    };
-    for (NSString *name in sizes) {
+    // The policy belongs to this generation, never to mutable app settings.
+    vm_fw_policy_t policy;
+    int recorded = vm_fw_policy_read(directory.fileSystemRepresentation, &policy);
+    if (recorded < 0) return NO;
+    NSArray<NSString *> *names = @[@"kernel.macho", @"devicetree.bin", @"rootfs.img"];
+    const uint64_t stock[] = {7942144, 40544, 433274880};
+    for (NSUInteger i = 0; i < names.count; i++) {
+        uint64_t size = recorded ? policy.sizes[i] : stock[i];
+        if (!policy.skip_stock_checksums && size != stock[i]) return NO;
         NSDictionary *info = [NSFileManager.defaultManager attributesOfItemAtPath:
-            [directory stringByAppendingPathComponent:name] error:NULL];
+            [directory stringByAppendingPathComponent:names[i]] error:NULL];
         if (![info[NSFileType] isEqual:NSFileTypeRegular] ||
-            ![info[NSFileSize] isEqual:sizes[name]]) return NO;
+            [info[NSFileSize] unsignedLongLongValue] != size) return NO;
     }
     return YES;
 }

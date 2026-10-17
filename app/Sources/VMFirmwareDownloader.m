@@ -311,7 +311,7 @@ static NSError *DownloadError(NSString *message) {
     if (![_importer getLastReport:&report]) return;
     BOOL cancelled = report.status == VM_FW_ERR_CANCELLED;
     NSError *error = nil;
-    if (!cancelled && !vm_fw_report_is_verified(&report)) {
+    if (!cancelled && !vm_fw_report_is_prepared(&report)) {
         NSString *message = [NSString stringWithUTF8String:report.detail];
         error = DownloadError(message.length ? message : @"Couldn’t prepare the downloaded firmware. Try again or import an IPSW.");
     }

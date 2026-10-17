@@ -661,6 +661,27 @@ static void test_geometry_and_nulls(fixture_t *fixture) {
         "RAM aperture missing the final loaded segment byte");
 }
 
+static void test_explicit_checksum_policy(fixture_t *fixture) {
+    ios3_kernel_patch_report_t report;
+    prepare_synthetic_fixture(fixture);
+    fixture->request.skip_stock_checksum = true;
+    CHECK(ios3_kernel_patch_apply(&fixture->request, &report) == IOS3_KERNEL_PATCH_STATUS_OK,
+          "explicit checksum skip should accept compatible synthetic kernel");
+    prepare_synthetic_fixture(fixture);
+    fixture->request.skip_stock_checksum = true;
+    fixture->request.virt_base++;
+    expect_failure_unchanged(fixture, IOS3_KERNEL_PATCH_STATUS_VIRT_BASE_MISMATCH,
+        "checksum skip must retain kernel geometry checks");
+    prepare_synthetic_fixture(fixture);
+    fixture->request.skip_stock_checksum = true;
+    /* Change both file and loaded image so only patch-site validation can catch it. */
+    g_kernel_storage.bytes[text_file_offset_for_va(IOS3_KERNEL_PATCH_MD_READ_VA)] ^= 1u;
+    load_expected_segments(fixture->ram);
+    CHECK(ios3_kernel_patch_apply(&fixture->request, &report) != IOS3_KERNEL_PATCH_STATUS_OK,
+          "checksum skip must retain patch-site validation");
+    check_loaded_segments_equal_file(fixture, "custom kernel patch-site mismatch");
+}
+
 static void test_overlap_rules_precede_report_writes(fixture_t *fixture) {
     union {
         patch_api_alignment_t alignment;
@@ -1106,6 +1127,7 @@ int main(int argc, char **argv) {
     test_sha256_known_answers();
     test_identity_and_topology_fail_closed(&fixture);
     test_synthetic_metadata_cannot_assert_digest(&fixture);
+    test_explicit_checksum_policy(&fixture);
     test_geometry_and_nulls(&fixture);
     test_overlap_rules_precede_report_writes(&fixture);
     test_loaded_segment_relationship(&fixture);

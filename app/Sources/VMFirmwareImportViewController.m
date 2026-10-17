@@ -379,7 +379,7 @@ static BOOL VMProbeFirmware(vm_firmware_boot_state_t *out) {
     (void)tableView;
     switch ((VMImportSection)[self sectionAt:section]) {
         case VMImportSectionReadiness: return 1;
-        case VMImportSectionAdvanced: return 1;
+        case VMImportSectionAdvanced: return 2;
         case VMImportSectionChoose:   return _chooseRowCount;
         case VMImportSectionProgress: return VMImportProgressRowCount;
         case VMImportSectionResults:  return VM_FW_ARTEFACT_COUNT + 1;
@@ -657,6 +657,21 @@ estimatedHeightForRowAtIndexPath:(NSIndexPath *)indexPath {
         case VMImportSectionAdvanced: {
             UITableViewCell *cell = [self cellWithIdentifier:kVMImportPlainCell
                 style:UITableViewCellStyleSubtitle];
+            if (row == 0) {
+                cell.textLabel.text = @"Skip stock checksums";
+                cell.detailTextLabel.text = _importer.canChangeChecksumVerification
+                    ? @"Custom firmware may not boot."
+                    : @"Fixed when firmware was imported.";
+                UISwitch *toggle = [[UISwitch alloc] init];
+                toggle.on = _importer.skipStockChecksums;
+                toggle.enabled = _importer.canChangeChecksumVerification;
+                toggle.accessibilityIdentifier = @"s5lbox.firmware-import.skip-checksums";
+                toggle.accessibilityLabel = cell.textLabel.text;
+                [toggle addTarget:self action:@selector(checksumSwitchChanged:)
+                    forControlEvents:UIControlEventValueChanged];
+                cell.accessoryView = toggle;
+                return cell;
+            }
             cell.textLabel.text = _showManualKeys ? @"Hide manual keys" : @"Manual keys";
             if ([_importer haveKeyForArtefact:VM_FW_KERNEL] ||
                 [_importer haveKeyForArtefact:VM_FW_DEVICE_TREE] ||
@@ -718,6 +733,11 @@ estimatedHeightForRowAtIndexPath:(NSIndexPath *)indexPath {
 
 #pragma mark - Selection
 
+- (void)checksumSwitchChanged:(UISwitch *)sender {
+    _importer.skipStockChecksums = sender.on;
+    [self refresh];
+}
+
 - (void)tableView:(UITableView *)tableView
 didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
@@ -725,7 +745,7 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     const NSInteger row = indexPath.row;
     switch ((VMImportSection)[self sectionAt:indexPath.section]) {
         case VMImportSectionAdvanced:
-            if (_running) return;
+            if (_running || row != 1) return;
             _showManualKeys = !_showManualKeys;
             [self refresh];
             return;

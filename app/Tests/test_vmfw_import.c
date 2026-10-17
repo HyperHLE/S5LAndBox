@@ -149,6 +149,7 @@ static const memfile_t *mem_find(const memfs_t *fs, const char *name) {
 typedef struct {
     uint8_t archive[1u << 20];
     size_t  len;
+    fx_zip_layout_t layout;
     uint8_t kernel_plain[KERNEL_PLAIN_LEN];
     uint8_t dtree_plain[DTREE_PLAIN_LEN];
     uint8_t root_plain[ROOT_PLAIN_LEN];
@@ -358,7 +359,7 @@ static bool build_ipsw(ipsw_t *ip, const ipsw_spec_t *spec) {
         members[n++] = m;
     }
 
-    ip->len = fx_zip_build(ip->archive, sizeof ip->archive, members, n, NULL);
+    ip->len = fx_zip_build(ip->archive, sizeof ip->archive, members, n, &ip->layout);
     return ip->len > 0;
 }
 
@@ -464,6 +465,34 @@ void vmfw_test_import(vmfw_test_t *t) {
         (void)vm_fw_import_run(&imp, &report);
         VMFW_T_EQ_U(t, report.artefacts[0].produced, KERNEL_PLAIN_LEN, "manual override takes precedence");
         VMFW_T_EQ_U(t, report.artefacts[0].state, VM_FW_STATE_MISMATCH, "override cannot bypass verification");
+        imp.skip_stock_checksums = true;
+        memset(&fs, 0, sizeof fs);
+        VMFW_T_EQ_U(t, vm_fw_import_run(&imp, &report), VM_FW_OK, "explicit skip extracts fixture");
+        VMFW_T_CHECK(t, vm_fw_report_is_prepared(&report), "complete unchecked import is prepared");
+        VMFW_T_CHECK(t, !vm_fw_report_is_verified(&report), "unchecked import is never called verified");
+        for (unsigned i = 0; i < VM_FW_ARTEFACT_COUNT; i++) {
+            vm_fw_artefact_report_t saved = report.artefacts[i];
+            report.artefacts[i].state = VM_FW_STATE_FAILED;
+            VMFW_T_CHECK(t, !vm_fw_report_is_prepared(&report), "skip does not publish failed extraction");
+            report.artefacts[i] = saved;
+            report.artefacts[i].produced = 0;
+            VMFW_T_CHECK(t, !vm_fw_report_is_prepared(&report), "skip does not publish empty output");
+            report.artefacts[i] = saved;
+        }
+        report.status = VM_FW_ERR_CANCELLED;
+        VMFW_T_CHECK(t, !vm_fw_report_is_prepared(&report), "skip does not publish cancellation");
+        ip.archive[ip.layout.central_offset[1] + 16] ^= 1u;
+        memset(&fs, 0, sizeof fs);
+        (void)vm_fw_import_run(&imp, &report);
+        VMFW_T_CHECK(t, !vm_fw_report_is_prepared(&report), "skip retains ZIP CRC validation");
+        VMFW_T_EQ_U(t, report.artefacts[VM_FW_KERNEL].state, VM_FW_STATE_FAILED, "corrupt member is refused");
+        spec.kernel_mode = KERNEL_NOT_IMG3;
+        VMFW_T_CHECK(t, build_ipsw(&ip, &spec), "malformed custom container fixture");
+        blob.len = ip.len; imp.size = ip.len;
+        memset(&fs, 0, sizeof fs);
+        (void)vm_fw_import_run(&imp, &report);
+        VMFW_T_CHECK(t, !vm_fw_report_is_prepared(&report), "skip retains container validation");
+        spec.kernel_mode = KERNEL_GOOD;
         spec.build = "UNKNOWN";
         VMFW_T_CHECK(t, build_ipsw(&ip, &spec), "unsupported build fixture");
         blob.len = ip.len; imp.size = ip.len;

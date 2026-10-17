@@ -2,6 +2,8 @@
 // Fixtures are sparse zero files and a malformed archive, never Apple firmware.
 #import "VMFirmwareStore.h"
 #import "VMFirmwareImporter.h"
+#import "VMFirmwarePolicy.h"
+#import "VMSettings.h"
 #include <assert.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -31,6 +33,42 @@ static void makeSet(NSString *path) {
     }
 }
 
+// Isolate the native publication layer from extraction (covered by C tests).
+@interface PreparedImporter : VMFirmwareImporter <VMFirmwareImporterDelegate>
+@property unsigned completions;
+@property BOOL usedSkip;
+@end
+@implementation PreparedImporter
+- (NSString *)firmwareRootDirectory { return testRoot; }
+- (vm_fw_status_t)extractURL:(NSURL *)url intoReport:(vm_fw_report_t *)report outputDirectory:(NSString *)directory {
+    (void)url;
+    memset(report, 0, sizeof *report);
+    self.usedSkip = self.skipStockChecksums;
+    report->manifest_read = report->reference_build = true;
+    report->stock_checksums_skipped = self.usedSkip;
+    for (unsigned i = 0; i < VM_FW_ARTEFACT_COUNT; i++) {
+        NSString *name = [NSString stringWithUTF8String:vm_fw_artefact_filename((vm_fw_artefact_t)i)];
+        assert([[NSMutableData dataWithLength:512] writeToFile:[directory stringByAppendingPathComponent:name] atomically:NO]);
+        report->artefacts[i].state = VM_FW_STATE_EXTRACTED;
+        report->artefacts[i].sha256_valid = true;
+        report->artefacts[i].produced = 512;
+    }
+    return VM_FW_OK;
+}
+- (void)importer:(VMFirmwareImporter *)importer didFinishWithStatus:(vm_fw_status_t)status report:(const vm_fw_report_t *)report {
+    (void)importer;
+    assert(NSThread.isMainThread && status == VM_FW_OK && vm_fw_report_is_prepared(report));
+    self.completions++;
+}
+@end
+
+static void waitForImport(VMFirmwareImporter *importer) {
+    NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:15];
+    while (importer.isRunning && deadline.timeIntervalSinceNow > 0)
+        [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+    assert(!importer.isRunning);
+}
+
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         assert(argc == 2);
@@ -38,15 +76,30 @@ int main(int argc, const char *argv[]) {
         NSFileManager *fm = NSFileManager.defaultManager;
         assert([fm createDirectoryAtPath:testRoot withIntermediateDirectories:YES attributes:nil error:NULL]);
         assert(![VMFirmwareStore hasPreparedFilesInDirectory:testRoot]);
+        [VMSettings.sharedSettings resetToDefaults];
+        TestImporter *choice = [TestImporter new];
+        assert(choice.canChangeChecksumVerification && !choice.skipStockChecksums);
+        choice.skipStockChecksums = YES;
+        assert([TestImporter new].skipStockChecksums);
+        choice.skipStockChecksums = NO;
         makeSet(testRoot);
+        assert(!choice.canChangeChecksumVerification && !choice.skipStockChecksums);
+        choice.skipStockChecksums = YES;
+        assert(!choice.skipStockChecksums && !VMSettings.sharedSettings.skipFirmwareChecksums);
         assert([VMFirmwareStore hasPreparedFilesInDirectory:testRoot]);
         assert([[VMFirmwareStore activeDirectoryInRoot:testRoot] isEqual:testRoot]);
         NSString *first = [VMFirmwareStore createStagingDirectoryInRoot:testRoot error:NULL];
         assert(first && ![VMFirmwareStore publishDirectory:first inRoot:testRoot error:NULL]);
         assert([[VMFirmwareStore activeDirectoryInRoot:testRoot] isEqual:testRoot]);
         makeSet(first);
+        vm_fw_policy_t custom = {true, {7942144, 40544, 433274880}};
+        assert(vm_fw_policy_write(first.fileSystemRepresentation, &custom));
         assert([VMFirmwareStore publishDirectory:first inRoot:testRoot error:NULL]);
         assert([[VMFirmwareStore activeDirectoryInRoot:testRoot] isEqual:first]);
+        assert(!choice.canChangeChecksumVerification && choice.skipStockChecksums);
+        choice.skipStockChecksums = NO;
+        [VMSettings.sharedSettings resetToDefaults];
+        assert(choice.skipStockChecksums && [TestImporter new].skipStockChecksums);
         NSString *pointer = [testRoot stringByAppendingPathComponent:@"current-firmware.txt"];
         NSData *before = [NSData dataWithContentsOfFile:pointer];
         NSString *second = [VMFirmwareStore createStagingDirectoryInRoot:testRoot error:NULL];
@@ -102,14 +155,20 @@ int main(int argc, const char *argv[]) {
         testRoot = [fixtureRoot stringByAppendingPathComponent:@"auto-detection"];
         assert([fm createDirectoryAtPath:testRoot withIntermediateDirectories:NO attributes:nil error:NULL]);
         importer.archives = @[archive];
+        assert(importer.canChangeChecksumVerification);
+        importer.skipStockChecksums = YES;
         assert(![importer importDetectedIPSWIfNeeded]);
         // Replacing the archive is a new import opportunity, exactly once.
         assert([@"a replacement archive fixture" writeToFile:archive atomically:YES encoding:NSUTF8StringEncoding error:NULL]);
         assert([importer importDetectedIPSWIfNeeded]);
+        assert(!importer.canChangeChecksumVerification);
+        importer.skipStockChecksums = NO;
+        assert(importer.skipStockChecksums);
         deadline = [NSDate dateWithTimeIntervalSinceNow:15];
         while (importer.isRunning && deadline.timeIntervalSinceNow > 0)
             [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
         assert(!importer.isRunning && importer.completions == 4);
+        assert(importer.canChangeChecksumVerification && importer.skipStockChecksums);
         assert(![importer importDetectedIPSWIfNeeded]);
         assert([fm contentsOfDirectoryAtPath:testRoot error:NULL].count == 0);
         [importer forgetSelectedURL:[NSURL fileURLWithPath:@"/unrelated.ipsw"]];
@@ -117,6 +176,29 @@ int main(int argc, const char *argv[]) {
         [importer forgetSelectedURL:url];
         assert(!importer.selectedURL);
         assert([fm fileExistsAtPath:url.path]); // Forgetting never deletes a manual archive.
+        [VMSettings.sharedSettings resetToDefaults];
+        PreparedImporter *prepared = [PreparedImporter new];
+        prepared.delegate = prepared;
+        prepared.skipStockChecksums = YES;
+        [prepared importIPSWAtURL:url];
+        waitForImport(prepared);
+        assert(prepared.completions == 1 && prepared.usedSkip);
+        assert(!prepared.canChangeChecksumVerification && [TestImporter new].skipStockChecksums);
+        NSString *active = [VMFirmwareStore activeDirectoryInRoot:testRoot];
+        vm_fw_policy_t policy;
+        assert(vm_fw_policy_read(active.fileSystemRepresentation, &policy) == 1 && policy.skip_stock_checksums);
+        assert(policy.sizes[0] == 512 && [VMFirmwareStore hasPreparedFilesInDirectory:active]);
+        [VMSettings.sharedSettings resetToDefaults];
+        prepared.skipStockChecksums = NO;
+        [prepared importIPSWAtURL:url];
+        waitForImport(prepared);
+        assert(prepared.completions == 2 && prepared.usedSkip && prepared.skipStockChecksums);
+        assert(![fm fileExistsAtPath:active]); // Successful replacement reclaims only old generation.
+        active = [VMFirmwareStore activeDirectoryInRoot:testRoot];
+        policy.skip_stock_checksums = false;
+        assert(vm_fw_policy_write(active.fileSystemRepresentation, &policy));
+        assert(![VMFirmwareStore hasPreparedFilesInDirectory:active]); // Non-stock sizes require explicit policy.
+        assert(!prepared.canChangeChecksumVerification); // A damaged set does not unlock the switch.
         testRoot = fixtureRoot;
         assert([fm removeItemAtPath:testRoot error:NULL]); // Only this test's UUID root.
         puts("firmware store: publication, rollback, legacy paths, cancellation and retained importer state passed");

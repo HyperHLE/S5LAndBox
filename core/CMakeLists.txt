@@ -455,6 +455,7 @@ add_executable(test_vmfirmwareboot
     ../app/Tests/test_vmfirmwareboot.c
     ../app/Sources/VMFrameTelemetry.c
     ../app/Sources/VMFirmwareBoot.c
+    ../app/Sources/VMFirmwarePolicy.c
     ../app/Sources/VMFirmwareAudio.c
     ../app/Sources/VMGuestInstall.c
     ../app/Sources/VMNetworkSession.c
@@ -900,6 +901,7 @@ add_executable(test_vminstancepaths
     ../app/Sources/VMInstancePaths.c
     ../app/Sources/VMInstances.c
     ../app/Sources/VMFirmwareBoot.c
+    ../app/Sources/VMFirmwarePolicy.c
     ../app/Sources/VMFirmwareAudio.c
     ../app/Sources/VMGuestInstall.c
     ../app/Sources/VMNetworkSession.c
