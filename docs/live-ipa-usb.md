@@ -213,6 +213,28 @@ installation_proxy path. Cydia and Geekbench were visible in SpringBoard.
 No manual guest reboot, respring or Cydia launch was used to make that install
 work. These are physical regression checks, not a throughput benchmark.
 
+### Timezone validation, 2026-10-17
+
+On the physical test device, a saved guest retained its default timezone
+  instead of matching the host. Restoring it with the updated build changed the
+  still-open Date & Time screen to the host's timezone and current local time.
+  No guest reboot, respring or manual timezone selection was needed. Read-only
+  inspection confirmed that the guest persisted the updated timezone.
+  
+  A separate fresh, non-jailbroken guest synchronized before its first unlock.
+  One initial USB service timeout was followed by a successful bounded retry.
+  The console confirmed both calendar and timezone/offset read-back, and the
+  lock-screen date and time matched the host. Save & close followed by resume
+  produced another successful confirmation. The disposable guest was removed
+  after testing. Personal location and local wall-clock details are omitted.
+  
+  The [iOS build](https://github.com/j0shua-SYSON/S5LBox/actions/runs/38995829240)
+passed 270 native USB checks. All nine jobs in the
+[core matrix](https://github.com/j0shua-SYSON/S5LBox/actions/runs/38995829360)
+passed; the local full suite passed 84/84 in 34.02 seconds. Other regions' rules,
+physical host-timezone changes while running, and other host devices were not
+physically exercised in this pass. The host's timezone setting was not changed.
+
 ## References
 
 - Synopsys DWC2 register definitions in Linux `drivers/usb/dwc2/hw.h`.
