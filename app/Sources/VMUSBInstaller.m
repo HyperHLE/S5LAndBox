@@ -1,7 +1,7 @@
 // Copyright (c) 2026 j0shua-SYSON. MIT licensed.
 #import "VMUSBInstaller.h"
 #import "VMUSBService.h"
-#import "VMUSBPairing.h"
+#import "VMUSBLockdown.h"
 #import "VMUSBAFC.h"
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -21,39 +21,6 @@ static NSError *InstallError(NSString *message) {
 - (void)report:(NSString *)message fraction:(double)fraction {
     if (self.progress) self.progress(message, fraction);
 }
-- (NSDictionary *)lockdown:(VMUSBService *)service request:(NSString *)request
-                       values:(NSDictionary *)values error:(NSError **)error {
-    NSMutableDictionary *query = [@{@"Label":@"S5LBox", @"Request":request} mutableCopy];
-    if (values) [query addEntriesFromDictionary:values];
-    NSDictionary *reply = [service request:query error:error];
-    if (!reply) {
-        if (error) *error = InstallError([NSString stringWithFormat:@"Guest %@: %@", request,
-            (*error).localizedDescription ?: @"The connection ended without a reply."]);
-        return nil;
-    }
-    if (![reply[@"Request"] isEqual:request] || reply[@"Error"] ||
-        (reply[@"Result"] && ![reply[@"Result"] isEqual:@"Success"])) {
-        if (error) *error = InstallError([NSString stringWithFormat:@"Guest %@ failed: %@.", request,
-                                        reply[@"Error"] ?: reply[@"Result"] ?: @"invalid response"]);
-        return nil;
-    }
-    return reply;
-}
-- (VMUSBService *)openService:(NSString *)name lockdown:(VMUSBService *)lockdown
-                     pairing:(VMUSBPairing *)pairing error:(NSError **)error {
-    NSDictionary *reply = [self lockdown:lockdown request:@"StartService" values:@{@"Service":name} error:error];
-    if (!reply) return nil;
-    NSNumber *port = reply[@"Port"];
-    if (![port isKindOfClass:NSNumber.class] || port.integerValue < 1 || port.integerValue > 65535) {
-        if (error) *error = InstallError(@"The guest returned an invalid service port."); return nil;
-    }
-    __weak VMUSBInstaller *weakSelf = self;
-    VMUSBService *service = [[VMUSBService alloc] initWithTransport:_transport port:port.unsignedShortValue
-        canceled:^BOOL{ return weakSelf.canceled; } error:error];
-    if ([reply[@"EnableServiceSSL"] boolValue] &&
-        ![service enableTLSWithIdentity:pairing.identity expectedKey:pairing.deviceKey error:error]) return nil;
-    return service;
-}
 - (BOOL)installURL:(NSURL *)url error:(NSError **)error {
     if (NSThread.isMainThread) { if (error) *error = InstallError(@"Installation requires a worker thread."); return NO; }
     int fd = url.isFileURL ? open(url.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_CLOEXEC) : -1;
@@ -63,7 +30,8 @@ static NSError *InstallError(NSString *message) {
         if (error) *error = InstallError(@"Choose a regular IPA file no larger than 512 MB."); return NO;
     }
     BOOL complete = NO, submitted = NO, terminal = NO, staged = NO;
-    VMUSBService *lockdown = nil, *files = nil, *installer = nil;
+    VMUSBLockdown *lockdown = nil;
+    VMUSBService *files = nil, *installer = nil;
     VMUSBAFC *afc = nil;
     NSString *path = [NSString stringWithFormat:@"PublicStaging/S5LBox-%@.ipa", NSUUID.UUID.UUIDString];
     NSError *failure = nil;
@@ -71,39 +39,13 @@ static NSError *InstallError(NSString *message) {
     do {
         if (self.canceled) { failure = InstallError(@"Installation canceled."); break; }
         [self report:@"Connecting to the guest’s virtual USB…" fraction:-1];
-        lockdown = [[VMUSBService alloc] initWithTransport:_transport port:62078
-            canceled:^BOOL{ return weakSelf.canceled; } error:&failure];
+        lockdown = [VMUSBLockdown openWithTransport:_transport instanceID:_identifier
+            canceled:^BOOL{ return !weakSelf || weakSelf.canceled; } deadline:0 error:&failure];
         if (!lockdown) break;
-        NSDictionary *type = [self lockdown:lockdown request:@"QueryType" values:nil error:&failure];
-        if (!type) break;
-        if (![type[@"Type"] isEqual:@"com.apple.mobile.lockdown"]) {
-            failure = InstallError(@"The guest did not identify its pairing service."); break;
-        }
-        NSDictionary *key = [self lockdown:lockdown request:@"GetValue" values:@{@"Key":@"DevicePublicKey"} error:&failure];
-        if (!key) break;
-        if (![key[@"Value"] isKindOfClass:NSData.class]) { failure = InstallError(@"The guest did not return a pairing key."); break; }
-        [self report:@"Pairing with the guest…" fraction:-1];
-        VMUSBPairing *pairing = [[VMUSBPairing alloc] initWithInstanceID:_identifier devicePublicKey:key[@"Value"] error:&failure];
-        if (!pairing) break;
-        NSDictionary *pairValues = @{@"PairRecord":pairing.record, @"ProtocolVersion":@"2"};
-        // A saved host identity does not prove that this guest snapshot has
-        // accepted it. Establish it before the legacy trusted-host validation.
-        if (![self lockdown:lockdown request:@"Pair" values:pairValues error:&failure]) break;
-        [self report:@"Confirming the guest’s pairing record…" fraction:-1];
-        if (![self lockdown:lockdown request:@"ValidatePair" values:pairValues error:&failure]) break;
-        [self report:@"Starting the guest’s paired session…" fraction:-1];
-        NSDictionary *session = [self lockdown:lockdown request:@"StartSession"
-            values:@{@"HostID":pairing.record[@"HostID"], @"SystemBUID":pairing.record[@"SystemBUID"]} error:&failure];
-        if (!session) break;
-        if (![session[@"SessionID"] isKindOfClass:NSString.class]) { failure = InstallError(@"The guest returned an invalid session."); break; }
-        if ([session[@"EnableSessionSSL"] boolValue]) {
-            [self report:@"Securing the guest USB connection…" fraction:-1];
-            if (![lockdown enableTLSWithIdentity:pairing.identity expectedKey:pairing.deviceKey error:&failure]) break;
-        }
         [self report:@"Opening the guest’s installation services…" fraction:-1];
-        files = [self openService:@"com.apple.afc" lockdown:lockdown pairing:pairing error:&failure];
+        files = [lockdown openService:@"com.apple.afc" error:&failure];
         if (!files) break;
-        installer = [self openService:@"com.apple.mobile.installation_proxy" lockdown:lockdown pairing:pairing error:&failure];
+        installer = [lockdown openService:@"com.apple.mobile.installation_proxy" error:&failure];
         if (!installer) break;
         // Disconnecting this session leaves the independently opened services
         // alive and releases a mux slot. No host-side guest filesystem access.
