@@ -1,5 +1,6 @@
 #import "VMPackageRepository.h"
 #import "VMPackageCatalog.h"
+#import "VMArchiveTransport.h"
 #import <CommonCrypto/CommonDigest.h>
 #include <bzlib.h>
 #include <zlib.h>
@@ -88,6 +89,8 @@
     }
     [session finishTasksAndInvalidate];
     NSData *result = _failure ? nil : [_received copy]; _received = nil;
+    NSURL *alternative = !result && !self.canceled ? VMArchiveFallbackURL(url, _failure) : nil;
+    if (alternative) return [self fetch:alternative limit:limit error:error];
     if (!result && error) *error = _failure; return result;
 }
 - (NSData *)expand:(NSData *)data suffix:(NSString *)suffix error:(NSError **)error {
