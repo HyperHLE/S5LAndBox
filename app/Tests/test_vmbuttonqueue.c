@@ -633,7 +633,40 @@ static void test_home_wake_includes_display_sleep(void) {
           "display-only Home wake ignored the absolute cap");
 }
 
+static void test_ringer_lifecycle(void) {
+    /* All held-key combinations and both slider choices, including a change
+     * canceled before delivery. Only momentary keys must reach rest. */
+    for (unsigned bits = 0; bits < (1u << S5L_BUTTON_COUNT); bits++) {
+        for (unsigned silent = 0; silent < 2u; silent++) {
+            s5l_buttons_t buttons = {0};
+            buttons.pressed = (uint8_t)bits;
+            vm_button_event_t event;
+            unsigned transitions = 0;
+            while (vm_button_checkpoint_release(&buttons, silent != 0, &event)) {
+                CHECK(++transitions <= S5L_BUTTON_COUNT, "quiesce did not converge");
+                if (transitions > S5L_BUTTON_COUNT) break;
+                CHECK(event.which == S5L_BUTTON_RINGERAB || !event.pressed,
+                      "checkpoint invented a held key");
+                if (event.pressed) buttons.pressed |= (uint8_t)(1u << event.which);
+                else buttons.pressed &= (uint8_t)~(1u << event.which);
+            }
+            CHECK(buttons.pressed == (silent ? (1u << S5L_BUTTON_RINGERAB) : 0u),
+                  "checkpoint lost ringer preference");
+            CHECK(!vm_button_ringer_reconcile(&buttons, silent != 0, &event),
+                  "resume invented a duplicate ringer edge");
+            s5l_buttons_reset(&buttons); /* cold boot or watchdog replacement */
+            CHECK(vm_button_ringer_reconcile(&buttons, silent != 0, &event) == (silent != 0),
+                  "reboot failed to restore ringer choice");
+        }
+    }
+    vm_button_event_t event;
+    s5l_buttons_t buttons = {0};
+    CHECK(!vm_button_checkpoint_release(NULL, true, &event), "NULL board accepted");
+    CHECK(!vm_button_checkpoint_release(&buttons, true, NULL), "NULL event accepted");
+}
+
 int main(void) {
+    test_ringer_lifecycle();
     printf("S5LBox app button queue tests\n");
     test_the_two_orders_are_not_the_same_and_map_correctly();
     test_the_silent_switch_means_muted();

@@ -1,5 +1,41 @@
 # Current audio implementation
 
+## Playback buffering candidate
+
+The host handoff now builds a 20 ms reserve before starting/restarting playback.
+Short sounds below that threshold begin after a bounded 20 ms render-time wait;
+they are not left queued indefinitely. If the worker genuinely runs out of PCM,
+the render callback fades its last sample to zero over 2 ms, rebuilds the reserve,
+and fades back in. Pause and route epochs discard both queued samples and the
+recovery state. There are no callback locks, allocations, guest-clock changes,
+or adaptive pitch changes.
+
+A deterministic 48 kHz test alternating 96- and 864-frame producer bursts per
+480-frame host callback reproduced an 8 ms gap after playback began: 384 silent
+frames before the change, zero afterward. Tests also cover short clips, stall
+and recovery slopes, stereo phase, 8/16/22.05/44.1/48/96 kHz rate conversion,
+queue overflow/index wrap, microphone permission and lifecycle resets.
+The focused handoff test passes 92,470 checks; one complete local suite run passed
+84/84. A later repeat passed 83/84: the unchanged machine test could not allocate
+its 512 MiB fixture while Windows had only 477 MiB of commit capacity free; a
+standalone retry hit the same allocation boundary. These are sample-level tests,
+not a phone listening test or proof that
+every reported ringtone crackle is fixed. Sustained guest execution slower than
+real time can still starve playback; buffering cannot manufacture missing audio.
+
+The silent switch is now stored per machine, defaulting to ring when no valid
+choice exists. Cold boot, saved-state resume and watchdog replacement reconcile
+the desired position through the existing GPIO/interrupt path. Saving releases
+momentary keys but preserves the slider, including a pending slider change.
+Portable lifecycle tests cover all held-button combinations and both positions;
+native Foundation tests cover persistence and machine isolation. The native
+tests and updated app's physical-device validation are pending for this candidate.
+The controls sheet also stops assigning the switch's value on every timer tick:
+only a changed engine value is reflected, without overwriting active tracking.
+Refused changes still restore the engine's actual choice.
+
+## Existing transport and validation
+
 The current implementation adds timed codec-side I²S DMA playback
 and capture, plus an iOS 13+ AVAudioEngine backend. Physical-device microphone
 recording and decoded Voice Memos replay through host PCM are verified;

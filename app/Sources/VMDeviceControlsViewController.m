@@ -5,6 +5,7 @@
 @implementation VMDeviceControlsViewController {
     NSMutableArray<VMHardwareButton *> *_hardware;
     UISwitch *_silent;
+    BOOL _hasSilentValue, _lastSilentValue;
     UIButton *_pause, *_restart, *_save;
     UILabel *_availability;
     NSTimer *_timer;
@@ -171,7 +172,15 @@ static UILabel *ControlLabel(NSString *text, UIFontTextStyle style) {
     BOOL paused = [delegate runtimePaused];
     for (VMHardwareButton *button in _hardware) button.enabled = !reason.length && !paused;
     _silent.enabled = !reason.length && !paused;
-    _silent.on = [delegate deviceSilent];
+    BOOL silent = [delegate deviceSilent];
+    /* Reassigning on every timer tick can interrupt UISwitch's tap animation
+     * before it sends ValueChanged. Refresh only a changed model value, and
+     * never overwrite a gesture in progress. */
+    if (!_silent.isTracking && (!_hasSilentValue || silent != _lastSilentValue)) {
+        _silent.on = silent;
+        _lastSilentValue = silent;
+        _hasSilentValue = YES;
+    }
     _availability.text = paused ? @"Resume emulation to use the device buttons." : reason;
     _availability.hidden = !_availability.text.length;
     _pause.enabled = [delegate runtimeCanControlGuest];
@@ -180,7 +189,14 @@ static UILabel *ControlLabel(NSString *text, UIFontTextStyle style) {
     _restart.enabled = [delegate runtimeCanForcePowerOff];
     _save.enabled = [delegate runtimeCanControlGuest];
 }
-- (void)silentChanged { [self.controlDelegate setDeviceButton:VMButtonRingerSilent pressed:_silent.on]; [self refresh]; }
+- (void)silentChanged {
+    [self.controlDelegate setDeviceButton:VMButtonRingerSilent pressed:_silent.on];
+    BOOL accepted = [self.controlDelegate deviceSilent];
+    if (_silent.on != accepted) _silent.on = accepted; // A busy/full engine can refuse.
+    _lastSilentValue = accepted;
+    _hasSilentValue = YES;
+    [self refresh];
+}
 - (void)pauseTapped {
     for (VMHardwareButton *button in _hardware) [button releasePress];
     [self.controlDelegate setRuntimePaused:![self.controlDelegate runtimePaused]];

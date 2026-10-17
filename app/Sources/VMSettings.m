@@ -80,6 +80,17 @@ static const uint64_t kVMInstructionCaps[] = {
     return [NSUserDefaults standardUserDefaults];
 }
 
+- (BOOL)ringerSilentForInstanceID:(NSString *)identifier {
+    if (!identifier.length) return NO;
+    id value = [[self defaults] objectForKey:[@"vm.machine.ringerSilent." stringByAppendingString:identifier]];
+    return [value isKindOfClass:NSNumber.class] && [value isEqualToNumber:@YES];
+}
+
+- (void)setRingerSilent:(BOOL)silent forInstanceID:(NSString *)identifier {
+    if (!identifier.length) return;
+    [[self defaults] setBool:silent forKey:[@"vm.machine.ringerSilent." stringByAppendingString:identifier]];
+}
+
 - (void)publishChange {
     /* Posted synchronously on whichever thread wrote, which is always the main
      * thread here: everything that writes is a control in a table view. */

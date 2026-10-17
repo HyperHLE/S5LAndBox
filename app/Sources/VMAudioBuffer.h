@@ -8,6 +8,10 @@
 #include <stdatomic.h>
 #define VM_AUDIO_RATE 48000u
 #define VM_AUDIO_FRAMES 4096u
+/* 20 ms of scheduling reserve; never change guest clocks or sample pitch.
+ * A shorter clip is released after at most this much render time. */
+#define VM_AUDIO_PREFILL (VM_AUDIO_RATE / 50u)
+#define VM_AUDIO_FADE (VM_AUDIO_RATE / 500u) /* 2 ms at a stream boundary */
 typedef struct {
     _Atomic uint32_t read, write;
     float samples[VM_AUDIO_FRAMES][2];
@@ -26,6 +30,11 @@ typedef struct {
     uint32_t render_epoch, input_epoch, guest_epoch, capture_rate, capture_phase;
     float capture_a[2], capture_b[2];
     bool capture_primed;
+    /* Render-thread-owned jitter recovery, not saved guest hardware state. */
+    bool playback_started;
+    uint32_t playback_wait, fade_in, fade_out;
+    float render_last[2], render_tail[2];
+    uint64_t playback_underruns;
     uint64_t rendered, playback_dropped, input_dropped; /* owner-thread counters */
 } vm_audio_buffer_t;
 /* Refuses a platform whose actual scalar atomics require locks. */

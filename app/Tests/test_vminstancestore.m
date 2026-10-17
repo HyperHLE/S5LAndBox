@@ -16,6 +16,33 @@ static NSString *testRoot;
 - (NSUserDefaults *)defaults { return self.testDefaults; }
 @end
 
+static void testRingerChoice(void) {
+    NSString *suite = [@"S5LBox.RingerTests." stringByAppendingString:NSUUID.UUID.UUIDString];
+    NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
+    TestInterfaceSettings *settings = [TestInterfaceSettings new];
+    settings.testDefaults = defaults;
+    NSString *first = @"1111111111111111", *second = @"2222222222222222";
+    assert(![settings ringerSilentForInstanceID:first]);
+    [settings setRingerSilent:YES forInstanceID:first];
+    TestInterfaceSettings *reopened = [TestInterfaceSettings new];
+    reopened.testDefaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
+    assert([reopened ringerSilentForInstanceID:first]);
+    assert(![reopened ringerSilentForInstanceID:second]);
+    [settings resetToDefaults];
+    assert([reopened ringerSilentForInstanceID:first]);
+    [settings setRingerSilent:NO forInstanceID:first];
+    assert(![reopened ringerSilentForInstanceID:first]);
+    for (id invalid in @[@"YES", @2, @[], @{}]) {
+        [defaults setObject:invalid forKey:[@"vm.machine.ringerSilent." stringByAppendingString:first]];
+        assert(![reopened ringerSilentForInstanceID:first]);
+    }
+    [settings setRingerSilent:YES forInstanceID:nil];
+    assert(![reopened ringerSilentForInstanceID:nil]);
+    assert(![reopened ringerSilentForInstanceID:@""]);
+    [defaults removePersistentDomainForName:suite];
+    puts("ringer: ring default, per-machine persistence, app reset isolation and invalid choices passed");
+}
+
 static void testInterfaceChoice(void) {
     NSString *suite = [@"S5LBox.InterfaceTests." stringByAppendingString:NSUUID.UUID.UUIDString];
     NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
@@ -260,6 +287,7 @@ static void testDiskCreationDefaults(void) {
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         testInterfaceChoice();
+        testRingerChoice();
         testPackagesWithJailbreakChoice();
         testGuestMicrophoneChoice();
         testBackgroundPauseChoice();

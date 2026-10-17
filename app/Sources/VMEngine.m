@@ -795,11 +795,12 @@ static double vm_engine_now_seconds(void) {
     vm_touch_delivery_reset(&_touchDelivery);
     _touchDelivered = 0;
     _droppedTouchLogged = NO;
-    /* And the buttons, for the same reason: a switch held when the last
-     * machine went away is not held on this one, whose board resets with
-     * every switch released. */
+    /* Momentary keys start released. The physical ringer slider retains this
+     * machine's saved position; reconcile it after boot/restore arms the GPIO. */
     vm_button_queue_reset(&_buttonQueue);
     memset(_buttons, 0, sizeof _buttons);
+    _buttons[VMButtonRingerSilent] =
+        [[VMSettings sharedSettings] ringerSilentForInstanceID:_instanceID];
     _buttonDelivered = 0;
     _buttonRefused = 0;
     memset(&_powerHold, 0, sizeof _powerHold);
@@ -1235,11 +1236,15 @@ static double vm_engine_now_seconds(void) {
     pthread_mutex_lock(&_lock);
     /* Recorded under the same lock as everything else the UI can read, so the
      * control bar can draw a held key without asking the emulator thread. */
-    _buttons[button] = pressed;
     if (!_machineReady || _state != VMEngineStateRunning)
         notRunning = YES;
     else
         queued = vm_button_queue_push(&_buttonQueue, which, guestPressed);
+    if (queued) {
+        _buttons[button] = pressed;
+        if (button == VMButtonRingerSilent)
+            [[VMSettings sharedSettings] setRingerSilent:pressed forInstanceID:_instanceID];
+    }
     pthread_mutex_unlock(&_lock);
 
     if (notRunning) {
@@ -1362,6 +1367,13 @@ static double vm_engine_now_seconds(void) {
     vm_button_event_t e;
     pthread_mutex_lock(&_lock);
     BOOL have = vm_button_queue_peek(&_buttonQueue, &e);
+    /* Also covers watchdog reboot and old saved guests. Do not fabricate a
+     * button edge or overtake a user transition already in the FIFO. */
+    if (!have && vm_button_ringer_reconcile(&_machine.buttons,
+            _buttons[VMButtonRingerSilent], &e)) {
+        vm_button_queue_push(&_buttonQueue, e.which, e.pressed);
+        have = YES;
+    }
     vm_button_power_hold_t powerHold = _powerHold;
     vm_button_momentary_holds_t momentaryHolds = _momentaryHolds;
     pthread_mutex_unlock(&_lock);
@@ -1423,7 +1435,9 @@ static double vm_engine_now_seconds(void) {
     pthread_mutex_lock(&_lock);
     unsigned touches = vm_touch_queue_cancel_pending(&_touch);
     unsigned buttons = vm_button_queue_cancel_pending(&_buttonQueue);
+    BOOL silent = _buttons[VMButtonRingerSilent];
     memset(_buttons, 0, sizeof _buttons);
+    _buttons[VMButtonRingerSilent] = silent;
     pthread_mutex_unlock(&_lock);
 
     if (touches || buttons) {
@@ -1473,21 +1487,18 @@ static double vm_engine_now_seconds(void) {
         [self drainOneButton_emulatorThread];
         buttonWaiting = YES;
     } else {
-        /* Ordinary keys first. Power has a longer, display-aware release floor
-         * and must not prevent independent lines from returning to rest. */
-        static const unsigned releaseOrder[S5L_BUTTON_COUNT] = {
-            S5L_BUTTON_MENU, S5L_BUTTON_VOLUP, S5L_BUTTON_VOLDOWN,
-            S5L_BUTTON_RINGERAB, S5L_BUTTON_HOLD,
-        };
-        for (unsigned i = 0; i < S5L_BUTTON_COUNT; i++) {
-            unsigned which = releaseOrder[i];
-            if (!s5l_buttons_held(&_machine.buttons, which)) continue;
-            pthread_mutex_lock(&_lock);
-            BOOL queued = vm_button_queue_push(&_buttonQueue, which, false);
-            pthread_mutex_unlock(&_lock);
+        /* The slider is not a held key. Preserve its requested position even
+         * when checkpoint cancellation removed a not-yet-delivered change. */
+        vm_button_event_t release;
+        pthread_mutex_lock(&_lock);
+        BOOL needsRelease = vm_button_checkpoint_release(&_machine.buttons,
+            _buttons[VMButtonRingerSilent], &release);
+        BOOL queued = needsRelease &&
+            vm_button_queue_push(&_buttonQueue, release.which, release.pressed);
+        pthread_mutex_unlock(&_lock);
+        if (needsRelease) {
             if (queued) [self drainOneButton_emulatorThread];
             buttonWaiting = YES;
-            break;
         }
 
         /* The release itself is serialized, but waiting for its interrupt to
@@ -1507,7 +1518,9 @@ static double vm_engine_now_seconds(void) {
     if (touchWaiting || buttonWaiting) return NO;
 
     pthread_mutex_lock(&_lock);
+    BOOL silent = _buttons[VMButtonRingerSilent];
     memset(_buttons, 0, sizeof _buttons);
+    _buttons[VMButtonRingerSilent] = silent;
     memset(&_powerHold, 0, sizeof _powerHold);
     memset(&_momentaryHolds, 0, sizeof _momentaryHolds);
     pthread_mutex_unlock(&_lock);
