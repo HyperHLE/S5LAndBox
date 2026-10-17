@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Install AppSync for OS 3.1 during new jailbreaks by default. Advanced Settings
+  includes an independent opt-out alongside Packages with jailbreak. The
+  downloaded package is checksum-verified and installed by the guest's dpkg
+  after firmware registration; existing jailbreaks are left unchanged.
 - Add a native **Legacy Store** browser inside IPA Library, with search, app
   artwork, automatic guest compatibility filtering, individual downloads and
   installation through the existing IPA flow. Downloads are size/checksum

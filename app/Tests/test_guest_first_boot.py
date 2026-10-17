@@ -16,12 +16,21 @@ mock_firmware() {
     [ ! -e fail-firmware ]
 }
 mock_dpkg() {
+    if [ "$1" = --install ]; then
+        echo appsync >> events
+        [ ! -e fail-appsync ]
+        return $?
+    fi
     echo configure >> events
     [ ! -e fail-configure ]
 }
 mock_chown() { return 0; }
 mock_chmod() { return 0; }
 mock_killall() {
+    if [ "$1" = installd ]; then
+        echo restart-installd >> events
+        return 0
+    fi
     if [ "$1" = -0 ]; then
         [ ! -e no-springboard ]
     else
@@ -55,11 +64,16 @@ def main():
         subprocess.run([executable, "--write-install-script", str(emitted)],
                        check=True, capture_output=True)
         script = emitted.read_text()
+        assert "appsync_archive" not in script, "opt-out must not stage or install AppSync"
+        subprocess.run([executable, "--write-appsync-script", str(emitted)],
+                       check=True, capture_output=True)
+        script = emitted.read_text()
         registration = script.index("cydia=/Applications/Cydia.app/Cydia_\n")
         configure = script.index('if [ ! -e "$state/packages-configured" ]; then')
         apt = script.index("cache_archive=\"$packages/")
         completion = script.index(': >"$state/complete.partial"')
         assert configure < registration < apt < completion, "configure before registration; APT after"
+        assert configure < script.index('/usr/bin/dpkg --install "$appsync_archive"') < registration
         header = script[:script.index("install_one() {")]
         # Keep the actual durable completion code and shortcut from production.
         body = (header + script[configure:apt] +
@@ -121,6 +135,38 @@ def main():
         assert events(fresh) == ["uicache", "respring", "apt-cache"]
         assert all_events(fresh).count("firmware") == 1
 
+        archive = "private/var/lib/s5lbox/packages/us.hackulo.appsync31_1.0.2_iphoneos-arm.deb"
+        selected = fixture("appsync-enabled")
+        (selected / archive).touch()
+        run(selected, 0)
+        assert complete(selected) and not (selected / archive).exists()
+        expected = ["firmware", "configure", "appsync", "restart-installd", "uicache", "respring", "apt-cache"]
+        assert all_events(selected) == expected
+        run(selected, 0)
+        assert all_events(selected) == expected
+
+        failed = fixture("appsync-retry")
+        (failed / archive).touch()
+        (failed / "fail-appsync").touch()
+        run(failed, 1)
+        assert not complete(failed) and (failed / archive).exists()
+        assert all_events(failed) == ["firmware", "configure", "appsync"]
+        (failed / "fail-appsync").unlink()
+        run(failed, 0)
+        assert complete(failed) and not (failed / archive).exists()
+        assert all_events(failed) == ["firmware", "configure", "appsync", "appsync",
+                                      "restart-installd", "uicache", "respring", "apt-cache"]
+
+        retry_cache = fixture("appsync-cache-retry")
+        (retry_cache / archive).touch()
+        (retry_cache / "fail-cache").touch()
+        run(retry_cache, 1)
+        assert not complete(retry_cache) and not (retry_cache / archive).exists()
+        (retry_cache / "fail-cache").unlink()
+        run(retry_cache, 0)
+        assert complete(retry_cache) and all_events(retry_cache).count("appsync") == 1
+        assert all_events(retry_cache).count("restart-installd") == 1
+
         for failure in ["fail-firmware", "fail-configure"]:
             path = fixture(failure)
             (path / failure).touch()
@@ -176,7 +222,7 @@ def main():
             (path / failure).unlink()
             run(path, 0)
             assert complete(path)
-        print("first-boot finalizer: fresh install, retry, timeout, failures and idempotence passed")
+        print("first-boot finalizer: fresh install, optional AppSync, retry, timeout, failures and idempotence passed")
 
 
 if __name__ == "__main__":

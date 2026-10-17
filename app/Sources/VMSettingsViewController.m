@@ -64,6 +64,7 @@ typedef NS_ENUM(NSInteger, VMGeneralRow) {
     VMGeneralRowInstallIPA,
     VMGeneralRowPackageSetup,
     VMGeneralRowPackagesWithJailbreak,
+    VMGeneralRowAppSyncWithJailbreak,
     VMGeneralRowGuestMicrophone,
     VMGeneralRowPauseInBackground,
     VMGeneralRowDeveloperMode,
@@ -129,6 +130,7 @@ static NSString *VMStringFromC(const char *text) {
 - (void)inlineConsoleChanged:(UISwitch *)sender;
 - (void)developerModeToggled:(UISwitch *)sender;
 - (void)packagesWithJailbreakToggled:(UISwitch *)sender;
+- (void)appSyncWithJailbreakToggled:(UISwitch *)sender;
 - (void)guestMicrophoneToggled:(UISwitch *)sender;
 - (void)chooseGraphicsMode;
 - (void)chooseDiskSize;
@@ -297,6 +299,10 @@ static NSString *VMStringFromC(const char *text) {
     _settings.packagesWithJailbreak = sender.isOn;
 }
 
+- (void)appSyncWithJailbreakToggled:(UISwitch *)sender {
+    _settings.appSyncWithJailbreak = sender.isOn;
+}
+
 - (void)guestMicrophoneToggled:(UISwitch *)sender {
     _settings.guestMicrophoneEnabled = sender.isOn;
 }
@@ -323,6 +329,7 @@ static NSString *VMStringFromC(const char *text) {
             @[@(VMGeneralRowInterface), @(VMGeneralRowFirmware), @(VMGeneralRowGraphicsMode)]];
         [rows addObject:@(VMGeneralRowDiskSize)];
         [rows addObject:@(VMGeneralRowPackagesWithJailbreak)];
+        [rows addObject:@(VMGeneralRowAppSyncWithJailbreak)];
         [rows addObject:@(VMGeneralRowGuestMicrophone)];
         [rows addObject:@(VMGeneralRowPauseInBackground)];
         if (self.guestPackageSetupRequest) [rows addObject:@(VMGeneralRowPackageSetup)];
@@ -563,15 +570,18 @@ titleForFooterInSection:(NSInteger)section {
             cell.detailTextLabel.text = @"For previously jailbroken machines.";
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
             cell.accessibilityIdentifier = @"s5lbox.settings.package-setup";
-        } else if (row == VMGeneralRowPackagesWithJailbreak) {
-            cell.textLabel.text = @"Packages with jailbreak";
+        } else if (row == VMGeneralRowPackagesWithJailbreak || row == VMGeneralRowAppSyncWithJailbreak) {
+            BOOL appSync = row == VMGeneralRowAppSyncWithJailbreak;
+            cell.textLabel.text = appSync ? @"AppSync with jailbreak" : @"Packages with jailbreak";
+            cell.detailTextLabel.text = appSync ? @"For new jailbreaks." : nil;
             cell.accessoryType = UITableViewCellAccessoryNone;
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
             UISwitch *sw = [[UISwitch alloc] init];
-            sw.on = _settings.packagesWithJailbreak;
+            sw.on = appSync ? _settings.appSyncWithJailbreak : _settings.packagesWithJailbreak;
             sw.accessibilityLabel = cell.textLabel.text;
-            sw.accessibilityIdentifier = @"s5lbox.settings.packages-with-jailbreak";
-            [sw addTarget:self action:@selector(packagesWithJailbreakToggled:)
+            sw.accessibilityIdentifier = appSync ? @"s5lbox.settings.appsync-with-jailbreak"
+                : @"s5lbox.settings.packages-with-jailbreak";
+            [sw addTarget:self action:appSync ? @selector(appSyncWithJailbreakToggled:) : @selector(packagesWithJailbreakToggled:)
                  forControlEvents:UIControlEventValueChanged];
             cell.accessoryView = sw;
         } else if (row == VMGeneralRowGuestMicrophone || row == VMGeneralRowPauseInBackground) {
@@ -910,8 +920,9 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 }
 
 - (void)confirmGuestInstall {
-    NSString *install = _settings.packagesWithJailbreak
-        ? @"Install Cydia and set up Packages?" : @"Install Cydia?";
+    NSString *components = _settings.appSyncWithJailbreak ? @"Cydia and AppSync" : @"Cydia";
+    NSString *install = [NSString stringWithFormat:@"Install %@%@?", components,
+        _settings.packagesWithJailbreak ? @" and set up Packages" : @""];
     NSString *message = self.guestInstallRequest
         ? [install stringByAppendingString:@" The machine will power off and its saved running state "
            @"will be discarded. Unsaved work may be lost."]

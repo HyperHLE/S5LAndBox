@@ -131,6 +131,40 @@ static void test_entry_refusals(void) {
           "zero-byte package was accepted");
 }
 
+static void test_optional_appsync(void) {
+    char why[256];
+    const vm_guest_package_t *package = vm_guest_package_appsync();
+    CHECK(package && vm_guest_package_validate_entry(package, why, sizeof why),
+          "AppSync metadata refused: %s", why);
+    CHECK(package && package->size == UINT64_C(248082) &&
+          strcmp(package->sha256_hex, "c9ded74192d0e3a78855700f65be3834c53364782343338f336f2315a4e60e89") == 0 &&
+          package->roles == (VM_GUEST_PACKAGE_INSTALL | VM_GUEST_PACKAGE_APPSYNC),
+          "pinned AppSync identity/roles drifted");
+    CHECK(vm_guest_package_install_count(false) == vm_guest_package_count() &&
+          vm_guest_package_install_count(true) == vm_guest_package_count() + 1u,
+          "opt-out changed the base package set");
+    CHECK(vm_guest_package_install_at(vm_guest_package_count(), false) == NULL &&
+          vm_guest_package_install_at(vm_guest_package_count(), true) == package &&
+          vm_guest_package_install_at(vm_guest_package_count() + 1u, true) == NULL,
+          "optional selection bounds are wrong");
+    for (size_t i = 0; i < vm_guest_package_count(); i++)
+        CHECK(vm_guest_package_install_at(i, true) == vm_guest_package_at(i) &&
+              vm_guest_package_install_at(i, false) == vm_guest_package_at(i),
+              "selection changed base package %zu", i);
+    if (!package) return;
+    vm_guest_package_t changed = *package;
+    changed.source_url = "http://ios3.party/debs/appsync31-1.0.2.deb";
+    CHECK(!vm_guest_package_validate_entry(&changed, why, sizeof why), "AppSync HTTP accepted");
+    changed.source_url = "https://ios3.party/debs/appsync31-1.0.1.deb";
+    CHECK(!vm_guest_package_validate_entry(&changed, why, sizeof why), "other AppSync URL accepted");
+    changed = *package;
+    changed.roles |= VM_GUEST_PACKAGE_FOUNDATION;
+    CHECK(!vm_guest_package_validate_entry(&changed, why, sizeof why), "AppSync foundation accepted");
+    changed = *package;
+    changed.roles = VM_GUEST_PACKAGE_APPSYNC;
+    CHECK(!vm_guest_package_validate_entry(&changed, why, sizeof why), "AppSync without install accepted");
+}
+
 static void test_digest_and_download_match(void) {
     const vm_guest_package_t *cydia = vm_guest_package_find("cydia");
     CHECK(cydia != NULL, "Cydia entry is missing");
@@ -215,6 +249,7 @@ int main(void) {
     printf("== guest package manifest ==\n");
     test_shipping_manifest();
     test_entry_refusals();
+    test_optional_appsync();
     test_digest_and_download_match();
     test_downloaded_file_gate();
     printf("== guest package manifest: %u checks, %u failure(s) ==\n",

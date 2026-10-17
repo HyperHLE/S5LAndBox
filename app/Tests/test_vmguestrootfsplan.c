@@ -265,6 +265,71 @@ static const rootfs_work_entry_t *find_entry(
     return NULL;
 }
 
+static const char *appsync_script_output;
+
+static void test_optional_appsync_plan(void) {
+    deb_fixture_t deb;
+    CHECK(make_deb(&deb), "could not build AppSync synthetic package");
+    vm_guest_package_t base, appsync, cache;
+    char sha[3][VM_GUEST_PACKAGE_SHA256_HEX_SIZE], url[3][256];
+    make_package(&base, sha[0], url[0], &deb);
+    make_named_package(&appsync, sha[1], url[1], &deb, "us.hackulo.appsync31", "1.0.2",
+                       "us.hackulo.appsync31_1.0.2_iphoneos-arm.deb");
+    appsync.roles = VM_GUEST_PACKAGE_INSTALL | VM_GUEST_PACKAGE_APPSYNC;
+    make_named_package(&cache, sha[2], url[2], &deb, "apt7", "0.7.20.2-1",
+                       "apt7_0.7.20.2-1_iphoneos-arm.deb");
+    cache.roles = VM_GUEST_PACKAGE_APT_CACHE_TOOL;
+    vm_guest_package_input_t inputs[] = {
+        {&base, deb.bytes, deb.size}, {&cache, deb.bytes, deb.size},
+        {&appsync, deb.bytes, deb.size}
+    };
+    char detail[VM_GUEST_ROOTFS_DETAIL_CAPACITY];
+    vm_guest_rootfs_status_t status;
+    vm_guest_rootfs_plan_t *off = vm_guest_rootfs_plan_open(inputs, 2u, &status, detail, sizeof detail);
+    vm_guest_rootfs_plan_t *on = vm_guest_rootfs_plan_open(inputs, 3u, &status, detail, sizeof detail);
+    CHECK(off && on, "optional AppSync fixture refused: %s", detail);
+    if (off && on) {
+        const rootfs_work_entry_t *script = find_entry(on, VM_GUEST_ROOTFS_INSTALL_SCRIPT);
+        const rootfs_work_entry_t *base_script = find_entry(off, VM_GUEST_ROOTFS_INSTALL_SCRIPT);
+        const char *text = script ? (const char *)script->content : "";
+        const char *configure = strstr(text, "/usr/bin/dpkg --force-depends --configure -a");
+        const char *install = strstr(text, "/usr/bin/dpkg --install \"$appsync_archive\" || exit 1");
+        const char *restart = strstr(text, "/usr/bin/killall installd");
+        const char *register_app = strstr(text, "cydia=/Applications/Cydia.app/Cydia_");
+        CHECK(configure && install && restart && register_app &&
+              configure < install && install < restart && restart < register_app,
+              "AppSync must respect dependencies and restart installd before registration");
+        CHECK(!strstr(text, "install_one \"$packages/us.hackulo.appsync31") &&
+              base_script && !strstr((const char *)base_script->content, "appsync"),
+              "AppSync was unpacked before its Pre-Depends or appeared in opt-out script");
+        const char *archive = VM_GUEST_ROOTFS_PACKAGE_DIRECTORY "/us.hackulo.appsync31_1.0.2_iphoneos-arm.deb";
+        CHECK(find_entry(on, archive) && !find_entry(off, archive) &&
+              !find_entry(on, "/usr/libexec/installd"),
+              "optional archive missing, staged when disabled, or bypassed guest dpkg");
+        uint8_t on_hash[32], off_hash[32];
+        CHECK(vm_guest_rootfs_plan_manifest_sha256(on, on_hash) &&
+              vm_guest_rootfs_plan_manifest_sha256(off, off_hash) &&
+              memcmp(on_hash, off_hash, sizeof on_hash) != 0,
+              "AppSync choice is absent from the committed plan identity");
+        if (appsync_script_output && script) {
+            FILE *output = fopen(appsync_script_output, "wb");
+            CHECK(output != NULL, "could not open AppSync script output");
+            if (output) {
+                CHECK(fwrite(script->content, 1u, script->content_size, output) == script->content_size,
+                      "could not write AppSync script");
+                CHECK(fclose(output) == 0, "could not close AppSync script");
+            }
+        }
+    }
+    vm_guest_rootfs_plan_close(&off);
+    vm_guest_rootfs_plan_close(&on);
+    sha[1][0] = sha[1][0] == '0' ? '1' : '0';
+    on = vm_guest_rootfs_plan_open(inputs, 3u, &status, detail, sizeof detail);
+    CHECK(!on && status == VM_GUEST_ROOTFS_ERR_PACKAGE_IDENTITY,
+          "AppSync corruption was accepted");
+    vm_guest_rootfs_plan_close(&on);
+}
+
 static void test_complete_synthetic_plan(void) {
     deb_fixture_t deb;
     CHECK(make_deb(&deb), "could not build synthetic package");
@@ -777,10 +842,13 @@ static void test_real_packages_when_supplied(void) {
 int main(int argc, char **argv) {
     if (argc == 3 && strcmp(argv[1], "--write-install-script") == 0)
         script_output = argv[2];
+    else if (argc == 3 && strcmp(argv[1], "--write-appsync-script") == 0)
+        appsync_script_output = argv[2];
     else if (argc != 1)
         return 2;
     printf("== guest rootfs plan ==\n");
     test_complete_synthetic_plan();
+    test_optional_appsync_plan();
     test_identity_and_compression_refusals();
     test_ncurses_preinst_alias_is_left_for_guest_dpkg();
     test_real_packages_when_supplied();

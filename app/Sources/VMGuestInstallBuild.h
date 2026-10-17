@@ -171,6 +171,14 @@ vm_guest_install_build_status_t vm_guest_install_build_after_force_off(
     vm_guest_install_build_result_t *result,
     char *detail, size_t detail_capacity);
 
+/* Same safety policy; optionally stages AppSync in a NEW jailbreak plan.
+ * Repairing an existing jailbreak never silently changes its package set. */
+vm_guest_install_build_status_t vm_guest_install_build_after_force_off_with_appsync(
+    const char *work_directory, const char *package_directory, bool include_appsync,
+    vm_guest_install_build_progress_t progress, void *progress_context,
+    vm_guest_install_build_result_t *result,
+    char *detail, size_t detail_capacity);
+
 #if defined(S5LBOX_GUEST_INSTALL_TESTING)
 /* Exact executable identities and the only permitted metadata transition. */
 void vm_guest_install_build_test_cydia_privilege_repair(

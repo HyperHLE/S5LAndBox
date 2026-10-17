@@ -34,7 +34,11 @@ typedef enum {
      * first-boot job extracts its ABI-matched APT command-line helpers into
      * /usr/libexec solely to refresh and validate Cydia's caches outside the
      * foreground application watchdog. */
-    VM_GUEST_PACKAGE_APT_CACHE_TOOL = 1u << 2
+    VM_GUEST_PACKAGE_APT_CACHE_TOOL = 1u << 2,
+
+    /* Optional AppSync: install only after firmware registration and base
+     * package configuration, then restart installd before the first respring. */
+    VM_GUEST_PACKAGE_APPSYNC = 1u << 3
 } vm_guest_package_role_t;
 
 typedef struct {
@@ -50,6 +54,13 @@ typedef struct {
 size_t vm_guest_package_count(void);
 const vm_guest_package_t *vm_guest_package_at(size_t index);
 const vm_guest_package_t *vm_guest_package_find(const char *package);
+
+/* The base manifest and its cache identity stay unchanged. The selected set
+ * appends the pinned, download-only OS 3.1 AppSync package when requested. */
+const vm_guest_package_t *vm_guest_package_appsync(void);
+size_t vm_guest_package_install_count(bool include_appsync);
+const vm_guest_package_t *vm_guest_package_install_at(size_t index,
+                                                      bool include_appsync);
 
 /* Validate one caller-owned record, or the complete shipping manifest. */
 bool vm_guest_package_validate_entry(const vm_guest_package_t *package,
