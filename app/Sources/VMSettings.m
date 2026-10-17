@@ -128,7 +128,7 @@ static const uint64_t kVMInstructionCaps[] = {
 
 - (BOOL)appSyncWithJailbreak {
     id stored = [[self defaults] objectForKey:kVMAppSyncWithJailbreak];
-    return [stored isKindOfClass:NSNumber.class] ? stored.boolValue : YES;
+    return [stored isKindOfClass:NSNumber.class] ? [stored boolValue] : YES;
 }
 
 - (void)setAppSyncWithJailbreak:(BOOL)enabled {
