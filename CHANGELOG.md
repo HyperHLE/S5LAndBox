@@ -12,6 +12,9 @@
   default, independently of CPU and animation timing.
 - Start physical microphone capture only when the guest audio hardware requests
   input, rather than whenever microphone access is allowed.
+- Initialize firmware dependency records during first-boot jailbreak setup,
+  without requiring Cydia to be opened first. Packages waits for setup to
+  complete before changing packages or applying a restart.
 
 ## 1.0.0 — 2026-10-15
 

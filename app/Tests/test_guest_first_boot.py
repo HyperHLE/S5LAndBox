@@ -11,6 +11,14 @@ import tempfile
 
 
 MOCKS = r'''
+mock_firmware() {
+    echo firmware >> events
+    [ ! -e fail-firmware ]
+}
+mock_dpkg() {
+    echo configure >> events
+    [ ! -e fail-configure ]
+}
 mock_chown() { return 0; }
 mock_chmod() { return 0; }
 mock_killall() {
@@ -48,18 +56,21 @@ def main():
                        check=True, capture_output=True)
         script = emitted.read_text()
         registration = script.index("cydia=/Applications/Cydia.app/Cydia_\n")
+        configure = script.index('if [ ! -e "$state/packages-configured" ]; then')
         apt = script.index("cache_archive=\"$packages/")
         completion = script.index(': >"$state/complete.partial"')
-        assert registration < apt < completion, "APT must not delay registration"
+        assert configure < registration < apt < completion, "configure before registration; APT after"
         header = script[:script.index("install_one() {")]
         # Keep the actual durable completion code and shortcut from production.
-        body = (header + script[registration:apt] +
+        body = (header + script[configure:apt] +
                 'echo apt-cache >> events\n[ ! -e fail-cache ] || exit 1\n' +
                 script[completion:])
         body = body.replace("/private/", "./private/")
         body = body.replace("/Applications/", "./Applications/")
         body = body.replace("/usr/bin/uicache", "./uicache")
         for original, mock in [("/bin/chown", "mock_chown"),
+                               ("/bin/bash /usr/libexec/cydia/firmware.sh", "mock_firmware"),
+                               ("/usr/bin/dpkg", "mock_dpkg"),
                                ("/bin/chmod", "mock_chmod"),
                                ("/usr/bin/killall", "mock_killall"),
                                ("/bin/su", "mock_su"),
@@ -91,9 +102,12 @@ def main():
             assert result.returncode == expected, (path.name, result.stderr,
                 (path / "private/var/log/s5lbox-guest-install.log").read_text())
 
-        def events(path):
+        def all_events(path):
             event_file = path / "events"
             return event_file.read_text().splitlines() if event_file.exists() else []
+
+        def events(path):
+            return [e for e in all_events(path) if e not in ("firmware", "configure")]
 
         def complete(path):
             return (path / "private/var/lib/s5lbox/complete").exists()
@@ -102,8 +116,22 @@ def main():
         run(fresh, 0)
         assert complete(fresh)
         assert events(fresh) == ["uicache", "respring", "apt-cache"]
+        assert all_events(fresh) == ["firmware", "configure", "uicache", "respring", "apt-cache"]
         run(fresh, 0)
         assert events(fresh) == ["uicache", "respring", "apt-cache"]
+        assert all_events(fresh).count("firmware") == 1
+
+        for failure in ["fail-firmware", "fail-configure"]:
+            path = fixture(failure)
+            (path / failure).touch()
+            run(path, 1)
+            assert not complete(path) and events(path) == []
+            assert not (path / "private/var/lib/s5lbox/packages-configured").exists()
+            if failure == "fail-firmware":
+                assert all_events(path) == ["firmware"]
+            (path / failure).unlink()
+            run(path, 0)
+            assert complete(path)
 
         interrupted = fixture("interrupted-cache")
         (interrupted / "fail-cache").touch()
@@ -113,6 +141,8 @@ def main():
         run(interrupted, 0)
         assert complete(interrupted)
         assert events(interrupted) == ["uicache", "respring", "apt-cache", "apt-cache"]
+        assert all_events(interrupted).count("firmware") == 1
+        assert all_events(interrupted).count("configure") == 1
 
         pending = fixture("delayed-icon")
         (pending / "delay-icon").touch()

@@ -502,6 +502,16 @@ static void test_complete_synthetic_plan(void) {
         ? strstr((const char *)script->content,
                  "/usr/bin/dpkg --force-depends --configure -a || exit 1")
         : NULL;
+    const char *firmware = script
+        ? strstr((const char *)script->content,
+                 "/bin/bash /usr/libexec/cydia/firmware.sh || exit 1")
+        : NULL;
+    CHECK(firmware && configured && firmware < configured &&
+          strstr((const char *)script->content,
+                 "if [ ! -e \"$state/packages-configured\" ]; then") &&
+          strstr((const char *)script->content,
+                 ": >\"$state/packages-configured.partial\" || exit 1"),
+          "firmware dependencies must be initialized before configure, once per setup");
     const char *apt_cache_ready = script
         ? strstr((const char *)script->content,
                  "Cydia APT caches recovered outside the application watchdog")
@@ -585,10 +595,10 @@ static void test_complete_synthetic_plan(void) {
     CHECK(vm_guest_rootfs_plan_manifest_sha256(plan, digest),
           "plan manifest identity was not produced");
     static const uint8_t EXPECTED[VM_GUEST_PACKAGE_SHA256_SIZE] = {
-        0x9du, 0x34u, 0x44u, 0xc5u, 0xb7u, 0x9cu, 0x60u, 0x17u,
-        0xcfu, 0xcau, 0xefu, 0x8au, 0x71u, 0x1fu, 0xbau, 0x51u,
-        0x9eu, 0x53u, 0x78u, 0xd6u, 0xd3u, 0xf4u, 0x22u, 0x0au,
-        0xcau, 0x15u, 0x51u, 0x24u, 0x9cu, 0x0au, 0x34u, 0x7au
+        0x44u, 0xb0u, 0x87u, 0x0du, 0x63u, 0x86u, 0x16u, 0x0au,
+        0xb2u, 0x06u, 0xd8u, 0xcdu, 0xf9u, 0x2du, 0x69u, 0xe3u,
+        0x57u, 0x11u, 0x3du, 0x4fu, 0x6fu, 0x02u, 0x15u, 0xa0u,
+        0xfeu, 0xe0u, 0x8du, 0x0au, 0xc7u, 0x86u, 0xefu, 0x34u
     };
     CHECK(memcmp(digest, EXPECTED, sizeof digest) == 0,
           "synthetic plan identity changed");
