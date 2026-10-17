@@ -103,13 +103,19 @@ static UIImage *StoreIcon(NSData *data) {
     hero.axis = UILayoutConstraintAxisHorizontal; hero.alignment = UIStackViewAlignmentCenter; hero.spacing = 18;
     [stack addArrangedSubview:hero];
     _get = StoreButton(self, @selector(getTapped)); _get.accessibilityIdentifier = @"s5lbox.legacy-store.get";
+    _get.titleLabel.numberOfLines = 0; _get.titleLabel.textAlignment = NSTextAlignmentCenter;
+    _get.backgroundColor = UIColor.systemBlueColor; [_get setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    [_get setTitleColor:UIColor.secondaryLabelColor forState:UIControlStateDisabled];
+    [_get setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
     _cancel = [UIButton buttonWithType:UIButtonTypeSystem]; [_cancel setTitle:@"Cancel download" forState:UIControlStateNormal];
     [_cancel addTarget:self action:@selector(cancelTapped) forControlEvents:UIControlEventTouchUpInside];
     _cancel.contentEdgeInsets = UIEdgeInsetsMake(12, 12, 12, 12);
     _status = StoreLabel(UIFontTextStyleFootnote, UIColor.secondaryLabelColor); _status.textAlignment = NSTextAlignmentCenter;
     _progress = [[UIProgressView alloc] initWithProgressViewStyle:UIProgressViewStyleDefault];
     _spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
-    UIStackView *action = [[UIStackView alloc] initWithArrangedSubviews:@[_get, _spinner, _status, _progress, _cancel]];
+    UIStackView *buttonRow = [[UIStackView alloc] initWithArrangedSubviews:@[_get, [UIView new]]];
+    buttonRow.axis = UILayoutConstraintAxisHorizontal; buttonRow.spacing = 12;
+    UIStackView *action = [[UIStackView alloc] initWithArrangedSubviews:@[buttonRow, _spinner, _status, _progress, _cancel]];
     action.axis = UILayoutConstraintAxisVertical; action.spacing = 12; [stack addArrangedSubview:action];
     UIView *separator = [UIView new]; separator.backgroundColor = UIColor.separatorColor;
     [separator.heightAnchor constraintEqualToConstant:0.5].active = YES; [stack addArrangedSubview:separator];
@@ -147,6 +153,7 @@ static UIImage *StoreIcon(NSData *data) {
     BOOL ready = current && download.state == VMLegacyStoreDownloaded &&
         [NSFileManager.defaultManager fileExistsAtPath:download.libraryURL.path];
     _get.enabled = !download.busy;
+    _get.backgroundColor = download.busy ? UIColor.tertiarySystemFillColor : UIColor.systemBlueColor;
     NSString *title = ready ? @"Install" : current && download.state == VMLegacyStoreDownloadFailed ? @"Retry download" : @"Get";
     if (download.busy) title = current ? (checking ? @"Checking app…" : @"Downloading…") : @"Another download is in progress";
     [_get setTitle:title forState:UIControlStateNormal];
@@ -185,6 +192,7 @@ static UIImage *StoreIcon(NSData *data) {
     _nameLabel = StoreLabel(UIFontTextStyleHeadline, UIColor.labelColor);
     _subtitleLabel = StoreLabel(UIFontTextStyleSubheadline, UIColor.secondaryLabelColor);
     _getButton = StoreButton(nil, NULL); [_getButton setTitle:@"Get" forState:UIControlStateNormal];
+    [_getButton setContentHuggingPriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
     [_getButton setContentCompressionResistancePriority:UILayoutPriorityRequired forAxis:UILayoutConstraintAxisHorizontal];
     UIStackView *labels = [[UIStackView alloc] initWithArrangedSubviews:@[_nameLabel, _subtitleLabel]];
     labels.axis = UILayoutConstraintAxisVertical; labels.spacing = 3;
