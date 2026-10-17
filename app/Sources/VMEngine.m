@@ -2162,8 +2162,12 @@ static bool vm_native_pc_profile_row(void *opaque, uint64_t bin,
                     clockSync = nil;
                 }
                 if (clockSyncPending && !clockSync && !shutdownRequested &&
-                    !_usbRecovery.disconnected && _usbMux && usb_mux_ready(_usbMux) &&
+                    ((_usbMux && usb_mux_ready(_usbMux) && !_usbRecovery.disconnected) ||
+                     s5l8900_hibernation_ready(&_machine)) &&
                     vm_now() >= clockSyncRetryAt) {
+                    // A saved sleeping guest cannot enumerate until a pending
+                    // service supplies wake demand; do not wait for readiness
+                    // before creating that demand. Never unlock the guest.
                     clockSyncAttempts++;
                     clockSync = [[VMUSBClockSync alloc] initWithTransport:_usbTransport instanceID:_instanceID];
                     [clockSync start];
