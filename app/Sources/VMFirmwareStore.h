@@ -1,4 +1,4 @@
-// Atomic publication of a complete, already-authenticated firmware set.
+// Atomic publication of a complete firmware set and its import policy.
 #import <Foundation/Foundation.h>
 NS_ASSUME_NONNULL_BEGIN
 @interface VMFirmwareStore : NSObject

@@ -37,6 +37,7 @@ static NSString *const kVMLegacyEmulatorUI = @"VMLegacyEmulatorUI";
 static NSString *const kVMHomeOnlyEmulatorUI = @"VMHomeOnlyEmulatorUI";
 static NSString *const kVMPackagesWithJailbreak = @"VMPackagesWithJailbreak";
 static NSString *const kVMGuestMicrophoneEnabled = @"VMGuestMicrophoneEnabled";
+static NSString *const kVMSkipFirmwareChecksums = @"VMSkipFirmwareChecksums";
 static NSString *const kVMNewMachineDiskSizeGiB = @"VMNewMachineDiskSizeGiB";
 
 /*
@@ -122,6 +123,16 @@ static const uint64_t kVMInstructionCaps[] = {
 - (BOOL)guestMicrophoneEnabled {
     NSNumber *stored = [[self defaults] objectForKey:kVMGuestMicrophoneEnabled];
     return [stored isKindOfClass:NSNumber.class] ? stored.boolValue : YES;
+}
+
+- (BOOL)skipFirmwareChecksums {
+    id stored = [[self defaults] objectForKey:kVMSkipFirmwareChecksums];
+    return [stored isKindOfClass:NSNumber.class] && [stored isEqualToNumber:@YES];
+}
+
+- (void)setSkipFirmwareChecksums:(BOOL)skip {
+    [[self defaults] setBool:skip forKey:kVMSkipFirmwareChecksums];
+    [self publishChange];
 }
 
 - (void)setGuestMicrophoneEnabled:(BOOL)enabled {
@@ -547,6 +558,7 @@ static const uint64_t kVMInstructionCaps[] = {
     [defaults removeObjectForKey:kVMHomeOnlyEmulatorUI];
     [defaults removeObjectForKey:kVMPackagesWithJailbreak];
     [defaults removeObjectForKey:kVMGuestMicrophoneEnabled];
+    [defaults removeObjectForKey:kVMSkipFirmwareChecksums];
     [defaults removeObjectForKey:kVMNewMachineDiskSizeGiB];
     [self publishChange];
 }

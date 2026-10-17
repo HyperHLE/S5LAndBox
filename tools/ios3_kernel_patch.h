@@ -117,7 +117,8 @@ typedef enum {
 
 /*
  * `kernel_file` is the complete decrypted Mach-O whose exact byte length is
- * `kernel_file_size`; the gate parses and SHA-256-hashes those bytes itself.
+ * `kernel_file_size`; the gate parses those bytes and, by default, authenticates
+ * their SHA-256. Explicit import policy can skip only the stock digest check.
  * `ram` must already contain the loaded kernel segments, including zero-filled
  * bytes from each segment's file size through its VM size. This manifest
  * accepts only the iPhone 2,1 mapping C0000000 -> 08000000.
@@ -137,6 +138,9 @@ typedef struct {
     /* Opt-in only with an installed md_geometry_bridge. Legacy media and
      * desktop callers retain the original eight-site patch manifest. */
     bool extended_md_geometry;
+    /* Explicit custom-firmware opt-in. All structural and patch-site checks
+     * remain mandatory; zero-initialized callers keep stock authentication. */
+    bool skip_stock_checksum;
 } ios3_kernel_patch_request_t;
 
 /*

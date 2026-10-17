@@ -87,6 +87,8 @@ typedef NS_ENUM(NSInteger, VMGraphicsMode) {
 /* Default for new sessions. Actual input still requires iOS permission;
  * the running machine retains its separate session switch. */
 @property(nonatomic) BOOL guestMicrophoneEnabled;
+/* Pending import preference only. Imported firmware records its own policy. */
+@property(nonatomic) BOOL skipFirmwareChecksums;
 
 /* Capacity recorded only when a machine is created. Defaults to 8 GiB;
  * Advanced may select 2 or 4. Never resizes an existing or legacy disk. */

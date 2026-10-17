@@ -272,7 +272,7 @@ static NSString *SetupFailureDetail(const vm_fw_report_t *report) {
     _ready = !running && [VMFirmwareImporter hasConfiguredFirmware];
     vm_fw_report_t report;
     BOOL haveReport = [_importer getLastReport:&report];
-    BOOL failed = !running && !_ready && (downloadFailed || (haveReport && !vm_fw_report_is_verified(&report)));
+    BOOL failed = !running && !_ready && (downloadFailed || (haveReport && !vm_fw_report_is_prepared(&report)));
     self.modalInPresentation = running;
     self.navigationController.modalInPresentation = running;
     self.navigationItem.leftBarButtonItem.title = running ? @"Cancel" : @"Later";

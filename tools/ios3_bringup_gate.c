@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
-static bool apply_gate(bool extended, void *context,
+static bool apply_gate(bool extended, bool skip_stock_checksum, void *context,
                        const uint8_t *kernel_file,
                        size_t kernel_file_size,
                        uint8_t *ram,
@@ -27,6 +27,7 @@ static bool apply_gate(bool extended, void *context,
     request.ram_base = ram_base;
     request.virt_base = virt_base;
     request.extended_md_geometry = extended;
+    request.skip_stock_checksum = skip_stock_checksum;
 
     status = ios3_kernel_patch_apply(&request, &report);
     if (out != NULL) {
@@ -57,21 +58,40 @@ static bool apply_gate(bool extended, void *context,
 bool ios3_bringup_gate(void *context, const uint8_t *file, size_t file_size,
                       uint8_t *ram, size_t ram_size, uint64_t ram_base,
                       uint32_t virt_base, char *detail, size_t capacity) {
-    return apply_gate(false, context, file, file_size, ram, ram_size, ram_base,
+    return apply_gate(false, false, context, file, file_size, ram, ram_size, ram_base,
                       virt_base, detail, capacity);
 }
 
 static bool extended_gate(void *context, const uint8_t *file, size_t file_size,
                           uint8_t *ram, size_t ram_size, uint64_t ram_base,
                           uint32_t virt_base, char *detail, size_t capacity) {
-    return apply_gate(true, context, file, file_size, ram, ram_size, ram_base,
+    return apply_gate(true, false, context, file, file_size, ram, ram_size, ram_base,
                       virt_base, detail, capacity);
 }
 
 void ios3_bringup_gate_configure(s5l_bringup_request_t *request,
                                  ios3_bringup_gate_report_t *gate_report) {
+    ios3_bringup_gate_configure_with_policy(request, gate_report, false);
+}
+
+static bool custom_gate(void *context, const uint8_t *file, size_t file_size,
+    uint8_t *ram, size_t ram_size, uint64_t ram_base, uint32_t virt_base,
+    char *detail, size_t capacity) {
+    return apply_gate(false, true, context, file, file_size, ram, ram_size,
+        ram_base, virt_base, detail, capacity);
+}
+
+static bool custom_extended_gate(void *context, const uint8_t *file, size_t file_size,
+    uint8_t *ram, size_t ram_size, uint64_t ram_base, uint32_t virt_base,
+    char *detail, size_t capacity) {
+    return apply_gate(true, true, context, file, file_size, ram, ram_size,
+        ram_base, virt_base, detail, capacity);
+}
+
+void ios3_bringup_gate_configure_with_policy(s5l_bringup_request_t *request,
+    ios3_bringup_gate_report_t *gate_report, bool skip_stock_checksum) {
     if (request == NULL) return;
-    request->kernel_gate = ios3_bringup_gate;
+    request->kernel_gate = skip_stock_checksum ? custom_gate : ios3_bringup_gate;
     request->kernel_gate_context = gate_report;
     request->md_read_site_pc = IOS3_KERNEL_PATCH_MD_READ_VA;
     request->md_write_site_pc = IOS3_KERNEL_PATCH_MD_WRITE_VA;
@@ -80,7 +100,7 @@ void ios3_bringup_gate_configure(s5l_bringup_request_t *request,
     request->md_geometry_sites = (md_geometry_sites_t){0};
     if (request->root_media &&
         request->root_media->size > MD_GEOMETRY_BOOTSTRAP_SIZE) {
-        request->kernel_gate = extended_gate;
+        request->kernel_gate = skip_stock_checksum ? custom_extended_gate : extended_gate;
         request->md_geometry_sites = (md_geometry_sites_t){
             .register_pc = IOS3_KERNEL_PATCH_MD_REGISTER_VA,
             .bounds_pc = IOS3_KERNEL_PATCH_MD_BOUNDS_VA,

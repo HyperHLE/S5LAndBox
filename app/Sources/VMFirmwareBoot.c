@@ -1,5 +1,6 @@
 /* See VMFirmwareBoot.h. Copyright (c) 2026 j0shua-SYSON. MIT licensed. */
 #include "VMFirmwareBoot.h"
+#include "VMFirmwarePolicy.h"
 #include "VMDiskSize.h"
 
 #include "file_block.h"
@@ -1115,6 +1116,24 @@ bool vm_firmware_boot_start(vm_firmware_boot_t *boot,
         return false;
     }
 
+    vm_fw_policy_t firmware_policy;
+    int recorded_policy = vm_fw_policy_read(paths->firmware, &firmware_policy);
+    bool policy_valid = recorded_policy >= 0;
+    if (recorded_policy == 1) {
+        const char *names[] = {"kernel.macho", "devicetree.bin", "rootfs.img"};
+        for (unsigned i = 0; i < 3; i++) {
+            char path[VM_FW_BOOT_PATH_CAPACITY + 64u];
+            if (!join_path(path, sizeof path, paths->firmware, names[i]) ||
+                file_size(path) != firmware_policy.sizes[i]) policy_valid = false;
+        }
+    }
+    if (!policy_valid) {
+        set_detail(report->summary, sizeof report->summary, "invalid firmware import");
+        set_detail(report->detail, sizeof report->detail,
+            "The firmware import record is invalid or its files have changed. Import the IPSW again.");
+        return false;
+    }
+
     /* Capacity, Cydia metadata, repository, and APT-trust maintenance have
      * disjoint journals but replace the same live image. Their recovery layer
      * inspects which one currently owns that pathname and runs it first; a
@@ -1553,7 +1572,7 @@ bool vm_firmware_boot_start(vm_firmware_boot_t *boot,
     /* One place decides both which kernel is acceptable and where its
      * memory-disk call sites are, so the bridges can never be armed against a
      * kernel that was authorized somewhere else. */
-    ios3_bringup_gate_configure(&request, NULL);
+    ios3_bringup_gate_configure_with_policy(&request, NULL, firmware_policy.skip_stock_checksums);
     /*
      * The user's switches, resolved into the request AFTER the fields above so
      * that a switch can never overwrite the media or the gate, and BEFORE

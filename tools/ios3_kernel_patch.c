@@ -624,23 +624,25 @@ ios3_kernel_patch_status_t ios3_kernel_patch_apply(
         }
     }
 
-    if (!ios3_kernel_patch_sha256(saved_request.kernel_file,
-                                  saved_request.kernel_file_size, digest)) {
-        return simple_failure(report,
-                              IOS3_KERNEL_PATCH_STATUS_INVALID_ARGUMENT,
-                              0u, 0u);
-    }
-    for (byte_index = 0u; byte_index < IOS3_KERNEL_PATCH_SHA256_LENGTH;
-         byte_index++) {
-        if (digest[byte_index] !=
-            ios3_kernel_patch_expected_sha256[byte_index]) {
-            return report_failure(
-                report, IOS3_KERNEL_PATCH_STATUS_KERNEL_DIGEST_MISMATCH,
-                IOS3_KERNEL_PATCH_NO_SITE, IOS3_KERNEL_PATCH_NO_SEGMENT,
-                (uint32_t)byte_index, IOS3_KERNEL_PATCH_NO_ADDRESS,
-                IOS3_KERNEL_PATCH_NO_ADDRESS,
-                ios3_kernel_patch_expected_sha256[byte_index],
-                digest[byte_index], MACHO_OK, GUEST_PATCH_STATUS_OK);
+    if (!saved_request.skip_stock_checksum) {
+        if (!ios3_kernel_patch_sha256(saved_request.kernel_file,
+                                      saved_request.kernel_file_size, digest)) {
+            return simple_failure(report,
+                                  IOS3_KERNEL_PATCH_STATUS_INVALID_ARGUMENT,
+                                  0u, 0u);
+        }
+        for (byte_index = 0u; byte_index < IOS3_KERNEL_PATCH_SHA256_LENGTH;
+             byte_index++) {
+            if (digest[byte_index] !=
+                ios3_kernel_patch_expected_sha256[byte_index]) {
+                return report_failure(
+                    report, IOS3_KERNEL_PATCH_STATUS_KERNEL_DIGEST_MISMATCH,
+                    IOS3_KERNEL_PATCH_NO_SITE, IOS3_KERNEL_PATCH_NO_SEGMENT,
+                    (uint32_t)byte_index, IOS3_KERNEL_PATCH_NO_ADDRESS,
+                    IOS3_KERNEL_PATCH_NO_ADDRESS,
+                    ios3_kernel_patch_expected_sha256[byte_index],
+                    digest[byte_index], MACHO_OK, GUEST_PATCH_STATUS_OK);
+            }
         }
     }
 

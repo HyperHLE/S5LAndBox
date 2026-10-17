@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add an opt-in **Skip stock checksums** switch to Advanced > Firmware, available
+  before importing an IPSW. The choice stays with the imported firmware; archive
+  integrity, supported-device and kernel patch-safety checks remain required.
+  This does not guarantee compatibility with custom firmware.
 - Remember the silent switch separately for each machine, including restart
   and saved-session resume. Saving releases held keys without clearing silent mode.
 - Buffer uneven audio delivery before playback and smooth playback starvation
