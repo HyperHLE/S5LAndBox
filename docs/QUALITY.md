@@ -55,8 +55,12 @@ Build `c03ed54` also passed the stale Machine Settings regression physically:
 opened during restore, it initially showed “Start the guest first”; without
 dismissing the screen, IPA/Packages became available and “Close machine” became
 “Save & close” after the guest started. The full local suite passed 84/84 in
-26.41 seconds and the native iOS build passed. macOS matrix completion is tracked
-separately from these device results.
+26.41 seconds. The [native iOS build](https://github.com/j0shua-SYSON/S5LBox/actions/runs/38994007637)
+and all nine jobs in the [core CI matrix](https://github.com/j0shua-SYSON/S5LBox/actions/runs/38994007616)
+passed for this exact code commit, including both macOS JIT and JIT-disabled
+validation paths. These automated results are separate from the physical
+device checks above; actual VoiceOver interaction, rotation and other host
+iOS versions were not physically tested in this pass.
 
 Current lifecycle evidence is recorded in [live IPA installation](live-ipa-usb.md),
 [Packages](native-package-manager.md) and [audio](audio.md). The historical
