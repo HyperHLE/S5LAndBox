@@ -179,7 +179,7 @@ jobs:
             work/package-tests/*.o -o work/package-tests/test_bridge
           work/package-tests/test_bridge "$GITHUB_WORKSPACE/work/package-tests/credentials"
           xcrun clang -fobjc-arc -Wall -Wextra -Werror -framework Foundation \
-            -I app/Sources -I tools app/Tests/test_vmguestpackagedownload.m \
+            -I app/Sources -I tools app/Tests/test_vmguestpackagedownload.m app/Sources/VMGuestPackageDownloader.m \
             work/package-tests/VMGuestPackageManifest.o work/package-tests/VMGuestPackageFile.o \
             work/package-tests/sha256.o -o work/package-tests/test_download
           work/package-tests/test_download "$GITHUB_WORKSPACE/work/package-tests"

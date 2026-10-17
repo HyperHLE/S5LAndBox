@@ -1,7 +1,7 @@
 // HTTPS-only recovery for the public Saurik archive. No trust exceptions.
 #import <Foundation/Foundation.h>
 
-static inline NSURL *VMArchiveFallbackURL(NSURL *url, NSError *error) {
+static inline NSURL * _Nullable VMArchiveFallbackURL(NSURL * _Nullable url, NSError * _Nullable error) {
     if (![error.domain isEqual:NSURLErrorDomain]) return nil;
     switch (error.code) {
         case NSURLErrorSecureConnectionFailed:
