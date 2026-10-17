@@ -112,24 +112,70 @@ void vm_audio_guest_frame(void *ctx, unsigned direction, uint32_t rate, float x[
         if (!get(&b->microphone, b->capture_b)) b->capture_primed = false;
     }
 }
+static void reset_render(vm_audio_buffer_t *b) {
+    b->playback_started = false;
+    b->playback_wait = b->fade_in = b->fade_out = 0;
+    memset(b->render_last, 0, sizeof b->render_last);
+    memset(b->render_tail, 0, sizeof b->render_tail);
+}
 void vm_audio_render(vm_audio_buffer_t *b, float *left, float *right, unsigned n) {
     uint32_t epoch = atomic_load_explicit(&b->epoch, memory_order_acquire);
     if (epoch != b->render_epoch) {
         discard(&b->playback); b->render_epoch = epoch;
+        reset_render(b);
     }
     bool active = atomic_load_explicit(&b->active, memory_order_acquire) &&
                   atomic_load_explicit(&b->host_running, memory_order_acquire);
+    if (!active) {
+        discard(&b->playback);
+        reset_render(b);
+        if (left) memset(left, 0, n * sizeof *left);
+        if (right) memset(right, 0, n * sizeof *right);
+        b->rendered += n;
+        return;
+    }
     for (unsigned i = 0; i < n; i++) {
         float x[2] = {0, 0};
-        if (active) (void)get(&b->playback, x);
-        for (unsigned ch = 0; ch < 2; ch++) {
-            if (x[ch] < -1) x[ch] = -1;
-            if (x[ch] > 1) x[ch] = 1;
+        if (!b->playback_started) {
+            uint32_t available = atomic_load_explicit(&b->playback.write, memory_order_acquire) -
+                                 atomic_load_explicit(&b->playback.read, memory_order_relaxed);
+            if (available && b->playback_wait < VM_AUDIO_PREFILL) b->playback_wait++;
+            if (!b->fade_out && available &&
+                (available >= VM_AUDIO_PREFILL || b->playback_wait >= VM_AUDIO_PREFILL)) {
+                b->playback_started = true;
+                b->playback_wait = 0;
+                b->fade_in = VM_AUDIO_FADE;
+            }
+        }
+        if (b->playback_started) {
+            if (get(&b->playback, x)) {
+                for (unsigned ch = 0; ch < 2; ch++) {
+                    if (x[ch] < -1) x[ch] = -1;
+                    if (x[ch] > 1) x[ch] = 1;
+                }
+                if (b->fade_in) {
+                    float gain = 1.f - (float)--b->fade_in / VM_AUDIO_FADE;
+                    x[0] *= gain; x[1] *= gain;
+                }
+            } else {
+                b->playback_underruns++;
+                b->playback_started = false;
+                b->fade_out = VM_AUDIO_FADE;
+                memcpy(b->render_tail, b->render_last, sizeof b->render_tail);
+            }
+        }
+        /* A real stall cannot be repaired with buffering. Fade the last sample
+         * to zero and rebuild the reserve instead of repeatedly clicking from
+         * arbitrary waveform values to digital silence and back. */
+        if (b->fade_out) {
+            float gain = (float)--b->fade_out / VM_AUDIO_FADE;
+            x[0] = b->render_tail[0] * gain;
+            x[1] = b->render_tail[1] * gain;
         }
         if (left) left[i] = x[0];
         if (right) right[i] = x[1];
+        memcpy(b->render_last, x, sizeof x);
     }
-    if (!active) discard(&b->playback);
     b->rendered += n;
 }
 void vm_audio_microphone(vm_audio_buffer_t *b, const float *left, const float *right,

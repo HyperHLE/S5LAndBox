@@ -111,6 +111,13 @@ typedef struct {
     bool     pressed;   /* what the guest should end up reporting */
 } vm_button_event_t;
 
+/* Lifecycle reconciliation: preserve the two-position slider, release only
+ * momentary keys. A returned event still needs normal guest IRQ backpressure. */
+bool vm_button_ringer_reconcile(const s5l_buttons_t *buttons, bool silent,
+                                vm_button_event_t *event);
+bool vm_button_checkpoint_release(const s5l_buttons_t *buttons, bool silent,
+                                  vm_button_event_t *event);
+
 /* Display sleep need not reach PMU hibernation (e.g. with USB services active).
  * Both need the bounded Home wake pulse; a shut-down board must not be woken. */
 bool vm_button_home_wake_hold_needed(const vm_button_event_t *event,

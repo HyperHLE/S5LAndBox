@@ -101,6 +101,24 @@ foreach(required "const VMRuntimeSection sections[] = { VMRuntimeSectionApps, VM
     endif()
 endforeach()
 file(READ "${APP_DIR}/Sources/VMDeviceControlsViewController.m" controls)
+# Portable button tests exercise the policy; these guards only ensure the app
+# actually uses it. They do not replace UIKit or native persistence tests.
+foreach(required "ringerSilentForInstanceID:_instanceID"
+        "setRingerSilent:pressed forInstanceID:_instanceID"
+        "vm_button_ringer_reconcile(&_machine.buttons,"
+        "vm_button_checkpoint_release(&_machine.buttons,")
+    string(FIND "${engine}" "${required}" found)
+    if(found EQUAL -1)
+        message(FATAL_ERROR "Machine ringer persistence lost lifecycle integration: ${required}")
+    endif()
+endforeach()
+foreach(required "!_silent.isTracking && (!_hasSilentValue || silent != _lastSilentValue)"
+        "if (_silent.on != accepted) _silent.on = accepted;")
+    string(FIND "${controls}" "${required}" found)
+    if(found EQUAL -1)
+        message(FATAL_ERROR "Silent switch must preserve gestures and handle refused changes: ${required}")
+    endif()
+endforeach()
 string(FIND "${controls}" "setRuntimePaused:" controls_pause)
 if(controls_pause EQUAL -1)
     message(FATAL_ERROR "Controls must retain Pause/Resume")

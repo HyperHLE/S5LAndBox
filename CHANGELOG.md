@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Remember the silent switch separately for each machine, including restart
+  and saved-session resume. Saving releases held keys without clearing silent mode.
+- Buffer uneven audio delivery before playback and smooth playback starvation
+  and recovery, reducing discontinuities without changing guest clocks or pitch.
 - Optional Home-only interface in Advanced, with margin-tap and VoiceOver access
   to the hidden controls. Modern remains the default; Legacy remains available.
 - Apply the bounded Home wake pulse when the guest display is asleep, even if

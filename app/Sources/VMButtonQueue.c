@@ -32,6 +32,29 @@ void vm_button_queue_reset(vm_button_queue_t *q) {
     memset(q, 0, sizeof *q);
 }
 
+bool vm_button_ringer_reconcile(const s5l_buttons_t *buttons, bool silent,
+                                vm_button_event_t *event) {
+    if (!buttons || !event) return false;
+    bool pressed = silent ? S5L_BUTTONS_RINGER_MUTED : !S5L_BUTTONS_RINGER_MUTED;
+    if (s5l_buttons_held(buttons, S5L_BUTTON_RINGERAB) == pressed) return false;
+    *event = (vm_button_event_t){ S5L_BUTTON_RINGERAB, pressed };
+    return true;
+}
+
+bool vm_button_checkpoint_release(const s5l_buttons_t *buttons, bool silent,
+                                  vm_button_event_t *event) {
+    if (!buttons || !event) return false;
+    static const unsigned momentary[] = {
+        S5L_BUTTON_MENU, S5L_BUTTON_VOLUP, S5L_BUTTON_VOLDOWN, S5L_BUTTON_HOLD
+    };
+    for (unsigned i = 0; i < sizeof momentary / sizeof momentary[0]; i++) {
+        if (!s5l_buttons_held(buttons, momentary[i])) continue;
+        *event = (vm_button_event_t){ (uint8_t)momentary[i], false };
+        return true;
+    }
+    return vm_button_ringer_reconcile(buttons, silent, event);
+}
+
 unsigned vm_button_queue_cancel_pending(vm_button_queue_t *q) {
     if (!q) return 0u;
     unsigned cancelled = q->count;

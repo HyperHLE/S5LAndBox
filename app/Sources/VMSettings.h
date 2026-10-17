@@ -69,6 +69,11 @@ typedef NS_ENUM(NSInteger, VMGraphicsMode) {
 
 @interface VMSettings : NSObject
 
+/* Physical switch position belongs to a machine, not an app-wide default.
+ * Missing/invalid choices mean ring. Resetting app defaults leaves it alone. */
+- (BOOL)ringerSilentForInstanceID:(NSString *)identifier;
+- (void)setRingerSilent:(BOOL)silent forInstanceID:(NSString *)identifier;
+
 + (instancetype)sharedSettings;
 
 /* App-wide presentation only; NO (Modern) by default. */
