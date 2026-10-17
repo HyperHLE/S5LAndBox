@@ -14,6 +14,8 @@ typedef void (^VMPackageSetupProgress)(NSString *stage, double fraction);
 // Cydia finish priority: 0 return, 1 reopen, 2 restart, 3 reload, 4 reboot.
 @property (atomic, readonly) NSUInteger finishAction;
 @property (atomic, readonly) BOOL finishReady;
+// The helper is reachable but its first-boot finalizer is not done yet.
+@property (atomic, readonly) BOOL setupPending;
 @property (nonatomic) BOOL respringAfterChanges;
 // Worker only. No raw guest disk access in any live operation.
 - (NSData *)status:(NSError **)error;

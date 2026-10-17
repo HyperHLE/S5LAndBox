@@ -92,12 +92,18 @@ def main():
                 assert sock.recv(1) == b""
             checks += 1
             # A free dpkg lock does not mean the first-boot finalizer is done.
-            # Reads still work; installation/removal must wait for its durable
-            # completion marker, not a partial marker or directory.
+            # Even status must wait for its durable completion marker, so the
+            # UI cannot offer plans that the executor will refuse. A partial
+            # marker or directory is not completion.
             (root / "install-script").touch()
             (root / "setup-complete.partial").touch()
             (root / "setup-complete").mkdir()
-            assert finish_status() == b"\x00\x00"
+            for modern in (False, True):
+                with connect(b"S", modern=modern) as sock:
+                    kind, data = frame(sock)
+                    assert kind == b"E" and b"setup is still finishing" in data
+                checks += 1
+            assert (root / "status").read_bytes() == status
             for op in (b"I", b"R"):
                 with connect(op, modern=True) as sock:
                     sock.sendall(hashlib.sha256(status).digest() + b"\x00")
@@ -107,6 +113,7 @@ def main():
             assert not list(root.glob("transaction-*"))
             (root / "setup-complete").rmdir()
             (root / "setup-complete").touch()
+            assert finish_status() == b"\x00\x00"
             checks += 5
             with connect(b"I") as sock:
                 sock.sendall(b"x" * 32)
@@ -174,9 +181,9 @@ eval "printf 'finish:reboot\\nfinish:restart\\n' >&$fd"
             checks += 3
             (root / "setup-complete").unlink()
             assert b"setup is still finishing" in apply(3)[0][1]
-            assert finish_status() == b"\x03\x01"
             assert not (root / "finish-calls").exists()
             (root / "setup-complete").touch()
+            assert finish_status() == b"\x03\x01"
             checks += 3
             with (root / "lock").open("r+") as lock:
                 fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

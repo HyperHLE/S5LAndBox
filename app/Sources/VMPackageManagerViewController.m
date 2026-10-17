@@ -262,7 +262,7 @@ static UIImage *Tile(NSString *symbol) {
     }
     _connecting=YES; _bridge.canceled=NO;
     NSUInteger generation=++_connectionGeneration;
-    _message=_finishingSetup ? @"First-boot setup is running. The guest will respring automatically."
+    _message=_finishingSetup ? @"Finishing jailbreak setup. This can take several minutes."
         : @"Wake and unlock iPhone OS to connect.";
     [self renderAll];
     dispatch_async(_queue,^{
@@ -280,6 +280,12 @@ static UIImage *Tile(NSString *symbol) {
             } else {
                 self->_status=nil;
                 self->_lastConnectionError=error;
+                if (self->_bridge.setupPending) {
+                    if (!self->_finishingSetup)
+                        self->_connectionDeadline=NSProcessInfo.processInfo.systemUptime+600;
+                    self->_finishingSetup=YES;
+                    self->_message=@"Finishing jailbreak setup. This can take several minutes.";
+                }
                 [self renderAll];
                 [self scheduleGuestConnection];
             }

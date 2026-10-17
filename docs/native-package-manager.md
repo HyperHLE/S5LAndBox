@@ -23,9 +23,10 @@ After preparation, Packages remembers that this machine has not yet connected
 to its helper. Opening Packages manually gets the same first-start wait as the
 explicit setup flow, even after closing the screen or relaunching S5LBox. The
 hint clears only when Packages receives and accepts a live installed-package
-list; it is separate from the stopped-disk transaction marker and does not
-claim that every Cydia startup job has completed. A startup connection timeout
-offers **Try Again** and **Show iPhone OS**, retains the connection error, and
+list; it is separate from the stopped-disk transaction marker. The current
+helper withholds that list until its first-boot finalizer finishes, so Packages
+does not offer installations that setup will reject. Older helpers may expose
+the list earlier. A startup connection timeout offers **Try Again**, retains the connection error, and
 does not suggest reinstalling an already-prepared helper.
 
 Failed USB enumeration or mux handshakes reconnect the virtual cable automatically, with
@@ -320,9 +321,9 @@ reboot. The host app never runs host restart commands. A reboot acknowledgment
 means requested, not proven boot completion. Synthetic builds substitute a
 fixture executable and cannot run these real commands.
 
-Existing v1/v2/v3 setups require App Settings > Set up package manager again. Setup
-stages a new immutable `service-finish-v4` executable and rewrites only an exact
-recognized v1/v2/v3 launch job in the existing crash-safe image transaction. It does
+Existing v1/v2/v3/v4 setups require App Settings > Advanced > Set up package manager again. Setup
+stages a new immutable `service-finish-v5` executable and rewrites only an exact
+recognized v1/v2/v3/v4 launch job in the existing crash-safe image transaction. It does
 not overwrite an unknown helper, resize its fork, or edit a running disk. The
 old approximately 50 KiB executable generations are retained but no longer
 launched. The capability is kept.
@@ -332,11 +333,22 @@ packages. This records the guest's actual firmware version and GraphicsServices
 capabilities in dpkg, so native dependency resolution need not wait for Cydia's
 first launch. A durable `packages-configured` checkpoint avoids repeating that
 database rewrite when only icon publication or cache preparation needs a retry.
-The v4 helper still permits status reads during setup, but refuses installation,
-removal and finish actions until the first-boot completion marker exists.
+The v5 helper waits for the first-boot completion marker before exposing status
+or accepting installation, removal and finish actions. Setup-in-progress replies
+keep the automatic connection wait active; they are not treated as a ready
+database or a reason to reinstall the helper.
 An app update alone does not rewrite an already-completed guest's first-boot
 script. If an older guest has no `firmware` record, let its setup finish, open
 Cydia once, then refresh Installed in Packages.
+
+Physical validation on 2026-10-17, iPhone 6s Plus / iOS 15.8.5, disposable
+`Bootstrap test`, build `ab99d1e` (v4 helper): without opening Cydia or manually
+rebooting, Packages saw the generated `firmware` 3.1.3 record. An early AppSync
+attempt was correctly refused while first-boot APT caches were still being
+prepared. After the guest log recorded completion, AppSync for OS 3.1 1.0.2
+installed successfully through virtual USB. The v5 readiness change addresses
+the premature install affordance observed in that test; its physical validation
+is separate from this v4 result.
 
 ARMv6 cross-compilation passes. At `4e3d2fb`, 60 host planning checks, 48
 synthetic executor checks, 41 USB checks, the iOS 13 availability gate and the

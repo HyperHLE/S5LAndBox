@@ -17,9 +17,64 @@ static NSURL *testDirectory;
 
 static unsigned checks, failures;
 #define CHECK(x) do { checks++; if (!(x)) { failures++; fprintf(stderr,"line %d: %s\n",__LINE__,#x); } } while (0)
+
+// Exercise status framing without a device, sockets or a mutable guest disk.
+@interface PackageStatusFixture : VMUSBService
+@property(nonatomic, strong) NSMutableData *bytes;
+@end
+@implementation PackageStatusFixture
+- (NSData *)readCount:(NSUInteger)count error:(NSError **)error {
+    if (count > self.bytes.length) {
+        if (error) *error=VMPackageError(@"Short fixture response.");
+        return nil;
+    }
+    NSData *part=[self.bytes subdataWithRange:NSMakeRange(0,count)];
+    [self.bytes replaceBytesInRange:NSMakeRange(0,count) withBytes:NULL length:0];
+    return part;
+}
+- (void)close {}
+@end
+@interface PackageStatusBridge : VMPackageBridge
+@property(nonatomic, strong) PackageStatusFixture *fixture;
+@end
+@implementation PackageStatusBridge
+- (VMUSBService *)connect:(char)operation error:(NSError **)error {
+    (void)error; CHECK(operation=='S'); return self.fixture;
+}
+@end
+static void StatusFrame(PackageStatusFixture *fixture, char kind, NSData *data) {
+    uint32_t size=htonl((uint32_t)data.length+1);
+    [fixture.bytes appendBytes:&size length:4];
+    [fixture.bytes appendBytes:&kind length:1];
+    [fixture.bytes appendData:data];
+}
+static void TestFirstBootReadiness(void) {
+    PackageStatusBridge *bridge=[PackageStatusBridge new];
+    bridge.fixture=[PackageStatusFixture new];
+    bridge.fixture.bytes=[NSMutableData data];
+    NSString *pending=@"Jailbreak setup is still finishing. Wait for it to complete, then refresh Packages and retry.";
+    StatusFrame(bridge.fixture,'E',[pending dataUsingEncoding:NSUTF8StringEncoding]);
+    NSError *error=nil;
+    CHECK([bridge status:&error]==nil && bridge.setupPending);
+    CHECK([error.localizedDescription isEqual:pending]);
+    CHECK(!bridge.finishReady && bridge.finishAction==0);
+
+    NSData *status=[@"Package: fixture\nStatus: install ok installed\n\n" dataUsingEncoding:NSUTF8StringEncoding];
+    const unsigned char finish[2]={0,1};
+    StatusFrame(bridge.fixture,'F',[NSData dataWithBytes:finish length:2]);
+    StatusFrame(bridge.fixture,'S',status);
+    error=nil;
+    CHECK([[bridge status:&error] isEqual:status] && error==nil);
+    CHECK(!bridge.setupPending && bridge.finishReady);
+
+    StatusFrame(bridge.fixture,'E',[@"Database unavailable." dataUsingEncoding:NSUTF8StringEncoding]);
+    CHECK([bridge status:&error]==nil && !bridge.setupPending);
+    CHECK([error.localizedDescription containsString:@"Cannot connect to iPhone OS."]);
+}
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         if (argc != 2) return 2;
+        TestFirstBootReadiness();
         testDirectory = [NSURL fileURLWithPath:[NSString stringWithUTF8String:argv[1]] isDirectory:YES];
         method_exchangeImplementations(class_getInstanceMethod(NSFileManager.class,@selector(URLsForDirectory:inDomains:)),
             class_getInstanceMethod(NSFileManager.class,@selector(packageTestURLs:inDomains:)));
