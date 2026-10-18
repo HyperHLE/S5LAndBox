@@ -115,8 +115,9 @@ static BOOL FileSize(NSString *text, uint64_t *size) {
     if (![VMUSBAFC validFilename:source.lastPathComponent]) { if (error) *error = FilesError(@"Choose a file with a valid name."); return NO; }
     BOOL scope = [source startAccessingSecurityScopedResource];
     __block BOOL success = NO; __block NSError *failure = nil;
+    NSError *coordinationError = nil;
     NSFileCoordinator *coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
-    [coordinator coordinateReadingItemAtURL:source options:0 error:&failure byAccessor:^(NSURL *url) {
+    [coordinator coordinateReadingItemAtURL:source options:0 error:&coordinationError byAccessor:^(NSURL *url) {
         int fd = url.isFileURL ? open(url.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_CLOEXEC) : -1;
         struct stat initial;
         if (fd < 0 || fstat(fd, &initial) || !S_ISREG(initial.st_mode) || initial.st_size < 0 || initial.st_size > 512ll * 1024 * 1024) {
@@ -149,7 +150,7 @@ static BOOL FileSize(NSString *text, uint64_t *size) {
         close(fd);
     }];
     if (scope) [source stopAccessingSecurityScopedResource];
-    if (!success && error) *error = failure ?: FilesError(@"The file could not be imported."); return success;
+    if (!success && error) *error = failure ?: coordinationError ?: FilesError(@"The file could not be imported."); return success;
 }
 - (BOOL)createDirectory:(NSString *)path error:(NSError **)error {
     return [[self withFiles:^id(VMUSBAFC *afc, NSError **failure) {
