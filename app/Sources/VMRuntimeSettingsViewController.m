@@ -5,6 +5,7 @@
 #import "VMIPALibraryViewController.h"
 #import "VMIPAInstallViewController.h"
 #import "VMPackageManagerViewController.h"
+#import "VMGuestFilesViewController.h"
 
 typedef NS_ENUM(NSInteger, VMRuntimeSection) {
     VMRuntimeSectionSession,
@@ -102,7 +103,7 @@ typedef NS_ENUM(NSInteger, VMRuntimeSection) {
     (void)tableView;
     switch ([self sectionAt:section]) {
         case VMRuntimeSectionSession: return 2;
-        case VMRuntimeSectionApps: return 2;
+        case VMRuntimeSectionApps: return 3;
         case VMRuntimeSectionSnapshots: return 1;
         case VMRuntimeSectionPower: return 4;
         case VMRuntimeSectionAdvanced: return 1;
@@ -188,7 +189,7 @@ typedef NS_ENUM(NSInteger, VMRuntimeSection) {
     }
     BOOL enabled = owner != nil;
     if (section == VMRuntimeSectionApps) {
-        cell.textLabel.text = path.row == 0 ? @"Install IPA" : @"Packages";
+        cell.textLabel.text = path.row == 0 ? @"Install IPA" : path.row == 1 ? @"Packages" : @"Files";
         enabled = self.usbTransport && [owner runtimeCanControlGuest] && ![owner runtimePaused];
         // Explain an unavailable action, rather than repeat its label when it works.
         cell.detailTextLabel.text = [owner runtimePaused] ? @"Resume the guest first."
@@ -199,6 +200,7 @@ typedef NS_ENUM(NSInteger, VMRuntimeSection) {
         if (path.row == 1) {
             cell.accessibilityIdentifier = @"s5lbox.machine-settings.packages";
         }
+        if (path.row == 2) cell.accessibilityIdentifier = @"s5lbox.machine-settings.files";
     } else if (section == VMRuntimeSectionSnapshots) {
         cell.textLabel.text = @"Snapshots";
         enabled = enabled && self.snapshotsDirectory.length > 0;
@@ -285,6 +287,10 @@ typedef NS_ENUM(NSInteger, VMRuntimeSection) {
         [self.navigationController pushViewController:advanced animated:YES];
     } else if (section == VMRuntimeSectionApps) {
         if (!self.usbTransport || ![self.runtimeDelegate runtimeCanControlGuest] || [self.runtimeDelegate runtimePaused]) return;
+        if (path.row == 2) {
+            VMGuestFilesViewController *files = [[VMGuestFilesViewController alloc] initWithTransport:self.usbTransport instanceID:self.instanceID];
+            [self.navigationController pushViewController:files animated:YES]; return;
+        }
         if (path.row == 1) {
             id<VMRuntimeSettingsDelegate> owner = self.runtimeDelegate;
             UIViewController *presenter = self.navigationController.presentingViewController;

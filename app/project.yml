@@ -102,6 +102,7 @@ targets:
       - sdk: Foundation.framework
       - sdk: Security.framework
       - sdk: UIKit.framework
+      - sdk: QuickLook.framework
       - sdk: CoreGraphics.framework
       - sdk: ImageIO.framework
       - sdk: QuartzCore.framework

@@ -5,6 +5,7 @@
 #import "VMUSBTransport.h"
 #import "VMUSBPairing.h"
 #import "VMUSBAFC.h"
+#include "VMGuestFilesService.h"
 #import "VMUSBLockdown.h"
 #import <dispatch/dispatch.h>
 #include <math.h>
@@ -275,6 +276,55 @@ static void testAFC(void) {
     reply(service, 1, 1, 0); ((uint8_t *)service.input.mutableBytes)[0] = 'X';
     CHECK(![afc makeStagingDirectory:&error]);
 }
+static void dataReply(FixtureService *s, uint64_t sequence, const void *bytes, NSUInteger size) {
+    uint8_t header[40] = {'C','F','A','6','L','P','A','A'};
+    put64(header + 8, 40 + size); put64(header + 16, 40); put64(header + 24, sequence); put64(header + 32, 2);
+    [s.input appendBytes:header length:40]; [s.input appendBytes:bytes length:size];
+}
+static void testBrowserAFC(void) {
+    NSData *jobData = [NSData dataWithBytes:VM_GUEST_FILES_PLIST length:sizeof VM_GUEST_FILES_PLIST - 1];
+    NSDictionary *job = [NSPropertyListSerialization propertyListWithData:jobData options:0 format:NULL error:NULL];
+    CHECK([job[@"ProgramArguments"] isEqual:@[@"/usr/libexec/afcd", @"--launchd", @"-d", @"/"]]);
+    CHECK([job[@"Sockets"][@"Listeners"][@"SockNodeName"] isEqual:@"127.0.0.1"]);
+    CHECK([job[@"Sockets"][@"Listeners"][@"SockServiceName"] integerValue] == VM_GUEST_FILES_PORT);
+    FixtureService *service = [FixtureService new]; NSError *error = nil;
+    VMUSBAFC *installer = [[VMUSBAFC alloc] initWithService:service];
+    CHECK(![installer contentsOfDirectory:@"/" error:&error]);
+    CHECK(![installer openBrowserPath:@"/file" writing:YES error:&error]);
+    CHECK(!service.output.length);
+    VMUSBAFC *afc = [[VMUSBAFC alloc] initForFileBrowserWithService:service];
+    const char names[] = ".\0..\0Documents\0hello.txt\0";
+    dataReply(service, 1, names, sizeof names - 1);
+    CHECK([[afc contentsOfDirectory:@"/" error:&error] isEqual:@[@"Documents", @"hello.txt"]]);
+    CHECK(get64((const uint8_t *)service.output.bytes + 32) == 3);
+    // Keep numeric text separate from the NUL escape (octal escapes consume digits).
+    const char validInfo[] = "st_ifmt\0S_IFREG\0st_size\0" "123\0";
+    dataReply(service, 2, validInfo, sizeof validInfo - 1);
+    CHECK([[afc attributesOfPath:@"/hello.txt" error:&error][@"st_size"] isEqual:@"123"]);
+    reply(service, 3, 14, 9); CHECK([afc openBrowserPath:@"/hello.txt" writing:NO error:&error] == 9);
+    dataReply(service, 4, "abc", 3); CHECK([[afc readHandle:9 count:3 error:&error] isEqual:[NSData dataWithBytes:"abc" length:3]]);
+    reply(service, 5, 1, 0); CHECK([afc closeHandle:9 error:&error]);
+    reply(service, 6, 1, 0); CHECK([afc createDirectory:@"/new" error:&error]);
+    reply(service, 7, 1, 0); CHECK([afc renameBrowserPath:@"/hello.txt" toPath:@"/new/name.txt" error:&error]);
+    reply(service, 8, 1, 0); CHECK([afc removeBrowserPath:@"/new/name.txt" error:&error]);
+    NSUInteger before = service.output.length;
+    CHECK(![afc removeBrowserPath:@"/" error:&error]);
+    CHECK(![afc createDirectory:@"/../new" error:&error]);
+    CHECK(![afc openBrowserPath:@"/a//b" writing:YES error:&error]);
+    CHECK(![afc renameBrowserPath:@"/good" toPath:@"/" error:&error]);
+    CHECK(![afc readHandle:9 count:65537 error:&error]);
+    CHECK(service.output.length == before);
+    CHECK(![VMUSBAFC validFilename:@".."] && ![VMUSBAFC validFilename:@"a/b"] && ![VMUSBAFC validFilename:@"x\ny"]);
+    CHECK([VMUSBAFC validFilename:@"A normal file.txt"]);
+    dataReply(service, 9, "not-terminated", 14); CHECK(![afc contentsOfDirectory:@"/" error:&error]);
+    const char duplicate[] = "file\0file\0";
+    dataReply(service, 10, duplicate, sizeof duplicate - 1); CHECK(![afc contentsOfDirectory:@"/" error:&error]);
+    const char traversal[] = "../outside\0";
+    dataReply(service, 11, traversal, sizeof traversal - 1); CHECK(![afc contentsOfDirectory:@"/" error:&error]);
+    dataReply(service, 12, "abc", 3); CHECK(![afc readHandle:9 count:2 error:&error]);
+    const char odd[] = "st_ifmt\0";
+    dataReply(service, 13, odd, sizeof odd - 1); CHECK(![afc attributesOfPath:@"/file" error:&error]);
+}
 static void testService(void) {
     int fds[2]; CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
     CHECK(fcntl(fds[0], F_SETFL, O_NONBLOCK) == 0);
@@ -364,7 +414,7 @@ static void testPairing(NSURL *folder) {
 int main(int argc, char **argv) {
     @autoreleasepool {
         if (argc != 2) return 2;
-        testAFC(); testService(); testClock(); testTimeZone();
+        testAFC(); testBrowserAFC(); testService(); testClock(); testTimeZone();
         testPairing([NSURL fileURLWithPath:[NSString stringWithUTF8String:argv[1]] isDirectory:YES]);
         printf("Native USB services: %u checks, %u failures\n", checks, failures);
         return failures ? 1 : 0;

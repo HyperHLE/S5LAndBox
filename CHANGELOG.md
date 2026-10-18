@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Add a native live guest file manager in Machine Settings, with Media access,
+  jailbreak-provisioned full filesystem access, preview/export, import, folder
+  creation, rename, and confirmed nonrecursive deletion over virtual USB.
 - Choose archived app versions from the Legacy Store detail page. Versions are
   filtered for the guest, and the exact selected copy is checked again before download.
 - Accept validated in-bundle file links in IPAs, including legacy CodeResources
