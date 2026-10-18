@@ -24,7 +24,13 @@ value passed into the browser so future boot profiles can supply their own
 model, OS, architectures and device family without changing the API client.
 This does not add or claim iOS 6 support.
 
-Legacy Store selects one qualifying archived version per app. S5LBox also
+Legacy Store initially selects one qualifying archived version per app. Tap
+**Version** on its detail page to choose another release. The bounded version
+list excludes known incompatible OS/device/architecture combinations, encrypted
+copies and incomplete download metadata. Selection checks up to eight archived
+copies against the exact guest profile and app/version identity before enabling
+download. An unavailable or incompatible copy is never substituted with a different
+version. S5LBox also
 checks the returned target, minimum OS, architectures, device family,
 installation status and incompatibility reasons. Entries lacking required
 size/checksum/compatibility information are omitted. Search returns at most

@@ -59,6 +59,83 @@ static UIImage *StoreIcon(NSData *data) {
     return result;
 }
 
+@interface VMLegacyStoreVersionsViewController : UITableViewController
+@property (nonatomic, strong) VMLegacyStoreApp *app;
+@property (nonatomic, copy) void (^choose)(VMLegacyStoreApp *app);
+@end
+@implementation VMLegacyStoreVersionsViewController {
+    VMLegacyStoreVersions *_catalog;
+    NSArray<VMLegacyStoreVersion *> *_versions;
+    NSString *_message;
+    NSInteger _checking;
+    BOOL _loading;
+}
+- (instancetype)init { return [super initWithStyle:UITableViewStyleInsetGrouped]; }
+- (void)viewDidLoad {
+    [super viewDidLoad]; self.title = @"Versions"; _checking = NSNotFound;
+    self.navigationItem.largeTitleDisplayMode = UINavigationItemLargeTitleDisplayModeNever;
+    self.tableView.rowHeight = UITableViewAutomaticDimension; self.tableView.estimatedRowHeight = 64;
+    _catalog = [[VMLegacyStoreVersions alloc] initWithConfiguration:NSURLSessionConfiguration.ephemeralSessionConfiguration];
+    self.refreshControl = [UIRefreshControl new];
+    [self.refreshControl addTarget:self action:@selector(reloadVersions) forControlEvents:UIControlEventValueChanged];
+    [self reloadVersions];
+}
+- (void)reloadVersions {
+    if (_loading || _checking != NSNotFound) { [self.refreshControl endRefreshing]; return; }
+    _loading = YES; _message = @"Loading versions…"; [self.tableView reloadData];
+    __weak VMLegacyStoreVersionsViewController *weakSelf = self;
+    [_catalog loadApp:self.app completion:^(NSArray *versions, NSError *error) {
+        VMLegacyStoreVersionsViewController *owner = weakSelf; if (!owner) return;
+        owner->_loading = NO; owner->_versions = versions;
+        owner->_message = error.localizedDescription ?: (versions.count ? @"" : @"No other compatible versions are available.");
+        [owner.refreshControl endRefreshing]; [owner.tableView reloadData];
+    }];
+}
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    (void)tableView; (void)section; return _versions.count ?: 1;
+}
+- (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+    (void)tableView; (void)section;
+    return _versions.count ? (_message.length ? _message : [NSString stringWithFormat:@"Filtered for iPhone OS %@. The selected copy is verified before download.", self.app.target.OSVersion]) : nil;
+}
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)path {
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:@"version"];
+    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:@"version"];
+    cell.textLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+    cell.detailTextLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+    cell.textLabel.adjustsFontForContentSizeCategory = cell.detailTextLabel.adjustsFontForContentSizeCategory = YES;
+    cell.textLabel.numberOfLines = cell.detailTextLabel.numberOfLines = 0;
+    cell.accessoryView = nil; cell.accessoryType = UITableViewCellAccessoryNone;
+    cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+    cell.textLabel.text = _message; cell.detailTextLabel.text = _loading ? nil : @"Tap to try again.";
+    if (_versions.count) {
+        VMLegacyStoreVersion *version = _versions[path.row];
+        cell.textLabel.text = version.version;
+        cell.detailTextLabel.text = [NSString stringWithFormat:@"Requires iPhone OS %@", version.minimumOS];
+        cell.accessoryType = [version.version isEqual:self.app.version] ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+    }
+    if (_loading || _checking == path.row) {
+        UIActivityIndicatorView *spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleMedium];
+        [spinner startAnimating]; cell.accessoryView = spinner;
+    }
+    return cell;
+}
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)path {
+    [tableView deselectRowAtIndexPath:path animated:YES];
+    if (_loading || _checking != NSNotFound) return;
+    if (!_versions.count) { [self reloadVersions]; return; }
+    _checking = path.row; _message = @"Checking compatibility…"; [tableView reloadData];
+    __weak VMLegacyStoreVersionsViewController *weakSelf = self;
+    [_catalog resolveVersion:_versions[path.row] app:self.app completion:^(VMLegacyStoreApp *app, NSError *error) {
+        VMLegacyStoreVersionsViewController *owner = weakSelf; if (!owner) return;
+        owner->_checking = NSNotFound;
+        if (app) { if (owner.choose) owner.choose(app); [owner.navigationController popViewControllerAnimated:YES]; }
+        else { owner->_message = error.localizedDescription; [owner.tableView reloadData]; }
+    }];
+}
+- (void)viewDidDisappear:(BOOL)animated { [super viewDidDisappear:animated]; [_catalog cancel]; }
+@end
+
 @interface VMLegacyStoreDetailViewController : UIViewController
 @property (nonatomic, strong) VMLegacyStoreApp *app;
 @property (nonatomic, strong) UIImage *artwork;
@@ -70,6 +147,8 @@ static UIImage *StoreIcon(NSData *data) {
     UIProgressView *_progress;
     UIActivityIndicatorView *_spinner;
     VMLegacyStoreRequest *_iconRequest;
+    UIButton *_version;
+    UILabel *_minimumOS, *_downloadSize;
 }
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -118,12 +197,21 @@ static UIImage *StoreIcon(NSData *data) {
     action.axis = UILayoutConstraintAxisVertical; action.spacing = 12; [stack addArrangedSubview:action];
     UIView *separator = [UIView new]; separator.backgroundColor = UIColor.separatorColor;
     [separator.heightAnchor constraintEqualToConstant:0.5].active = YES; [stack addArrangedSubview:separator];
-    for (NSArray *pair in @[@[@"Version", self.app.version], @[@"Requires iPhone OS", self.app.minimumOS],
+    _version = [UIButton buttonWithType:UIButtonTypeSystem];
+    _version.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+    _version.titleLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+    _version.titleLabel.adjustsFontForContentSizeCategory = YES; _version.titleLabel.numberOfLines = 0;
+    _version.contentEdgeInsets = UIEdgeInsetsMake(12, 0, 12, 0);
+    [_version addTarget:self action:@selector(chooseVersion) forControlEvents:UIControlEventTouchUpInside];
+    [_version.heightAnchor constraintGreaterThanOrEqualToConstant:44].active = YES;
+    [stack addArrangedSubview:_version];
+    for (NSArray *pair in @[@[@"Requires iPhone OS", self.app.minimumOS],
         @[@"Download size", [NSByteCountFormatter stringFromByteCount:(int64_t)self.app.size countStyle:NSByteCountFormatterCountStyleFile]]]) {
         UILabel *key = StoreLabel(UIFontTextStyleSubheadline, UIColor.secondaryLabelColor); key.text = pair[0];
         UILabel *value = StoreLabel(UIFontTextStyleBody, UIColor.labelColor); value.text = pair[1];
         UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[key, value]];
         row.axis = UILayoutConstraintAxisVertical; row.spacing = 4; [stack addArrangedSubview:row];
+        if (!_minimumOS) _minimumOS = value; else _downloadSize = value;
     }
     UILabel *note = StoreLabel(UIFontTextStyleFootnote, UIColor.secondaryLabelColor);
     note.text = [NSString stringWithFormat:@"Selected for iPhone OS %@. Some apps may not work in S5LBox. AppSync may be required to install.\n\nCatalog by Legacy Store. Files hosted on Internet Archive.", self.app.target.OSVersion];
@@ -152,6 +240,11 @@ static UIImage *StoreIcon(NSData *data) {
     BOOL ready = current && download.state == VMLegacyStoreDownloaded &&
         [NSFileManager.defaultManager fileExistsAtPath:download.libraryURL.path];
     _get.enabled = !download.busy;
+    _version.enabled = !download.busy;
+    [_version setTitle:[NSString stringWithFormat:@"Version %@  ›", self.app.version] forState:UIControlStateNormal];
+    _version.accessibilityLabel = [NSString stringWithFormat:@"Choose version. Selected %@", self.app.version];
+    _minimumOS.text = self.app.minimumOS;
+    _downloadSize.text = [NSByteCountFormatter stringFromByteCount:(int64_t)self.app.size countStyle:NSByteCountFormatterCountStyleFile];
     _get.backgroundColor = download.busy ? UIColor.tertiarySystemFillColor : UIColor.systemBlueColor;
     NSString *title = ready ? @"Install" : current && download.state == VMLegacyStoreDownloadFailed ? @"Retry download" : @"Get";
     if (download.busy) title = current ? (checking ? @"Checking app…" : @"Downloading…") : @"Another download is in progress";
@@ -164,6 +257,13 @@ static UIImage *StoreIcon(NSData *data) {
         ready ? @"Added to your IPA library" : current && download.state == VMLegacyStoreDownloadFailed ? download.error.localizedDescription :
         current && download.state == VMLegacyStoreDownloadCancelled ? @"Download cancelled" : @"";
     _status.hidden = !_status.text.length;
+}
+- (void)chooseVersion {
+    if (StoreDownload().busy) return;
+    VMLegacyStoreVersionsViewController *versions = [VMLegacyStoreVersionsViewController new]; versions.app = self.app;
+    __weak VMLegacyStoreDetailViewController *weakSelf = self;
+    versions.choose = ^(VMLegacyStoreApp *app) { weakSelf.app = app; [weakSelf updateDownload]; };
+    [self.navigationController pushViewController:versions animated:YES];
 }
 - (void)getTapped {
     VMLegacyStoreDownload *download = StoreDownload();

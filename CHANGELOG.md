@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Choose archived app versions from the Legacy Store detail page. Versions are
+  filtered for the guest, and the exact selected copy is checked again before download.
 - Accept validated in-bundle file links in IPAs, including legacy CodeResources
   links. Preserve links during guest installation; reject unsafe paths, missing
   targets, cycles and directory links.

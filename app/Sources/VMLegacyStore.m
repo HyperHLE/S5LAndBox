@@ -45,6 +45,14 @@ BOOL VMLegacyStoreAllowsURL(NSURL *URL, VMLegacyStoreRequestKind kind) {
     if (![host isEqual:@"legacystore.app"]) return NO;
     if (kind == VMLegacyStoreCatalogRequest) return [URL.path isEqual:@"/api/emulator/apps"];
     if (URL.query) return NO;
+    if (kind == VMLegacyStoreVersionsRequest) {
+        NSArray *parts = URL.path.pathComponents;
+        NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.-"];
+        return parts.count == 6 && [parts[1] isEqual:@"api"] && [parts[2] isEqual:@"v1"] &&
+            [parts[3] isEqual:@"apps"] && Text(parts[4], 200) &&
+            ![@[@".", @".."] containsObject:parts[4]] &&
+            [parts[4] rangeOfCharacterFromSet:allowed.invertedSet].location == NSNotFound && [parts[5] isEqual:@"versions"];
+    }
     if (kind == VMLegacyStoreIconRequest)
         return [URL.path hasPrefix:@"/icon/"] && Hex([URL.path substringFromIndex:6], 64);
     return [URL.path hasPrefix:@"/ipa/"] && Digits([URL.path substringFromIndex:5], 16);
@@ -74,6 +82,12 @@ BOOL VMLegacyStoreAllowsURL(NSURL *URL, VMLegacyStoreRequestKind kind) {
         [NSURLQueryItem queryItemWithName:@"limit" value:@"50"],
         [NSURLQueryItem queryItemWithName:@"q" value:trimmed]];
     return URL.URL;
+}
+- (NSURL *)catalogURLForCopy:(NSString *)identifier {
+    NSURLComponents *URL = [NSURLComponents componentsWithURL:[self catalogURLForQuery:@""] resolvingAgainstBaseURL:NO];
+    NSMutableArray *items = [URL.queryItems mutableCopy];
+    [items addObject:[NSURLQueryItem queryItemWithName:@"ipa_id" value:identifier]];
+    URL.queryItems = items; return URL.URL;
 }
 @end
 
@@ -128,6 +142,106 @@ BOOL VMLegacyStoreAllowsURL(NSURL *URL, VMLegacyStoreRequestKind kind) {
     }
     return apps;
 }
+@end
+
+@implementation VMLegacyStoreVersion
++ (NSArray<VMLegacyStoreVersion *> *)versionsFromData:(NSData *)data target:(VMLegacyStoreTarget *)target error:(NSError **)error {
+    id root = data.length && data.length <= 2u * 1024u * 1024u ? [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL] : nil;
+    id rows = [root isKindOfClass:NSDictionary.class] ? root[@"data"] : nil;
+    if (![rows isKindOfClass:NSArray.class] || [rows count] > 2000 ||
+        (root[@"next_url"] && root[@"next_url"] != NSNull.null)) {
+        if (error) *error = VMLegacyStoreError(@"The version list could not be read. Try again later."); return nil;
+    }
+    unsigned maximum = 0; Version(target.OSVersion, &maximum);
+    NSMutableArray *versions = [NSMutableArray array];
+    NSMutableDictionary *byVersion = [NSMutableDictionary dictionary];
+    for (id row in rows) {
+        if (![row isKindOfClass:NSDictionary.class] || !Text(row[@"version"], 80)) continue;
+        unsigned minimum = 0;
+        if (!Version(row[@"minimum_os_version"], &minimum) || minimum > maximum) continue;
+        id families = row[@"device_family"];
+        if (families != nil && families != NSNull.null && (![families isKindOfClass:NSArray.class] ||
+            ([families count] && ![families containsObject:@(target.family.integerValue)] && ![families containsObject:target.family]))) continue;
+        id copies = row[@"copies"];
+        if (![copies isKindOfClass:NSArray.class] || [copies count] > 256) continue;
+        NSMutableArray *ids = [NSMutableArray array];
+        VMLegacyStoreVersion *existing = byVersion[row[@"version"]];
+        if (existing) [ids addObjectsFromArray:existing.copyIdentifiers];
+        for (id copy in copies) {
+            if (![copy isKindOfClass:NSDictionary.class] || ![copy[@"install_status"] isEqual:@"installable"] ||
+                ![copy[@"architectures"] isKindOfClass:NSArray.class] || !Digits(copy[@"ipa_id"], 16) ||
+                [copy[@"ipa_id"] longLongValue] <= 0 || !Integer(copy[@"size"], 512ull * 1024 * 1024) || !Hex(copy[@"sha1"], 40) ||
+                ![copy[@"download_url"] isEqual:[@"https://legacystore.app/ipa/" stringByAppendingString:copy[@"ipa_id"]]]) continue;
+            BOOL architecture = NO;
+            for (NSString *arch in target.architectures) if ([copy[@"architectures"] containsObject:arch]) architecture = YES;
+            id deployment = copy[@"macho_min_os"];
+            if (!architecture || (deployment && deployment != NSNull.null && (!Version(deployment, &minimum) || minimum > maximum))) continue;
+            if (![ids containsObject:copy[@"ipa_id"]] && ids.count < 8) [ids addObject:copy[@"ipa_id"]];
+        }
+        if (!ids.count) continue;
+        VMLegacyStoreVersion *version = existing ?: [self new];
+        version->_version = [row[@"version"] copy]; version->_minimumOS = [row[@"minimum_os_version"] copy];
+        version->_copyIdentifiers = [ids copy];
+        if (!existing) { byVersion[version.version] = version; [versions addObject:version]; }
+    }
+    [versions sortUsingComparator:^NSComparisonResult(VMLegacyStoreVersion *a, VMLegacyStoreVersion *b) {
+        return [b.version compare:a.version options:NSNumericSearch];
+    }];
+    return versions;
+}
+@end
+
+@implementation VMLegacyStoreVersions {
+    NSURLSessionConfiguration *_configuration;
+    VMLegacyStoreRequest *_request;
+    NSUInteger _generation;
+}
+- (instancetype)initWithConfiguration:(NSURLSessionConfiguration *)configuration {
+    self = [super init]; if (self) _configuration = [configuration copy]; return self;
+}
+- (void)cancel { ++_generation; [_request cancel]; _request = nil; }
+- (void)loadApp:(VMLegacyStoreApp *)app completion:(void (^)(NSArray<VMLegacyStoreVersion *> *, NSError *))completion {
+    [self cancel]; NSUInteger generation = _generation;
+    NSURLComponents *URL = [NSURLComponents componentsWithString:@"https://legacystore.app"];
+    URL.path = [NSString stringWithFormat:@"/api/v1/apps/%@/versions", app.bundleIdentifier];
+    __weak VMLegacyStoreVersions *weakSelf = self;
+    _request = [[VMLegacyStoreRequest alloc] initWithURL:URL.URL kind:VMLegacyStoreVersionsRequest
+        configuration:_configuration destination:nil expectedSize:0 SHA1:nil progress:nil completion:^(NSData *data, NSError *error) {
+            VMLegacyStoreVersions *owner = weakSelf;
+            if (!owner || generation != owner->_generation) return;
+            owner->_request = nil;
+            NSArray *versions = error ? nil : [VMLegacyStoreVersion versionsFromData:data target:app.target error:&error];
+            completion(versions, error);
+        }];
+}
+- (void)resolveVersion:(VMLegacyStoreVersion *)version app:(VMLegacyStoreApp *)app
+    completion:(void (^)(VMLegacyStoreApp *, NSError *))completion {
+    [self cancel];
+    [self resolveCopy:0 version:version app:app generation:_generation completion:completion];
+}
+- (void)resolveCopy:(NSUInteger)index version:(VMLegacyStoreVersion *)version app:(VMLegacyStoreApp *)app
+    generation:(NSUInteger)generation completion:(void (^)(VMLegacyStoreApp *, NSError *))completion {
+    if (index >= version.copyIdentifiers.count) {
+        completion(nil, VMLegacyStoreError(@"No verified copy of this version is available for this guest.")); return;
+    }
+    NSString *identifier = version.copyIdentifiers[index];
+    __weak VMLegacyStoreVersions *weakSelf = self;
+    _request = [[VMLegacyStoreRequest alloc] initWithURL:[app.target catalogURLForCopy:identifier] kind:VMLegacyStoreCatalogRequest
+        configuration:_configuration destination:nil expectedSize:0 SHA1:nil progress:nil completion:^(NSData *data, NSError *error) {
+            VMLegacyStoreVersions *owner = weakSelf;
+            if (!owner || owner->_generation != generation) return;
+            owner->_request = nil;
+            if (error && error.code != 404) { completion(nil, error); return; }
+            NSArray *apps = error ? nil : [VMLegacyStoreApp appsFromData:data target:app.target error:&error];
+            for (VMLegacyStoreApp *candidate in apps) {
+                if ([candidate.identifier isEqual:identifier] && [candidate.bundleIdentifier isEqual:app.bundleIdentifier] &&
+                    [candidate.version isEqual:version.version]) { completion(candidate, nil); return; }
+            }
+            if (error && error.code != 404) { completion(nil, error); return; }
+            [owner resolveCopy:index + 1 version:version app:app generation:generation completion:completion];
+        }];
+}
+- (void)dealloc { [_request cancel]; }
 @end
 
 @interface VMLegacyStoreRequest () <NSURLSessionDataDelegate>

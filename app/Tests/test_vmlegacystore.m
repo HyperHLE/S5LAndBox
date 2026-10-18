@@ -23,6 +23,40 @@ static NSData *catalog(NSArray *rows, NSString *version) {
 static NSArray *parse(NSArray *rows) {
     return [VMLegacyStoreApp appsFromData:catalog(rows, @"3.1.3") target:VMLegacyStoreTarget.supportedGuest error:NULL];
 }
+static NSMutableDictionary *versionRow(void) {
+    return [@{@"version":@"1.0", @"minimum_os_version":@"3.0", @"device_family":@[@1],
+        @"copies":@[@{@"ipa_id":@"123", @"size":@(payload.length), @"sha1":payloadHash,
+            @"install_status":@"installable", @"architectures":@[@"armv6"], @"macho_min_os":@"3.0",
+            @"download_url":@"https://legacystore.app/ipa/123"}]} mutableCopy];
+}
+static NSArray *parseVersions(NSArray *rows) {
+    return [VMLegacyStoreVersion versionsFromData:json(@{@"data":rows, @"next_url":NSNull.null})
+        target:VMLegacyStoreTarget.supportedGuest error:NULL];
+}
+static void versionMetadataTests(void) {
+    assert(parseVersions(@[versionRow(), versionRow()]).count == 1);
+    assert([parseVersions(@[versionRow()]).firstObject copyIdentifiers].count == 1);
+    assert(VMLegacyStoreAllowsURL([NSURL URLWithString:@"https://legacystore.app/api/v1/apps/org.example.Sample/versions"], VMLegacyStoreVersionsRequest));
+    for (NSString *URL in @[@"https://legacystore.app/api/v1/apps/../versions", @"https://legacystore.app/api/v1/apps/id/versions?x=1",
+        @"https://evil.invalid/api/v1/apps/123/versions", @"https://legacystore.app/api/v1/copies/123"]) {
+        assert(!VMLegacyStoreAllowsURL([NSURL URLWithString:URL], VMLegacyStoreVersionsRequest));
+    }
+    for (NSDictionary *change in @[@{@"minimum_os_version":@"4.0"}, @{@"minimum_os_version":NSNull.null},
+        @{@"device_family":@[@2]}, @{@"device_family":@"1"}, @{@"copies":@{}}, @{@"version":NSNull.null}]) {
+        NSMutableDictionary *item = versionRow(); [item addEntriesFromDictionary:change]; assert(!parseVersions(@[item]).count);
+    }
+    for (NSDictionary *change in @[@{@"install_status":@"encrypted"}, @{@"architectures":@[@"armv7"]},
+        @{@"macho_min_os":@"4.0"}, @{@"ipa_id":@"../123"}, @{@"size":@YES}, @{@"sha1":@"bad"},
+        @{@"download_url":@"https://legacystore.app/ipa/124"}]) {
+        NSMutableDictionary *item = versionRow(), *copy = [item[@"copies"][0] mutableCopy];
+        [copy addEntriesFromDictionary:change]; item[@"copies"] = @[copy]; assert(!parseVersions(@[item]).count);
+    }
+    NSMutableDictionary *newer = versionRow(); newer[@"version"] = @"1.10";
+    NSMutableDictionary *older = versionRow(); older[@"version"] = @"1.2";
+    assert([[parseVersions(@[older,newer]).firstObject version] isEqual:@"1.10"]);
+    NSError *error = nil;
+    assert(![VMLegacyStoreVersion versionsFromData:json(@{@"data":@[], @"next_url":@"unexpected"}) target:VMLegacyStoreTarget.supportedGuest error:&error] && error);
+}
 static void metadataTests(void) {
     VMLegacyStoreTarget *target = VMLegacyStoreTarget.supportedGuest;
     NSURLComponents *URL = [NSURLComponents componentsWithURL:[target catalogURLForQuery:@"a&os=99"] resolvingAgainstBaseURL:NO];
@@ -79,6 +113,10 @@ static void metadataTests(void) {
     }
     BOOL info = [self.request.URL.path hasPrefix:@"/api/"];
     NSData *data = info ? catalog(@[row()], @"3.1.3") : payload;
+    if ([self.request.URL.path hasSuffix:@"/versions"]) data = json(@{@"data":@[versionRow()], @"next_url":NSNull.null});
+    if ([fixture isEqual:@"wrong-app"]) {
+        NSMutableDictionary *wrong = row(); wrong[@"bundle_id"] = @"org.example.Other"; data = catalog(@[wrong], @"3.1.3");
+    }
     if ([fixture isEqual:@"large-catalog"]) data = [NSMutableData dataWithLength:2 * 1024 * 1024 + 1];
     NSMutableDictionary *headers = [@{@"Content-Length":@(data.length).stringValue} mutableCopy];
     if ([fixture isEqual:@"unknown"] || [fixture isEqual:@"large-catalog"]) [headers removeObjectForKey:@"Content-Length"];
@@ -172,6 +210,27 @@ static void catalogTests(NSURLSessionConfiguration *configuration) {
     }];
     assert(failed); @synchronized(StoreProtocol.class) { assert(requests == before); }
 }
+static void versionRequestTests(NSURLSessionConfiguration *configuration) {
+    VMLegacyStoreVersions *client = [[VMLegacyStoreVersions alloc] initWithConfiguration:configuration];
+    VMLegacyStoreApp *app = parse(@[row()]).firstObject;
+    setMode(@"ok"); __block BOOL done = NO; __block VMLegacyStoreVersion *selected;
+    [client loadApp:app completion:^(NSArray *versions, NSError *error) {
+        assert(!error && versions.count == 1); selected = versions.firstObject; done = YES;
+    }];
+    pump(^BOOL { return done; }); done = NO;
+    [client resolveVersion:selected app:app completion:^(VMLegacyStoreApp *copy, NSError *error) {
+        assert(!error && [copy.identifier isEqual:@"123"]); done = YES;
+    }];
+    pump(^BOOL { return done; }); done = NO; setMode(@"wrong-app");
+    [client resolveVersion:selected app:app completion:^(VMLegacyStoreApp *copy, NSError *error) {
+        assert(!copy && error); done = YES;
+    }];
+    pump(^BOOL { return done; }); setMode(@"slow");
+    [client loadApp:app completion:^(NSArray *versions, NSError *error) { (void)versions; (void)error; assert(!"stale versions callback"); }];
+    [client cancel]; setMode(@"ok"); done = NO;
+    [client loadApp:app completion:^(NSArray *versions, NSError *error) { assert(versions.count && !error); done = YES; }];
+    pump(^BOOL { return done; });
+}
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
         assert(argc == 2);
@@ -180,13 +239,13 @@ int main(int argc, const char *argv[]) {
         NSMutableString *hex = [NSMutableString string];
         for (unsigned i = 0; i < sizeof digest; i++) [hex appendFormat:@"%02x", digest[i]];
         payloadHash = hex;
-        metadataTests();
+        metadataTests(); versionMetadataTests();
         NSURL *root = [[NSURL fileURLWithPath:[NSString stringWithUTF8String:argv[1]] isDirectory:YES]
             URLByAppendingPathComponent:NSUUID.UUID.UUIDString isDirectory:YES];
         assert([NSFileManager.defaultManager createDirectoryAtURL:root withIntermediateDirectories:YES attributes:nil error:NULL]);
         NSURLSessionConfiguration *config = NSURLSessionConfiguration.ephemeralSessionConfiguration;
         config.protocolClasses = @[StoreProtocol.class];
-        downloadTests(root, config); catalogTests(config);
+        downloadTests(root, config); catalogTests(config); versionRequestTests(config);
         assert([NSFileManager.defaultManager removeItemAtURL:root error:NULL]);
         puts("Legacy Store metadata, guest filtering, bounded transport, cancellation, cache and publication tests passed");
     }

@@ -14,6 +14,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable instancetype)initWithModel:(NSString *)model OSVersion:(NSString *)version
                         architectures:(NSArray<NSString *> *)architectures family:(NSString *)family;
 - (NSURL *)catalogURLForQuery:(NSString *)query;
+- (NSURL *)catalogURLForCopy:(NSString *)identifier;
 @end
 
 @interface VMLegacyStoreApp : NSObject
@@ -33,7 +34,8 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 typedef NS_ENUM(NSInteger, VMLegacyStoreRequestKind) {
-    VMLegacyStoreCatalogRequest, VMLegacyStoreIconRequest, VMLegacyStoreArchiveRequest
+    VMLegacyStoreCatalogRequest, VMLegacyStoreIconRequest, VMLegacyStoreArchiveRequest,
+    VMLegacyStoreVersionsRequest
 };
 FOUNDATION_EXPORT NSError *VMLegacyStoreError(NSString *message);
 FOUNDATION_EXPORT BOOL VMLegacyStoreAllowsURL(NSURL * _Nullable URL, VMLegacyStoreRequestKind kind);
@@ -53,6 +55,24 @@ FOUNDATION_EXPORT BOOL VMLegacyStoreAllowsURL(NSURL * _Nullable URL, VMLegacySto
 - (instancetype)initWithConfiguration:(NSURLSessionConfiguration *)configuration;
 - (void)search:(NSString *)query target:(VMLegacyStoreTarget *)target
     completion:(void (^)(NSArray<VMLegacyStoreApp *> *apps, BOOL cached, NSError * _Nullable error))completion;
+- (void)cancel;
+@end
+
+@interface VMLegacyStoreVersion : NSObject
+@property (nonatomic, copy, readonly) NSString *version;
+@property (nonatomic, copy, readonly) NSString *minimumOS;
+@property (nonatomic, copy, readonly) NSArray<NSString *> *copyIdentifiers;
++ (nullable NSArray<VMLegacyStoreVersion *> *)versionsFromData:(NSData *)data
+    target:(VMLegacyStoreTarget *)target error:(NSError **)error;
+@end
+
+// Enumerate candidates without downloading IPAs. Selecting one rechecks its
+// exact copy against the emulator endpoint and the original app identity.
+@interface VMLegacyStoreVersions : NSObject
+- (instancetype)initWithConfiguration:(NSURLSessionConfiguration *)configuration;
+- (void)loadApp:(VMLegacyStoreApp *)app completion:(void (^)(NSArray<VMLegacyStoreVersion *> * _Nullable versions, NSError * _Nullable error))completion;
+- (void)resolveVersion:(VMLegacyStoreVersion *)version app:(VMLegacyStoreApp *)app
+    completion:(void (^)(VMLegacyStoreApp * _Nullable selection, NSError * _Nullable error))completion;
 - (void)cancel;
 @end
 NS_ASSUME_NONNULL_END
