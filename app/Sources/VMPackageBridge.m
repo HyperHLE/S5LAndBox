@@ -4,6 +4,7 @@
 #import <Security/Security.h>
 #import <CommonCrypto/CommonDigest.h>
 #include "VMGuestInstall.h"
+#include "VMGuestFilesService.h"
 #include "VMSnapshotStore.h"
 #include "VMResumeCheckpoint.h"
 #include "rootfs_work.h"
@@ -250,9 +251,11 @@ static void AwaitFirstConnection(NSString *identifier) {
     // (or exact verification of a previously completed installation).
     if (!PackageSetupPending(identifier,YES,error)) return NO;
     NSData *token = Capability(identifier,YES,error); if (!token) return NO;
+    NSData *filesPlist = [NSData dataWithBytes:VM_GUEST_FILES_PLIST length:sizeof VM_GUEST_FILES_PLIST - 1u];
     NSArray *files = @[@[program,binary,@0755],@[[root stringByAppendingPathComponent:@"capability"],token,@0600],
+        @[@VM_GUEST_FILES_PLIST_PATH,filesPlist,@0644],
         @[@"/System/Library/LaunchDaemons/com.j0shua.s5lbox.packages-v1.plist",plist,@0644]];
-    rootfs_work_entry_t entries[4] = {0}; size_t count = 1;
+    rootfs_work_entry_t entries[5] = {0}; size_t count = 1;
     entries[0].kind=ROOTFS_WORK_ENTRY_DIRECTORY; entries[0].path=root.UTF8String;
     entries[0].permissions=0700; entries[0].existing_policy=ROOTFS_WORK_EXISTING_REUSE_DIRECTORY;
     for (NSArray *file in files) {

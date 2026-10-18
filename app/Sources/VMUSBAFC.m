@@ -30,9 +30,26 @@ static NSData *Path(NSString *path) {
 @implementation VMUSBAFC {
     VMUSBService *_service;
     uint64_t _sequence;
+    BOOL _browser;
 }
 - (instancetype)initWithService:(VMUSBService *)service {
     self = [super init]; if (self) _service = service; return self;
+}
+- (instancetype)initForFileBrowserWithService:(VMUSBService *)service {
+    self = [self initWithService:service]; if (self) _browser = YES; return self;
+}
++ (BOOL)validFilename:(NSString *)name {
+    NSData *bytes = [name dataUsingEncoding:NSUTF8StringEncoding];
+    return bytes.length > 0 && bytes.length <= 255 && ![name isEqual:@"."] && ![name isEqual:@".."] &&
+        [name rangeOfString:@"/"].location == NSNotFound &&
+        [name rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location == NSNotFound;
+}
+- (NSData *)browserPath:(NSString *)path mutable:(BOOL)mutating {
+    if (!_browser || ![path hasPrefix:@"/"] || (mutating && [path isEqual:@"/"])) return nil;
+    if (![path isEqual:@"/"]) for (NSString *component in [[path substringFromIndex:1] componentsSeparatedByString:@"/"])
+        if (![VMUSBAFC validFilename:component]) return nil;
+    NSData *bytes = [path dataUsingEncoding:NSUTF8StringEncoding]; if (!bytes || bytes.length > 1024) return nil;
+    NSMutableData *result = [bytes mutableCopy]; uint8_t zero = 0; [result appendBytes:&zero length:1]; return result;
 }
 - (NSData *)operation:(uint64_t)operation arguments:(NSData *)arguments payload:(NSData *)payload
                 reply:(uint64_t)expected allowExists:(BOOL)exists error:(NSError **)error {
@@ -63,10 +80,80 @@ static NSData *Path(NSString *path) {
             [NSString stringWithFormat:@"Guest file transfer failed (AFC %llu).", (unsigned long long)status]);
         return nil;
     }
-    if (code != expected || body.length != 8) {
+    if (code != expected || (expected != 2 && body.length != 8)) {
         if (error) *error = AFCError(-1, @"The guest returned an unexpected AFC response."); return nil;
     }
     return body;
+}
+- (NSArray<NSString *> *)strings:(NSData *)data error:(NSError **)error {
+    if (!data) return nil;
+    NSMutableArray *result = [NSMutableArray array]; const uint8_t *p = data.bytes; NSUInteger start = 0;
+    for (NSUInteger i = 0; i < data.length; i++) if (!p[i]) {
+        NSString *value = [[NSString alloc] initWithBytes:p + start length:i - start encoding:NSUTF8StringEncoding];
+        if (!value || result.count >= 8192) goto invalid;
+        [result addObject:value]; start = i + 1;
+    }
+    if (start != data.length) goto invalid;
+    return result;
+invalid:
+    if (error) *error = AFCError(-1, @"The guest returned malformed file information."); return nil;
+}
+- (NSArray<NSString *> *)contentsOfDirectory:(NSString *)path error:(NSError **)error {
+    NSArray *names = [self strings:[self operation:3 arguments:[self browserPath:path mutable:NO]
+        payload:nil reply:2 allowExists:NO error:error] error:error];
+    if (!names) return nil;
+    NSMutableOrderedSet *result = [NSMutableOrderedSet orderedSet];
+    for (NSString *name in names) {
+        if ([name isEqual:@"."] || [name isEqual:@".."] || !name.length) continue;
+        if (![VMUSBAFC validFilename:name] || [result containsObject:name] || result.count >= 4096) {
+            if (error) *error = AFCError(-1, @"The guest returned an invalid directory listing."); return nil;
+        }
+        [result addObject:name];
+    }
+    return result.array;
+}
+- (NSDictionary<NSString *, NSString *> *)attributesOfPath:(NSString *)path error:(NSError **)error {
+    NSArray *items = [self strings:[self operation:10 arguments:[self browserPath:path mutable:NO]
+        payload:nil reply:2 allowExists:NO error:error] error:error];
+    if (!items) return nil;
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
+    if (items.count % 2) goto invalid;
+    for (NSUInteger i = 0; i < items.count; i += 2) {
+        if (![items[i] length] || result[items[i]]) goto invalid;
+        result[items[i]] = items[i + 1];
+    }
+    if (![result[@"st_ifmt"] isKindOfClass:NSString.class]) goto invalid;
+    return result;
+invalid:
+    if (error) *error = AFCError(-1, @"The guest returned invalid file attributes."); return nil;
+}
+- (uint64_t)openBrowserPath:(NSString *)path writing:(BOOL)writing error:(NSError **)error {
+    NSData *name = [self browserPath:path mutable:writing];
+    if (!name) { if (error) *error = AFCError(-1, @"Invalid guest file path."); return 0; }
+    NSMutableData *args = [Word(writing ? 3 : 1) mutableCopy]; [args appendData:name];
+    NSData *result = [self operation:13 arguments:args payload:nil reply:14 allowExists:NO error:error];
+    uint64_t handle = result ? Get64(result.bytes) : 0;
+    if (result && !handle && error) *error = AFCError(-1, @"The guest returned an invalid file handle.");
+    return handle;
+}
+- (NSData *)readHandle:(uint64_t)handle count:(NSUInteger)count error:(NSError **)error {
+    NSMutableData *args = nil;
+    if (_browser && handle && count && count <= 65536) { args = [Word(handle) mutableCopy]; [args appendData:Word(count)]; }
+    NSData *data = [self operation:15 arguments:args payload:nil reply:2 allowExists:NO error:error];
+    if (data.length > count) { if (error) *error = AFCError(-1, @"The guest exceeded the requested read size."); return nil; }
+    return data;
+}
+- (BOOL)createDirectory:(NSString *)path error:(NSError **)error {
+    return [self operation:9 arguments:[self browserPath:path mutable:YES] payload:nil reply:1 allowExists:NO error:error] != nil;
+}
+- (BOOL)renameBrowserPath:(NSString *)path toPath:(NSString *)destination error:(NSError **)error {
+    NSData *from = [self browserPath:path mutable:YES], *to = [self browserPath:destination mutable:YES];
+    NSMutableData *args = nil;
+    if (from && to) { args = [from mutableCopy]; [args appendData:to]; }
+    return [self operation:24 arguments:args payload:nil reply:1 allowExists:NO error:error] != nil;
+}
+- (BOOL)removeBrowserPath:(NSString *)path error:(NSError **)error {
+    return [self operation:8 arguments:[self browserPath:path mutable:YES] payload:nil reply:1 allowExists:NO error:error] != nil;
 }
 - (BOOL)makeStagingDirectory:(NSError **)error {
     return [self operation:9 arguments:[NSData dataWithBytes:"PublicStaging" length:14]

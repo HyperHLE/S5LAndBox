@@ -154,6 +154,7 @@ jobs:
             -framework Foundation -framework Security -I app/Sources -I core/include \
             app/Sources/VMUSBService.m app/Sources/VMUSBPairing.m app/Sources/VMUSBAFC.m \
             app/Sources/VMUSBLockdown.m app/Sources/VMUSBClockSync.m app/Sources/VMUSBInstaller.m \
+            app/Sources/VMGuestFiles.m \
             app/Tests/test_vmusbservices.m -o work/usb-service-tests/test_vmusbservices
           work/usb-service-tests/test_vmusbservices "$GITHUB_WORKSPACE/work/usb-service-tests/pairing"
 

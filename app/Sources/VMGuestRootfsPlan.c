@@ -1,5 +1,6 @@
 /* See VMGuestRootfsPlan.h. Copyright (c) 2026 j0shua-SYSON. MIT licensed. */
 #include "VMGuestRootfsPlan.h"
+#include "VMGuestFilesService.h"
 
 #include "VMDebArchive.h"
 #include "payload_tar.h"
@@ -723,7 +724,10 @@ static bool plan_add_runtime_entries(
                            0644u, detail, detail_capacity))
             return false;
     }
-    return plan_add_file(plan, VM_GUEST_ROOTFS_BOOTSTRAP,
+    return plan_add_file(plan, VM_GUEST_FILES_PLIST_PATH,
+                         (const uint8_t *)VM_GUEST_FILES_PLIST, sizeof VM_GUEST_FILES_PLIST - 1u,
+                         0644u, detail, detail_capacity) &&
+           plan_add_file(plan, VM_GUEST_ROOTFS_BOOTSTRAP,
                          GUEST_BOOTSTRAP, sizeof GUEST_BOOTSTRAP, 0755u,
                          detail, detail_capacity) &&
            plan_add_file(plan, VM_GUEST_ROOTFS_INSTALL_SCRIPT,
