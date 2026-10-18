@@ -36,16 +36,18 @@ static BOOL FileSize(NSString *text, uint64_t *size) {
     if (NSThread.isMainThread || self.canceled) { if (error) *error = FilesError(@"File operation canceled."); return nil; }
     __weak VMGuestFiles *weakSelf = self;
     BOOL (^cancel)(void) = ^BOOL{ return !weakSelf || weakSelf.canceled; };
-    NSTimeInterval deadline = NSProcessInfo.processInfo.systemUptime + 120;
+    NSTimeInterval deadline = NSProcessInfo.processInfo.systemUptime + 20;
     if (_root) {
         VMUSBService *service = [[VMUSBService alloc] initWithTransport:_transport port:VM_GUEST_FILES_PORT
             canceled:cancel deadline:deadline error:error];
         if (!service && error && !self.canceled) *error = FilesError(@"Full filesystem access is unavailable. Start the guest fully and retry. For an older jailbreak, shut down the machine and run Jailbreak again to add Files support.");
+        [service setOperationDeadline:NSProcessInfo.processInfo.systemUptime + 900];
         return service;
     }
     VMUSBLockdown *lockdown = [VMUSBLockdown openWithTransport:_transport instanceID:_identifier
         canceled:cancel deadline:deadline error:error];
-    VMUSBService *service = [lockdown openService:@"com.apple.afc" error:error]; [lockdown close]; return service;
+    VMUSBService *service = [lockdown openService:@"com.apple.afc" error:error]; [lockdown close];
+    [service setOperationDeadline:NSProcessInfo.processInfo.systemUptime + 900]; return service;
 }
 - (id)withFiles:(id (^)(VMUSBAFC *, NSError **))operation error:(NSError **)error {
     VMUSBService *service = [self connect:error]; if (!service) return nil;

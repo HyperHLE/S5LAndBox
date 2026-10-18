@@ -12,6 +12,8 @@
                          canceled:(BOOL (^)(void))canceled deadline:(NSTimeInterval)deadline
                             error:(NSError **)error;
 @property (nonatomic, copy) BOOL (^canceled)(void);
+// Worker-thread only. Start a separately bounded transfer after a short connect.
+- (void)setOperationDeadline:(NSTimeInterval)deadline;
 - (BOOL)writeData:(NSData *)data error:(NSError **)error;
 - (NSData *)readCount:(NSUInteger)count error:(NSError **)error;
 - (BOOL)sendPlist:(NSDictionary *)plist error:(NSError **)error;
