@@ -58,6 +58,7 @@ static OSStatus ServiceWrite(SSLConnectionRef ref, const void *data, size_t *siz
     return self;
 }
 - (void)dealloc { [self close]; }
+- (void)setOperationDeadline:(NSTimeInterval)deadline { _operationDeadline = deadline; }
 - (void)close {
     if (_tls) { CFRelease(_tls); _tls = NULL; }
     if (_socketFD >= 0) { close(_socketFD); _socketFD = -1; }
