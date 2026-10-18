@@ -29,13 +29,13 @@ static NSMutableDictionary *versionRow(void) {
             @"install_status":@"installable", @"architectures":@[@"armv6"], @"macho_min_os":@"3.0",
             @"download_url":@"https://legacystore.app/ipa/123"}]} mutableCopy];
 }
-static NSArray *parseVersions(NSArray *rows) {
+static NSArray<VMLegacyStoreVersion *> *parseVersions(NSArray *rows) {
     return [VMLegacyStoreVersion versionsFromData:json(@{@"data":rows, @"next_url":NSNull.null})
         target:VMLegacyStoreTarget.supportedGuest error:NULL];
 }
 static void versionMetadataTests(void) {
     assert(parseVersions(@[versionRow(), versionRow()]).count == 1);
-    assert([parseVersions(@[versionRow()]).firstObject copyIdentifiers].count == 1);
+    assert(parseVersions(@[versionRow()]).firstObject.copyIdentifiers.count == 1);
     assert(VMLegacyStoreAllowsURL([NSURL URLWithString:@"https://legacystore.app/api/v1/apps/org.example.Sample/versions"], VMLegacyStoreVersionsRequest));
     for (NSString *URL in @[@"https://legacystore.app/api/v1/apps/../versions", @"https://legacystore.app/api/v1/apps/id/versions?x=1",
         @"https://evil.invalid/api/v1/apps/123/versions", @"https://legacystore.app/api/v1/copies/123"]) {

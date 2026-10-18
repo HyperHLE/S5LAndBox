@@ -61,7 +61,7 @@ FOUNDATION_EXPORT BOOL VMLegacyStoreAllowsURL(NSURL * _Nullable URL, VMLegacySto
 @interface VMLegacyStoreVersion : NSObject
 @property (nonatomic, copy, readonly) NSString *version;
 @property (nonatomic, copy, readonly) NSString *minimumOS;
-@property (nonatomic, copy, readonly) NSArray<NSString *> *copyIdentifiers;
+@property (nonatomic, copy, readonly, getter=archiveIdentifiers) NSArray<NSString *> *copyIdentifiers;
 + (nullable NSArray<VMLegacyStoreVersion *> *)versionsFromData:(NSData *)data
     target:(VMLegacyStoreTarget *)target error:(NSError **)error;
 @end
