@@ -144,6 +144,10 @@ def main():
                     if kind != b"L":
                         assert (kind, data) == (b"D", status)
                         break
+                # D reports dpkg's result; staging cleanup follows it. Wait
+                # for the server's close before inspecting its filesystem.
+                # Closing our end first races unlink/rmdir on a fast runner.
+                assert sock.recv(1) == b""
             assert len((root / "calls").read_text().splitlines()) == 2
             assert not list(root.glob("transaction-*"))
             checks += 3
