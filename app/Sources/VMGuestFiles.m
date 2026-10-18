@@ -35,7 +35,7 @@ static BOOL FileSize(NSString *text, uint64_t *size) {
 - (VMUSBService *)connect:(NSError **)error {
     if (NSThread.isMainThread || self.canceled) { if (error) *error = FilesError(@"File operation canceled."); return nil; }
     __weak VMGuestFiles *weakSelf = self;
-    BOOL (^cancel)(void) = ^{ return !weakSelf || weakSelf.canceled; };
+    BOOL (^cancel)(void) = ^BOOL{ return !weakSelf || weakSelf.canceled; };
     NSTimeInterval deadline = NSProcessInfo.processInfo.systemUptime + 120;
     if (_root) {
         VMUSBService *service = [[VMUSBService alloc] initWithTransport:_transport port:VM_GUEST_FILES_PORT

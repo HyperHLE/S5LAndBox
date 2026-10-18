@@ -6,6 +6,7 @@
 #import "VMUSBPairing.h"
 #import "VMUSBAFC.h"
 #include "VMGuestFilesService.h"
+#import "VMGuestFiles.h"
 #import "VMUSBLockdown.h"
 #import <dispatch/dispatch.h>
 #include <math.h>
@@ -284,7 +285,7 @@ static void dataReply(FixtureService *s, uint64_t sequence, const void *bytes, N
 static void testBrowserAFC(void) {
     NSData *jobData = [NSData dataWithBytes:VM_GUEST_FILES_PLIST length:sizeof VM_GUEST_FILES_PLIST - 1];
     NSDictionary *job = [NSPropertyListSerialization propertyListWithData:jobData options:0 format:NULL error:NULL];
-    CHECK([job[@"ProgramArguments"] isEqual:@[@"/usr/libexec/afcd", @"--launchd", @"-d", @"/"]]);
+    CHECK(([job[@"ProgramArguments"] isEqual:@[@"/usr/libexec/afcd", @"--launchd", @"-d", @"/"]]));
     CHECK([job[@"Sockets"][@"Listeners"][@"SockNodeName"] isEqual:@"127.0.0.1"]);
     CHECK([job[@"Sockets"][@"Listeners"][@"SockServiceName"] integerValue] == VM_GUEST_FILES_PORT);
     FixtureService *service = [FixtureService new]; NSError *error = nil;
@@ -295,7 +296,7 @@ static void testBrowserAFC(void) {
     VMUSBAFC *afc = [[VMUSBAFC alloc] initForFileBrowserWithService:service];
     const char names[] = ".\0..\0Documents\0hello.txt\0";
     dataReply(service, 1, names, sizeof names - 1);
-    CHECK([[afc contentsOfDirectory:@"/" error:&error] isEqual:@[@"Documents", @"hello.txt"]]);
+    CHECK(([[afc contentsOfDirectory:@"/" error:&error] isEqual:@[@"Documents", @"hello.txt"]]));
     CHECK(get64((const uint8_t *)service.output.bytes + 32) == 3);
     // Keep numeric text separate from the NUL escape (octal escapes consume digits).
     const char validInfo[] = "st_ifmt\0S_IFREG\0st_size\0" "123\0";
@@ -324,6 +325,46 @@ static void testBrowserAFC(void) {
     dataReply(service, 12, "abc", 3); CHECK(![afc readHandle:9 count:2 error:&error]);
     const char odd[] = "st_ifmt\0";
     dataReply(service, 13, odd, sizeof odd - 1); CHECK(![afc attributesOfPath:@"/file" error:&error]);
+}
+@interface FixtureFiles : VMGuestFiles
+@property (nonatomic, strong) FixtureService *fixture;
+@end
+@implementation FixtureFiles
+- (VMUSBService *)connect:(NSError **)error { (void)error; return self.fixture; }
+@end
+static void testGuestFiles(NSURL *base) {
+    FixtureFiles *files = [[FixtureFiles alloc] initWithTransport:nil instanceID:@"fixture" root:YES];
+    files.fixture = [FixtureService new]; NSError *error = nil;
+    const char info[] = "st_ifmt\0S_IFREG\0st_size\0" "3\0";
+    const char names[] = "hello.txt\0";
+    dataReply(files.fixture, 1, names, sizeof names - 1);
+    dataReply(files.fixture, 2, info, sizeof info - 1);
+    NSArray<VMGuestFile *> *listing = [files list:@"/" error:&error];
+    CHECK(listing.count == 1 && listing.firstObject.size == 3 && [listing.firstObject.path isEqual:@"/hello.txt"]);
+    NSURL *folder = [base URLByAppendingPathComponent:[@"files-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+    CHECK([NSFileManager.defaultManager createDirectoryAtURL:folder withIntermediateDirectories:YES attributes:nil error:&error]);
+    files.fixture = [FixtureService new];
+    dataReply(files.fixture, 1, info, sizeof info - 1);
+    reply(files.fixture, 2, 14, 12); dataReply(files.fixture, 3, "abc", 3); reply(files.fixture, 4, 1, 0);
+    NSURL *download = [files download:listing.firstObject intoDirectory:folder error:&error];
+    CHECK([[NSData dataWithContentsOfURL:download] isEqual:[NSData dataWithBytes:"abc" length:3]]);
+    files.fixture = [FixtureService new];
+    dataReply(files.fixture, 1, info, sizeof info - 1);
+    CHECK(![files upload:download directory:@"/" error:&error]); // never truncate an existing destination
+    CHECK([error.localizedDescription containsString:@"already exists"]);
+    files.fixture = [FixtureService new]; error = nil;
+    reply(files.fixture, 1, 1, 8); reply(files.fixture, 2, 1, 8); // final + unique temporary absent
+    reply(files.fixture, 3, 14, 13); reply(files.fixture, 4, 1, 0); reply(files.fixture, 5, 1, 0);
+    reply(files.fixture, 6, 1, 8); reply(files.fixture, 7, 1, 0); // recheck and publish
+    CHECK([files upload:download directory:@"/" error:&error]);
+    CHECK(files.fixture.input.length == 0);
+    files.fixture = [FixtureService new];
+    dataReply(files.fixture, 1, info, sizeof info - 1);
+    CHECK(![files rename:listing.firstObject name:@"taken.txt" error:&error]);
+    files.fixture = [FixtureService new]; reply(files.fixture, 1, 1, 0);
+    CHECK([files remove:listing.firstObject error:&error]);
+    CHECK(get64((const uint8_t *)files.fixture.output.bytes + 32) == 8);
+    CHECK([NSFileManager.defaultManager removeItemAtURL:folder error:&error]);
 }
 static void testService(void) {
     int fds[2]; CHECK(socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0);
@@ -416,6 +457,7 @@ int main(int argc, char **argv) {
         if (argc != 2) return 2;
         testAFC(); testBrowserAFC(); testService(); testClock(); testTimeZone();
         testPairing([NSURL fileURLWithPath:[NSString stringWithUTF8String:argv[1]] isDirectory:YES]);
+        testGuestFiles([NSURL fileURLWithPath:[NSString stringWithUTF8String:argv[1]] isDirectory:YES]);
         printf("Native USB services: %u checks, %u failures\n", checks, failures);
         return failures ? 1 : 0;
     }
