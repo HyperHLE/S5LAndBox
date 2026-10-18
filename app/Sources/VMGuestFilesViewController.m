@@ -9,7 +9,7 @@
 @implementation VMGuestFilesViewController {
     VMUSBTransport *_transport;
     NSString *_identifier, *_path, *_message;
-    BOOL _root, _busy;
+    BOOL _root, _busy, _leaving;
     VMGuestFiles *_files;
     NSArray<VMGuestFile *> *_items;
     NSURL *_exportDirectory, *_preview;
@@ -20,7 +20,27 @@
 - (instancetype)initWithTransport:(VMUSBTransport *)transport instanceID:(NSString *)identifier {
     self = [super initWithStyle:UITableViewStyleInsetGrouped];
     if (self) { _transport = transport; _identifier = [identifier copy]; _path = @"/";
-        _worker = dispatch_queue_create("com.j0shua.s5lbox.files", DISPATCH_QUEUE_SERIAL); }
+        _worker = dispatch_queue_create("com.j0shua.s5lbox.files", DISPATCH_QUEUE_SERIAL);
+        // Capture only previous-process exports before this process can create
+        // one. Never prune active previews or unrelated cache directories.
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            NSURL *cache = [NSFileManager.defaultManager URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask].firstObject;
+            NSArray<NSURL *> *existing = [NSFileManager.defaultManager contentsOfDirectoryAtURL:cache
+                includingPropertiesForKeys:@[NSURLIsDirectoryKey, NSURLIsSymbolicLinkKey] options:0 error:NULL];
+            NSMutableArray<NSURL *> *stale = [NSMutableArray array];
+            for (NSURL *url in existing) {
+                NSString *name = url.lastPathComponent;
+                if (![name hasPrefix:@"GuestFiles-"] || ![[NSUUID alloc] initWithUUIDString:[name substringFromIndex:11]]) continue;
+                NSNumber *directory = nil, *link = nil;
+                if ([url getResourceValue:&directory forKey:NSURLIsDirectoryKey error:NULL] &&
+                    [url getResourceValue:&link forKey:NSURLIsSymbolicLinkKey error:NULL] && directory.boolValue && !link.boolValue) [stale addObject:url];
+            }
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                for (NSURL *url in stale) [NSFileManager.defaultManager removeItemAtURL:url error:NULL];
+            });
+        });
+    }
     return self;
 }
 - (void)viewDidLoad {
@@ -47,6 +67,7 @@
     _files.progress = ^(double fraction) { dispatch_async(dispatch_get_main_queue(), ^{
         VMGuestFilesViewController *self = weakSelf; if (!self || !self->_busy) return;
         self->_progress.hidden = NO; self->_progress.progress = fraction;
+        self.navigationItem.prompt = [NSString stringWithFormat:@"Transferring · %.0f%%", fraction * 100];
     }); };
 }
 - (void)dealloc {
@@ -55,7 +76,16 @@
 }
 - (void)viewWillDisappear:(BOOL)animated {
     [super viewWillDisappear:animated];
-    if (self.isMovingFromParentViewController || self.navigationController.isBeingDismissed) _files.canceled = YES;
+    _leaving = self.isMovingFromParentViewController || self.navigationController.isBeingDismissed;
+    if (_leaving) _files.canceled = YES;
+}
+- (void)viewWillAppear:(BOOL)animated { [super viewWillAppear:animated]; _leaving = NO; }
+- (void)clearExport {
+    if (_exportDirectory) [NSFileManager.defaultManager removeItemAtURL:_exportDirectory error:NULL];
+    _exportDirectory = nil; _preview = nil;
+}
+- (void)viewDidDisappear:(BOOL)animated {
+    [super viewDidDisappear:animated]; if (_leaving && !_busy) [self clearExport];
 }
 - (void)buttons {
     _scope.enabled = !_busy;
@@ -63,20 +93,32 @@
         ? [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemCancel target:self action:@selector(cancel)]
         : [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAdd target:self action:@selector(add)];
     self.navigationItem.rightBarButtonItem.accessibilityLabel = _busy ? @"Cancel file operation" : @"Add file or folder";
+    self.navigationItem.rightBarButtonItem.enabled = _busy || _items != nil;
 }
 - (void)cancel { _files.canceled = YES; _message = @"Canceling…"; [self.tableView reloadData]; }
 - (void)scopeChanged { if (_busy) return; _root = _scope.selectedSegmentIndex == 1; _items = nil; [self configureFiles]; [self refresh]; }
 - (void)run:(id (^)(VMGuestFiles *, NSError **))work completion:(void (^)(id))completion {
     if (_busy) return;
     _busy = YES; _files.canceled = NO; _message = @"Connecting…"; [self buttons]; [self.tableView reloadData];
+    self.navigationItem.prompt = @"Connecting…";
     VMGuestFiles *files = _files;
     dispatch_async(_worker, ^{
         NSError *error = nil; id result = work(files, &error);
         dispatch_async(dispatch_get_main_queue(), ^{
             self->_busy = NO; self->_progress.hidden = YES; [self.refreshControl endRefreshing]; [self buttons];
+            self.navigationItem.prompt = nil;
             self->_message = error.localizedDescription ?: (files.canceled ? @"Canceled. Pull to refresh." : nil);
             if (result && !files.canceled && !error) completion(result);
+            [self buttons];
             [self.tableView reloadData];
+            if (self->_leaving) [self clearExport];
+            else if (error && !files.canceled && self->_items.count && self.view.window &&
+                self.navigationController.topViewController == self && !self.presentedViewController) {
+                UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"Couldn’t Complete"
+                    message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+                [alert addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+                [self presentViewController:alert animated:YES completion:nil];
+            }
         });
     });
 }
