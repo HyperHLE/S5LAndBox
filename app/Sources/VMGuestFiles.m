@@ -36,7 +36,10 @@ static BOOL FileSize(NSString *text, uint64_t *size) {
     if (NSThread.isMainThread || self.canceled) { if (error) *error = FilesError(@"File operation canceled."); return nil; }
     __weak VMGuestFiles *weakSelf = self;
     BOOL (^cancel)(void) = ^BOOL{ return !weakSelf || weakSelf.canceled; };
-    NSTimeInterval deadline = NSProcessInfo.processInfo.systemUptime + 20;
+    // Stock lockdownd can generate/pair keys during a cold boot. Retain the
+    // installer's 120-second connect allowance; the unpaired root endpoint
+    // needs no cryptography and can fail sooner. Both remain cancelable.
+    NSTimeInterval deadline = NSProcessInfo.processInfo.systemUptime + (_root ? 20 : 120);
     if (_root) {
         VMUSBService *service = [[VMUSBService alloc] initWithTransport:_transport port:VM_GUEST_FILES_PORT
             canceled:cancel deadline:deadline error:error];
