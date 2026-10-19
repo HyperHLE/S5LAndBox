@@ -252,7 +252,7 @@ fun PackagesScreen(
     Scaffold(
         topBar = {
             AppBar(
-                title = "Packages",
+                title = "Cydia & Packages",
                 subtitle = "Cydia · iPhone OS 3.1.3",
                 onBack = onBack,
             )

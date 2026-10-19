@@ -2171,8 +2171,8 @@ static void engine_thread_main(engine_t *e)
                     next_publish = now + ENGINE_PUBLISH_SECONDS;
             }
             if (status != ARM_OK) {
-                console_printf(e, "[vm] CPU stop / fault: status=%d at PC=0x%08x, LR=0x%08x, CPSR=0x%08x, retired=%" PRIu64 "\n",
-                               status, machine->cpu.pc, machine->cpu.r[14], machine->cpu.cpsr, retired);
+                console_printf(e, "[vm] CPU stop / fault: status=%d at PC=0x%08x, LR=0x%08x, CPSR=0x%08x, retired=%llu\n",
+                               status, machine->cpu.pc, machine->cpu.r[14], machine->cpu.cpsr, (unsigned long long)retired);
                 break;
             }
             if (cap > 0 && retired >= cap) {

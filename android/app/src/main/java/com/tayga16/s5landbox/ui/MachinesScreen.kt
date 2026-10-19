@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -629,6 +630,38 @@ private fun MachineCard(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(
+                        onClick = onPackages,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier.height(28.dp),
+                    ) {
+                        Icon(
+                            Icons.Filled.Extension,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("Cydia", style = MaterialTheme.typography.labelMedium)
+                    }
+                    TextButton(
+                        onClick = onOpenKernelLog,
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                        modifier = Modifier.height(28.dp),
+                    ) {
+                        Icon(
+                            Icons.Filled.Terminal,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text("Kernel log", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
             }
             Box {
                 IconButton(onClick = onMenu) {
@@ -653,7 +686,7 @@ private fun MachineCard(
                         onClick = onSettings,
                     )
                     DropdownMenuItem(
-                        text = { Text("Packages") },
+                        text = { Text("Cydia & Packages") },
                         leadingIcon = { Icon(Icons.Filled.Extension, contentDescription = null) },
                         onClick = onPackages,
                     )
