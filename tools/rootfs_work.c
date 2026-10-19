@@ -12,6 +12,11 @@
 #ifndef _FILE_OFFSET_BITS
 #define _FILE_OFFSET_BITS 64
 #endif
+/* renameat2() and RENAME_NOREPLACE are GNU extensions on glibc; bionic
+ * declares them unconditionally from API 21. */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
 #endif
@@ -48,6 +53,11 @@
 #define HFS_ATTR_SOFTWARE_LOCK (1u << 15)
 #define ROOTFS_TEMP_ATTEMPTS 128u
 #define ROOTFS_EINTR_RETRY_LIMIT 64u
+
+#if defined(__linux__) && !defined(RENAME_NOREPLACE)
+/* From <linux/fs.h>; bionic does not export it through <stdio.h>. */
+#define RENAME_NOREPLACE (1u << 0)
+#endif
 
 static const uint8_t FSTAB_STOCK[] =
     "/dev/disk0s1 / hfs ro 0 1\n"
@@ -1356,6 +1366,36 @@ static int posix_fsync_bounded(int descriptor) {
     } while (rc != 0 && errno == EINTR &&
              retries++ < ROOTFS_EINTR_RETRY_LIMIT);
     return rc;
+}
+
+/*
+ * Publication normally makes a hard link, which is what makes it both atomic
+ * and no-replace.  Android's emulated external storage -- the FUSE mount that
+ * getExternalFilesDir() returns -- implements rename() but answers link()
+ * with EPERM, so the link is not available there.  Fall back to a rename:
+ * renameat2() keeps the no-replace guarantee wherever the kernel implements
+ * it, and a plain rename() is used only after publication has proved the
+ * destination absent.  Only one engine can publish into a machine directory
+ * (the app enforces one process and one running machine), so the last case
+ * is not exposed to a second writer racing the check.
+ */
+static int posix_rename_no_replace(int from_descriptor, const char *from_leaf,
+                                   int to_descriptor, const char *to_leaf) {
+#if defined(__linux__)
+    unsigned retries = 0;
+    int rc;
+
+    do {
+        rc = renameat2(from_descriptor, from_leaf, to_descriptor, to_leaf,
+                       RENAME_NOREPLACE);
+    } while (rc != 0 && errno == EINTR &&
+             retries++ < ROOTFS_EINTR_RETRY_LIMIT);
+    if (rc == 0)
+        return 0;
+    if (errno != EINVAL && errno != ENOSYS && errno != EOPNOTSUPP)
+        return -1;
+#endif
+    return renameat(from_descriptor, from_leaf, to_descriptor, to_leaf);
 }
 
 static void host_file_init(host_file_t *file) {
@@ -9464,17 +9504,57 @@ static bool publish(destination_dir_t *destination,
     result->published = true;
     return true;
 #else
+    bool renamed_into_place = false;
     if (linkat(destination->descriptor, destination->temporary_leaf,
                destination->descriptor, destination->leaf, 0) != 0) {
         int error = errno;
-        result_fail(result,
-                    error == EEXIST ? ROOTFS_WORK_DESTINATION_EXISTS :
-                                      ROOTFS_WORK_PUBLISH_FAILED,
-                    ROOTFS_WORK_STAGE_PUBLISH, error,
-                    "atomic no-replace publication failed");
-        return false;
+        /* Filesystems that cannot make hard links (Android's emulated
+         * external storage among them) answer EPERM/EOPNOTSUPP here.  A
+         * rename publishes the same directory entry without the link. */
+        if (error != EPERM && error != EOPNOTSUPP && error != ENOSYS &&
+            error != EACCES && error != EINVAL) {
+            result_fail(result,
+                        error == EEXIST ? ROOTFS_WORK_DESTINATION_EXISTS :
+                                          ROOTFS_WORK_PUBLISH_FAILED,
+                        ROOTFS_WORK_STAGE_PUBLISH, error,
+                        "atomic no-replace publication failed");
+            return false;
+        }
+        struct stat occupier;
+        if (posix_fstatat_bounded(destination->descriptor, destination->leaf,
+                                  &occupier, AT_SYMLINK_NOFOLLOW) == 0) {
+            result_fail(result, ROOTFS_WORK_DESTINATION_EXISTS,
+                        ROOTFS_WORK_STAGE_PUBLISH, EEXIST,
+                        "atomic no-replace publication failed");
+            return false;
+        }
+        if (errno != ENOENT) {
+            result_fail(result, ROOTFS_WORK_PUBLISH_FAILED,
+                        ROOTFS_WORK_STAGE_PUBLISH, errno,
+                        "the destination could not be checked before publication");
+            return false;
+        }
+        if (posix_rename_no_replace(destination->descriptor,
+                                    destination->temporary_leaf,
+                                    destination->descriptor,
+                                    destination->leaf) != 0) {
+            int rename_error = errno;
+            result_fail(result,
+                        rename_error == EEXIST ? ROOTFS_WORK_DESTINATION_EXISTS :
+                                                 ROOTFS_WORK_PUBLISH_FAILED,
+                        ROOTFS_WORK_STAGE_PUBLISH, rename_error,
+                        "atomic no-replace publication failed");
+            return false;
+        }
+        renamed_into_place = true;
     }
     result->published = true;
+    if (renamed_into_place) {
+        /* rename() consumed the temporary name.  The image itself was
+         * synced before publication; these filesystems do not offer the
+         * directory-durability contract that the link path checks. */
+        return true;
+    }
     if (posix_fsync_bounded(destination->descriptor) != 0) {
         result->temporary_left = true;
         result_fail(result, ROOTFS_WORK_PUBLISH_DURABILITY_FAILED,
