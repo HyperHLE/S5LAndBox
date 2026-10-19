@@ -7614,6 +7614,10 @@ restart:
                 uint8_t target[ROOTFS_WORK_MAX_PATH];
                 char expanded[ROOTFS_WORK_MAX_PATH + 1u];
                 size_t target_size = 0u;
+                size_t prefix;
+                const char *suffix;
+                size_t tail;
+
                 if (++links > 16u) {
                     result_fail(result, ROOTFS_WORK_PROVISION_LIMIT, stage, 0,
                                 "metadata-repair parent links exceed 16 hops (possible loop)");
@@ -7621,9 +7625,9 @@ restart:
                 }
                 if (!catalog_read_parent_link(ctx, data, target, &target_size,
                                               stage, result)) return false;
-                size_t prefix = target[0] == '/' ? 0u : components[index].start;
-                const char *suffix = path + components[index].start + components[index].length;
-                size_t tail = strlen(suffix);
+                prefix = target[0] == '/' ? 0u : components[index].start;
+                suffix = path + components[index].start + components[index].length;
+                tail = strlen(suffix);
                 /* The remaining path starts with '/'; avoid doubling a target's
                  * trailing separator, including a link to the image root. */
                 while (target_size && target[target_size - 1u] == '/') target_size--;
@@ -7637,13 +7641,13 @@ restart:
                 memcpy(expanded + prefix + target_size, suffix, tail + 1u);
                 memcpy(resolved, expanded, prefix + target_size + tail + 1u);
                 if (out_resolved && out_capacity > 0)
-                    snprintf(out_resolved, out_capacity, "%s", resolved);
+                    (void)snprintf(out_resolved, out_capacity, "%s", resolved);
                 goto restart;
             }
         }
         if (index + 1u == count) {
             if (out_resolved && out_capacity > 0)
-                snprintf(out_resolved, out_capacity, "%s", resolved);
+                (void)snprintf(out_resolved, out_capacity, "%s", resolved);
             *record_data = data;
             return true;
         }
@@ -10234,28 +10238,33 @@ rootfs_work_status_t rootfs_work_reconcile_cold_boot_clone(const char *path,
 
 bool rootfs_work_resolve_parent_symlinks(const char *image_path, const char *input_path,
                                          char *out_resolved, size_t out_capacity) {
-    if (!image_path || !input_path || !out_resolved || out_capacity == 0)
+    char clean_path[ROOTFS_WORK_MAX_PATH + 1u];
+    size_t in_len;
+    host_file_t file;
+    file_stamp_t stamp;
+    rootfs_work_result_t result;
+    hfs_volume_t volume;
+    catalog_ctx_t catalog;
+    uint32_t leaf = 0u;
+    uint16_t position = 0u;
+    bool found = false;
+    uint8_t *record_data = NULL;
+    int error = 0;
+    bool success = false;
+    uint8_t *buffer = NULL;
+
+    if (!image_path || !input_path || !out_resolved || out_capacity == 0u)
         return false;
 
-    snprintf(out_resolved, out_capacity, "%s", input_path);
+    (void)snprintf(out_resolved, out_capacity, "%s", input_path);
 
-    char clean_path[ROOTFS_WORK_MAX_PATH + 1u];
-    size_t in_len = strlen(input_path);
+    in_len = strlen(input_path);
     while (in_len > 1u && input_path[in_len - 1u] == '/')
         in_len--;
     if (in_len >= sizeof(clean_path) || input_path[0] != '/')
         return false;
     memcpy(clean_path, input_path, in_len);
     clean_path[in_len] = '\0';
-
-    host_file_t file;
-    file_stamp_t stamp;
-    rootfs_work_result_t result;
-    hfs_volume_t volume;
-    catalog_ctx_t catalog;
-    uint32_t error = 0;
-    bool success = false;
-    uint8_t *buffer = NULL;
 
     result_reset(&result);
     host_file_init(&file);
@@ -10282,11 +10291,6 @@ bool rootfs_work_resolve_parent_symlinks(const char *image_path, const char *inp
     if (!catalog_open(&catalog, &file, stamp.size, &volume,
                       ROOTFS_WORK_DEFAULT_MAC_TIME, &result))
         goto cleanup;
-
-    uint32_t leaf = 0;
-    uint16_t position = 0;
-    bool found = false;
-    uint8_t *record_data = NULL;
 
     if (catalog_find_path_record(&catalog, clean_path, true, true,
                                  out_resolved, out_capacity,

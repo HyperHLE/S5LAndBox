@@ -602,7 +602,7 @@ int engine_ipa_install_path(const char *machine_directory,
 
     /* 5. Build directory and file entries */
     char apps_base[512] = "/Applications";
-    rootfs_work_resolve_parent_symlinks(stage_img, "/Applications", apps_base, sizeof apps_base);
+    (void)rootfs_work_resolve_parent_symlinks(stage_img, "/Applications", apps_base, sizeof apps_base);
 
     char app_dir[512];
     snprintf(app_dir, sizeof app_dir, "%s/%s.app", apps_base, slug);
