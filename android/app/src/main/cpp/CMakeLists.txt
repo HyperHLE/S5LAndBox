@@ -39,10 +39,15 @@ target_compile_definitions(s5landbox PRIVATE
 
 target_compile_options(s5landbox PRIVATE
     -O3
+    -fomit-frame-pointer
     -Wall
     -Wextra
     -Wno-unused-parameter
     -Wno-missing-field-initializers)
+
+target_compile_options(emucore PRIVATE
+    -O3
+    -fomit-frame-pointer)
 
 target_link_libraries(s5landbox PRIVATE
     emucore

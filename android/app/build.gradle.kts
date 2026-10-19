@@ -34,7 +34,7 @@ android {
                 // The portable core is C11. GNU extensions are on because the
                 // app sources use POSIX pread/fcntl and NDK's strict -std=c11
                 // hides them behind feature-test macros.
-                cFlags += listOf("-O3", "-fno-omit-frame-pointer")
+                cFlags += listOf("-O3", "-fomit-frame-pointer")
             }
         }
     }

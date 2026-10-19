@@ -79,14 +79,18 @@ jobs:
             "ndk;27.0.12077973" \
             "cmake;3.22.1"
 
-      - name: Build the debug APK
-        run: gradle -p android :app:assembleDebug --stacktrace
+      - name: Build the release and debug APKs
+        run: gradle -p android :app:assembleRelease :app:assembleDebug --stacktrace
 
       # The release variant is signed with the debug key (see app/build.gradle.kts)
-      # so it is installable for testing; it is not a store artifact.
-      - name: Build the release APK (manual runs)
-        if: github.event_name == 'workflow_dispatch'
-        run: gradle -p android :app:assembleRelease --stacktrace
+      # so it is installable for testing without store signing.
+      - name: Upload the release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: s5landbox-release-apk
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Upload the debug APK
         uses: actions/upload-artifact@v4
@@ -94,13 +98,4 @@ jobs:
           name: s5landbox-debug-apk
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
-          retention-days: 30
-
-      - name: Upload the release APK (manual runs)
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
-        with:
-          name: s5landbox-release-apk
-          path: android/app/build/outputs/apk/release/*.apk
-          if-no-files-found: ignore
           retention-days: 30

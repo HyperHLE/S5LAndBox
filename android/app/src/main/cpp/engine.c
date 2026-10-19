@@ -118,6 +118,8 @@ struct engine {
     bool snapshot_argb;
     uint32_t snap_w, snap_h, snap_stride;
     ANativeWindow *window;
+    ANativeWindow *window_geo_ptr;
+    uint32_t window_geo_w, window_geo_h;
 
     char console[ENGINE_CONSOLE_CAP];
     size_t console_len;
@@ -1702,6 +1704,7 @@ static void post_frame(engine_t *e)
     uint32_t width, height, stride;
     bool argb;
     const uint8_t *source;
+    bool need_geo = false;
 
     pthread_mutex_lock(&e->lock);
     if (!e->snapshot || !e->snapshot_fresh || !e->window) {
@@ -1716,40 +1719,54 @@ static void post_frame(engine_t *e)
     argb = e->snapshot_argb;
     source = e->snapshot;
     e->snapshot_fresh = false;
+    if (e->window_geo_ptr != window || e->window_geo_w != width || e->window_geo_h != height) {
+        need_geo = true;
+        e->window_geo_ptr = window;
+        e->window_geo_w = width;
+        e->window_geo_h = height;
+    }
     pthread_mutex_unlock(&e->lock);
 
-    if (ANativeWindow_setBuffersGeometry(window, (int32_t)width,
-                                         (int32_t)height,
-                                         WINDOW_FORMAT_RGBA_8888) == 0) {
-        ANativeWindow_Buffer buffer;
-        if (ANativeWindow_lock(window, &buffer, NULL) == 0) {
-            uint8_t *destination = buffer.bits;
-            uint32_t rows = height < (uint32_t)buffer.height
-                                ? height : (uint32_t)buffer.height;
-            uint32_t columns = width < (uint32_t)buffer.width
-                                   ? width : (uint32_t)buffer.width;
-            for (uint32_t y = 0; y < rows; y++) {
-                const uint8_t *src = source + (size_t)y * stride;
-                uint8_t *dst = destination +
-                    (size_t)y * (size_t)buffer.stride * 4u;
+    if (need_geo) {
+        if (ANativeWindow_setBuffersGeometry(window, (int32_t)width,
+                                             (int32_t)height,
+                                             WINDOW_FORMAT_RGBA_8888) != 0) {
+            ANativeWindow_release(window);
+            return;
+        }
+    }
+
+    ANativeWindow_Buffer buffer;
+    if (ANativeWindow_lock(window, &buffer, NULL) == 0) {
+        uint8_t *destination = buffer.bits;
+        uint32_t rows = height < (uint32_t)buffer.height
+                            ? height : (uint32_t)buffer.height;
+        uint32_t columns = width < (uint32_t)buffer.width
+                               ? width : (uint32_t)buffer.width;
+        for (uint32_t y = 0; y < rows; y++) {
+            const uint32_t *src32 = (const uint32_t *)(source + (size_t)y * stride);
+            uint32_t *dst32 = (uint32_t *)(destination +
+                (size_t)y * (size_t)buffer.stride * 4u);
+            if (argb) {
                 for (uint32_t x = 0; x < columns; x++) {
-                    uint8_t b0 = src[x * 4u + 0u];
-                    uint8_t b1 = src[x * 4u + 1u];
-                    uint8_t b2 = src[x * 4u + 2u];
-                    if (argb) {
-                        dst[x * 4u + 0u] = b1;
-                        dst[x * 4u + 1u] = b2;
-                        dst[x * 4u + 2u] = src[x * 4u + 3u];
-                    } else {
-                        dst[x * 4u + 0u] = b2;
-                        dst[x * 4u + 1u] = b1;
-                        dst[x * 4u + 2u] = b0;
-                    }
-                    dst[x * 4u + 3u] = 0xff;
+                    uint32_t px = src32[x];
+                    uint8_t a = (uint8_t)(px >> 24);
+                    uint8_t r = (uint8_t)(px >> 16);
+                    uint8_t g = (uint8_t)(px >> 8);
+                    uint8_t b = (uint8_t)px;
+                    dst32[x] = (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | ((uint32_t)a << 24);
+                }
+            } else {
+                for (uint32_t x = 0; x < columns; x++) {
+                    uint32_t px = src32[x];
+                    uint8_t b = (uint8_t)px;
+                    uint8_t g = (uint8_t)(px >> 8);
+                    uint8_t r = (uint8_t)(px >> 16);
+                    dst32[x] = (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | 0xff000000u;
                 }
             }
-            ANativeWindow_unlockAndPost(window);
         }
+        ANativeWindow_unlockAndPost(window);
     }
     ANativeWindow_release(window);
 }
@@ -2210,6 +2227,7 @@ void engine_destroy(engine_t *engine)
     pthread_mutex_lock(&e->lock);
     window = e->window;
     e->window = NULL;
+    e->window_geo_ptr = NULL;
     pthread_mutex_unlock(&e->lock);
     if (window) ANativeWindow_release(window);
 
@@ -2469,6 +2487,7 @@ void engine_set_surface(engine_t *engine, ANativeWindow *window)
     pthread_mutex_lock(&e->lock);
     old = e->window;
     e->window = window;
+    e->window_geo_ptr = NULL;
     /* Force the next publication to repaint even if the guest is idle. */
     e->snapshot_fresh = e->snapshot != NULL;
     pthread_mutex_unlock(&e->lock);
