@@ -32,7 +32,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: android-${{ github.ref }}
@@ -99,3 +99,26 @@ jobs:
           path: android/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Prepare APKs for GitHub Release
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/*.apk dist/s5landbox-release.apk
+          cp android/app/build/outputs/apk/debug/*.apk dist/s5landbox-debug.apk
+
+      - name: Publish to GitHub Releases
+        if: github.ref == 'refs/heads/android-port'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android-preview
+          name: "S5LAndBox Android Build"
+          body: |
+            Automated Android build from branch `android-port` (commit `${{ github.sha }}`).
+            - **`s5landbox-release.apk`**: Optimized build with `-O3 -fomit-frame-pointer` (recommended).
+            - **`s5landbox-debug.apk`**: Debug build.
+          prerelease: true
+          files: |
+            dist/s5landbox-release.apk
+            dist/s5landbox-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
