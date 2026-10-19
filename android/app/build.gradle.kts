@@ -13,8 +13,8 @@ android {
         applicationId = "com.tayga16.s5landbox"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.0.1"
 
         // Only 64-bit. The emulator is an interpreter over a 128 MB guest and
         // the iOS build has always been arm64; x86_64 keeps the emulator usable
