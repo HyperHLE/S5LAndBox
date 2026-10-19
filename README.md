@@ -27,6 +27,10 @@ Your iPhone doesn't need to be jailbroken.
 - **Bring your apps.** Import `.ipa` files directly or put them in S5LBox's
   **IPAs** folder in Files. Choose what to install, one app at a time, without
   closing the running machine.
+- **Browse Legacy Store.** Search for apps, choose compatible archived versions,
+  and download them straight into your library.
+- **Explore your files.** Browse, preview, import, and export guest files from
+  Machine Settings. Full filesystem access is available after guest jailbreak.
 - **Make room for tweaks.** Add Cydia and use the built-in **Packages** browser
   to explore sources, search, install, update, and remove packages. It handles
   required packages and tells you when a restart is needed.
@@ -58,10 +62,13 @@ with S5LBox.
 
 ## Good to know
 
-This first release is experimental. Speed varies by device, and not every app,
+S5LBox is experimental. Speed varies by device, and not every app,
 tweak, or hardware feature works yet. Apps must be compatible with iPhone OS
 3.1.3 and the iPhone 3G; copy-protected app files cannot be installed. Some apps
-need AppSync installed inside the machine.
+need AppSync, which is included with new guest jailbreaks by default.
+
+Packages is still experimental and may need a guest respring or reboot to
+connect. Use Cydia when a package operation is not supported.
 
 Keep a backup of anything important before experimenting.
 
@@ -69,6 +76,7 @@ Keep a backup of anything important before experimenting.
 
 - [Changelog](CHANGELOG.md)
 - [Installing apps](docs/live-ipa-usb.md) · [Packages and tweaks](docs/native-package-manager.md)
+- [Guest files](docs/guest-files.md)
 - [Audio](docs/audio.md) · [Storage options](docs/DISK-SIZE-PRESETS.md)
 - [Building and technical details](docs/README-DETAILED.md) · [Architecture](docs/ARCHITECTURE.md)
 - [Report a problem](https://github.com/j0shua-SYSON/S5LBox/issues)
