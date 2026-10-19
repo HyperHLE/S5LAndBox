@@ -53,6 +53,7 @@ import com.tayga16.s5landbox.data.FirmwareState
 import com.tayga16.s5landbox.data.ImportOutcome
 import com.tayga16.s5landbox.data.ImportProgress
 import com.tayga16.s5landbox.data.ImportStage
+import java.io.FileDescriptor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -146,7 +147,9 @@ fun ImportScreen(repository: EngineRepository, onDone: () -> Unit) {
                     ImportOutcome(false, error.message ?: "The import stopped unexpectedly.")
                 } finally {
                     try {
-                        Os.close(fd)
+                        // detachFd() handed us a raw descriptor; wrap it so Os
+                        // can close it after the native import is done.
+                        Os.close(FileDescriptor(fd))
                     } catch (_: Throwable) {
                     }
                 }
