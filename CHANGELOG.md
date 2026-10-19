@@ -1,6 +1,11 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 — 2026-10-19
+
+Legacy Store, live guest Files, and reliability improvements. See the
+[release notes](docs/releases/1.1.0.md) for installation and upgrade guidance.
+
+### Added and improved
 
 - Add a native live guest file manager in Machine Settings, with Media access,
   jailbreak-provisioned full filesystem access, preview/export, import, folder
@@ -53,6 +58,21 @@
   jailbreak. Genuine settings mismatches remain visible.
 - Retry affected Saurik archive downloads through its HTTPS CDN on TLS errors,
   retaining certificate validation and the existing archive checks.
+- Allow the stock AFC service to finish pairing after a cold boot before
+  declaring the guest file connection unavailable.
+
+### Compatibility and upgrade notes
+
+- Host requirement remains arm64 iOS 13 or later. The supported guest remains
+  iPhone 3G / iPhone OS 3.1.3 (7E18). Neither iOS 6 nor touchHLE is included.
+- Packages, app compatibility, graphics, audio and performance remain experimental.
+  Packages may need a guest respring or reboot and is not a full Cydia replacement.
+- Existing jailbreaks are not automatically changed. To add full filesystem
+  access to an older jailbreak, shut down the machine and run Jailbreak again
+  with Packages setup enabled.
+- File transfers support regular files up to 512 MB. Folder deletion is
+  nonrecursive; symbolic links are displayed but not followed for export.
+  Back up important guest data before updating or changing system files.
 
 ## 1.0.0 — 2026-10-15
 
