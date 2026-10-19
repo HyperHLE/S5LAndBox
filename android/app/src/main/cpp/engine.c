@@ -1,0 +1,2785 @@
+/*
+ * S5LAndBox — the emulator thread and everything the Android UI may ask of it.
+ *
+ * The shape is deliberately the same as app/Sources/VMEngine.m: exactly one
+ * pthread owns the s5l8900 machine for its whole life, executes it in bounded
+ * chunks and publishes a copied frame at 60 Hz.  The UI thread never touches
+ * the machine; it queues touch reports, button transitions and lifecycle
+ * requests under `lock` and reads copies under the same lock.
+ *
+ * All the platform-independent pieces (firmware import, instances, snapshots,
+ * touch/button queues, audio ring) come straight from app/Sources and are not
+ * modified by this port.
+ */
+#include "engine.h"
+
+#include <android/log.h>
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
+#include <stdarg.h>
+#include <stdatomic.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <time.h>
+#include <unistd.h>
+
+#include "soc.h"
+#include "usb_host.h"
+
+#include "VMButtonQueue.h"
+#include "VMFirmwareBoot.h"
+#include "VMFirmwareImport.h"
+#include "VMFirmwareKeys.h"
+#include "VMGuest.h"
+#include "VMInstancePaths.h"
+#include "VMInstances.h"
+#include "VMOptions.h"
+#include "VMResumeCheckpoint.h"
+#include "VMSnapshotCow.h"
+#include "VMSnapshotStore.h"
+#include "VMTouchMap.h"
+#include "VMTouchQueue.h"
+#include "VMAudioBuffer.h"
+#include "file_block.h"
+
+#define ENGINE_LOG_TAG "S5LAndBox"
+#define ENGINE_LOG(...) __android_log_print(ANDROID_LOG_INFO, ENGINE_LOG_TAG, __VA_ARGS__)
+#define ENGINE_WARN(...) __android_log_print(ANDROID_LOG_WARN, ENGINE_LOG_TAG, __VA_ARGS__)
+
+#define ENGINE_CHUNK_INSTRUCTIONS 100000u
+#define ENGINE_PUBLISH_SECONDS (1.0 / 60.0)
+#define ENGINE_CONSOLE_CAP 16000u
+#define ENGINE_PATH_CAP VM_FW_BOOT_PATH_CAPACITY
+#define ENGINE_IMPORT_REPORT_CAP 4096u
+#define ENGINE_AUDIO_SCRATCH 1024u
+#define ENGINE_COW_HEADER_BYTES 28u
+
+enum {
+    PHASE_IDLE = 0,
+    PHASE_STARTING,
+    PHASE_RUNNING,
+    PHASE_PAUSED,
+    PHASE_STOPPING,
+    PHASE_ERROR
+};
+
+typedef struct import_sink import_sink_t;
+struct import_sink {
+    FILE *file;
+    char path[ENGINE_PATH_CAP];
+};
+
+struct engine {
+    char root[ENGINE_PATH_CAP];
+    char firmware[ENGINE_PATH_CAP];
+    char machines[ENGINE_PATH_CAP];
+
+    pthread_mutex_t lock;
+    pthread_t thread;
+    bool thread_live;
+    bool join_pending;
+    int phase;
+
+    bool stop_requested;
+    engine_stop_mode_t stop_mode;
+    bool paused;
+    bool machine_ready;
+    bool preparing_root;
+    _Atomic bool abort_flag;
+    _Atomic uint64_t prepare_done;
+    _Atomic uint64_t prepare_total;
+    _Atomic uint64_t instruction_cap;
+
+    char instance_id[VM_INSTANCE_ID_LEN + 1u];
+    bool options[VM_INSTANCE_OPTION_MAX];
+    unsigned option_count;
+
+    char status[192];
+    char mode[128];
+    char note[320];
+    uint64_t retired;
+    double rate;
+    double fps;
+    double fps_window_start;
+    uint64_t fps_window_frames;
+    arm_status_t last_arm_status;
+
+    uint8_t *snapshot;
+    bool have_frame;
+    bool snapshot_fresh;
+    bool snapshot_blank;
+    bool snapshot_argb;
+    uint32_t snap_w, snap_h, snap_stride;
+    ANativeWindow *window;
+
+    char console[ENGINE_CONSOLE_CAP];
+    size_t console_len;
+
+    vm_touch_queue_t touch;
+    vm_touch_delivery_state_t touch_delivery;
+    vm_touch_tracker_t tracker;
+    vm_button_queue_t button_queue;
+    bool buttons[VM_BUTTON_COUNT];
+    bool ringer_silent;
+    vm_button_power_hold_t power_hold;
+    vm_button_momentary_holds_t momentary;
+    uint64_t touch_delivered, touch_dropped;
+    uint64_t button_delivered, button_dropped;
+
+    vm_audio_buffer_t audio;
+    bool audio_ok;
+    float audio_left[ENGINE_AUDIO_SCRATCH];
+    float audio_right[ENGINE_AUDIO_SCRATCH];
+    _Atomic bool microphone_on;
+
+    vm_instance_list_t instances;
+
+    _Atomic bool import_active;
+    _Atomic bool import_cancel;
+    _Atomic bool import_ok;
+    _Atomic int import_artefact;
+    _Atomic int import_stage;
+    _Atomic uint64_t import_done;
+    _Atomic uint64_t import_total;
+    char import_report[ENGINE_IMPORT_REPORT_CAP];
+    char import_source[VM_FW_BOOT_DETAIL_CAPACITY];
+
+    vm_firmware_boot_t *boot;
+
+    bool usb_active;
+    bool usb_ready;
+    usb_host_t usb_host;
+};
+
+/* ------------------------------------------------------------------ misc --- */
+
+static double engine_now(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
+}
+
+static uint64_t engine_now_ns(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * UINT64_C(1000000000) + (uint64_t)ts.tv_nsec;
+}
+
+static uint64_t engine_unix_now(void)
+{
+    return (uint64_t)time(NULL);
+}
+
+static bool is_directory(const char *path)
+{
+    struct stat st;
+    return path && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
+static bool mkdir_p(const char *path)
+{
+    char tmp[ENGINE_PATH_CAP];
+    size_t len;
+    if (!path || !path[0]) return false;
+    len = strlen(path);
+    if (len >= sizeof tmp) return false;
+    memcpy(tmp, path, len + 1u);
+    for (char *p = tmp + 1; *p; p++) {
+        if (*p != '/') continue;
+        *p = '\0';
+        if (mkdir(tmp, 0770) != 0 && errno != EEXIST) {
+            *p = '/';
+            return false;
+        }
+        *p = '/';
+    }
+    if (mkdir(tmp, 0770) != 0 && errno != EEXIST) return false;
+    return is_directory(tmp);
+}
+
+static bool join_path(char *out, size_t cap, const char *dir, const char *leaf)
+{
+    int n;
+    if (!out || !dir || !leaf || cap == 0) return false;
+    n = snprintf(out, cap, "%s/%s", dir, leaf);
+    return n > 0 && (size_t)n < cap;
+}
+
+static bool file_present(const char *path, uint64_t *size)
+{
+    struct stat st;
+    if (!path || stat(path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0)
+        return false;
+    if (size) *size = (uint64_t)st.st_size;
+    return true;
+}
+
+static int rm_rf(const char *path)
+{
+    struct stat st;
+    if (!path || lstat(path, &st) != 0) return errno == ENOENT ? 0 : -1;
+    if (S_ISDIR(st.st_mode)) {
+        DIR *d = opendir(path);
+        struct dirent *ent;
+        int rc = 0;
+        if (!d) return -1;
+        while ((ent = readdir(d)) != NULL) {
+            char child[ENGINE_PATH_CAP];
+            if (!strcmp(ent->d_name, ".") || !strcmp(ent->d_name, "..")) continue;
+            if (!join_path(child, sizeof child, path, ent->d_name)) continue;
+            if (rm_rf(child) != 0) rc = -1;
+        }
+        closedir(d);
+        if (rmdir(path) != 0 && errno != ENOENT) rc = -1;
+        return rc;
+    }
+    return unlink(path) == 0 || errno == ENOENT ? 0 : -1;
+}
+
+static uint64_t directory_size(const char *path)
+{
+    struct stat st;
+    uint64_t total = 0;
+    if (!path || lstat(path, &st) != 0) return 0;
+    if (!S_ISDIR(st.st_mode)) return S_ISREG(st.st_mode) ? (uint64_t)st.st_size : 0;
+    {
+        DIR *d = opendir(path);
+        struct dirent *ent;
+        if (!d) return 0;
+        while ((ent = readdir(d)) != NULL) {
+            char child[ENGINE_PATH_CAP];
+            if (!strcmp(ent->d_name, ".") || !strcmp(ent->d_name, "..")) continue;
+            if (!join_path(child, sizeof child, path, ent->d_name)) continue;
+            total += directory_size(child);
+        }
+        closedir(d);
+    }
+    return total;
+}
+
+static bool copy_file(const char *source, const char *destination)
+{
+    int in = -1, out = -1;
+    uint8_t *buffer = NULL;
+    bool ok = false;
+    struct stat st;
+    if (!source || !destination) return false;
+    in = open(source, O_RDONLY | O_CLOEXEC);
+    if (in < 0) goto done;
+    if (fstat(in, &st) != 0 || !S_ISREG(st.st_mode)) goto done;
+    out = open(destination, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0660);
+    if (out < 0) goto done;
+    buffer = malloc(1024u * 1024u);
+    if (!buffer) goto done;
+    for (;;) {
+        ssize_t got = read(in, buffer, 1024u * 1024u);
+        if (got < 0) {
+            if (errno == EINTR) continue;
+            goto done;
+        }
+        if (got == 0) break;
+        {
+            size_t written = 0;
+            while (written < (size_t)got) {
+                ssize_t put = write(out, buffer + written, (size_t)got - written);
+                if (put < 0) {
+                    if (errno == EINTR) continue;
+                    goto done;
+                }
+                written += (size_t)put;
+            }
+        }
+    }
+    if (fsync(out) != 0) goto done;
+    ok = true;
+done:
+    free(buffer);
+    if (out >= 0) close(out);
+    if (in >= 0) close(in);
+    if (!ok && destination) unlink(destination);
+    return ok;
+}
+
+static bool write_marker(const char *path)
+{
+    static const char text[] = "restore\n";
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0660);
+    bool ok;
+    if (fd < 0) return false;
+    ok = write(fd, text, sizeof text - 1u) == (ssize_t)(sizeof text - 1u);
+    if (ok && fsync(fd) != 0) ok = false;
+    close(fd);
+    if (!ok) unlink(path);
+    return ok;
+}
+
+static void make_instance_id(engine_t *e, char *out)
+{
+    static uint64_t counter;
+    uint64_t x = engine_now_ns() ^ ((uint64_t)getpid() << 32);
+    x ^= ++counter * UINT64_C(0x9E3779B97F4A7C15);
+    x ^= (uint64_t)(uintptr_t)e;
+    /* xorshift64* so the low sixteen nibbles are all visible entropy. */
+    x ^= x >> 12; x ^= x << 25; x ^= x >> 27;
+    x *= UINT64_C(2685821657736338717);
+    snprintf(out, VM_INSTANCE_ID_LEN + 1u, "%016llx",
+             (unsigned long long)x);
+}
+
+/* ------------------------------------------------------------- JSON build --- */
+
+typedef struct {
+    char *buf;
+    size_t cap;
+    size_t len;
+} json_t;
+
+static void json_reset(json_t *j, char *buf, size_t cap)
+{
+    j->buf = buf;
+    j->cap = cap;
+    j->len = 0;
+    if (buf && cap) buf[0] = '\0';
+}
+
+static void json_raw(json_t *j, const char *text)
+{
+    size_t n;
+    if (!j->buf || j->cap == 0 || !text) return;
+    n = strlen(text);
+    if (j->len + n >= j->cap) n = j->cap - 1u - j->len;
+    memcpy(j->buf + j->len, text, n);
+    j->len += n;
+    j->buf[j->len] = '\0';
+}
+
+static void json_printf(json_t *j, const char *format, ...)
+{
+    char temp[1024];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(temp, sizeof temp, format, args);
+    va_end(args);
+    json_raw(j, temp);
+}
+
+static void json_string(json_t *j, const char *text)
+{
+    char escaped[8];
+    json_raw(j, "\"");
+    if (text) {
+        for (const unsigned char *p = (const unsigned char *)text; *p; p++) {
+            switch (*p) {
+            case '"':  json_raw(j, "\\\""); break;
+            case '\\': json_raw(j, "\\\\"); break;
+            case '\n': json_raw(j, "\\n"); break;
+            case '\r': json_raw(j, "\\r"); break;
+            case '\t': json_raw(j, "\\t"); break;
+            default:
+                if (*p < 0x20) {
+                    snprintf(escaped, sizeof escaped, "\\u%04x", *p);
+                    json_raw(j, escaped);
+                } else {
+                    char one[2] = { (char)*p, '\0' };
+                    json_raw(j, one);
+                }
+                break;
+            }
+        }
+    }
+    json_raw(j, "\"");
+}
+
+/* ------------------------------------------------------------- consoles --- */
+
+static void console_append_len_locked(engine_t *e, const char *text, size_t n)
+{
+    if (!text || n == 0) return;
+    if (n >= ENGINE_CONSOLE_CAP) {
+        text += n - (ENGINE_CONSOLE_CAP - 1u);
+        n = ENGINE_CONSOLE_CAP - 1u;
+    }
+    if (e->console_len + n > ENGINE_CONSOLE_CAP - 1u) {
+        size_t drop = e->console_len + n - (ENGINE_CONSOLE_CAP - 1u);
+        memmove(e->console, e->console + drop, e->console_len - drop);
+        e->console_len -= drop;
+    }
+    memcpy(e->console + e->console_len, text, n);
+    e->console_len += n;
+    e->console[e->console_len] = '\0';
+}
+
+static void console_append_locked(engine_t *e, const char *text)
+{
+    if (!text) return;
+    console_append_len_locked(e, text, strlen(text));
+}
+
+static void console_append(engine_t *e, const char *text)
+{
+    pthread_mutex_lock(&e->lock);
+    console_append_locked(e, text);
+    pthread_mutex_unlock(&e->lock);
+}
+
+static void console_printf(engine_t *e, const char *format, ...)
+{
+    char line[512];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(line, sizeof line, format, args);
+    va_end(args);
+    console_append(e, line);
+}
+
+/* ---------------------------------------------------------- persistence --- */
+
+static bool persist_instances_locked(engine_t *e)
+{
+    size_t need = vm_instance_serialize(&e->instances, NULL, 0);
+    char *text;
+    char path[ENGINE_PATH_CAP], tmp[ENGINE_PATH_CAP];
+    bool ok = false;
+    int fd;
+    if (!join_path(path, sizeof path, e->machines, "instances.txt")) return false;
+    if (!join_path(tmp, sizeof tmp, e->machines, "instances.txt.partial")) return false;
+    text = malloc(need + 1u);
+    if (!text) return false;
+    vm_instance_serialize(&e->instances, text, need + 1u);
+    fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0660);
+    if (fd >= 0) {
+        ok = write(fd, text, need) == (ssize_t)need;
+        if (ok && fsync(fd) != 0) ok = false;
+        close(fd);
+    }
+    free(text);
+    if (ok && rename(tmp, path) != 0) ok = false;
+    if (!ok) unlink(tmp);
+    return ok;
+}
+
+static void load_instances(engine_t *e)
+{
+    char path[ENGINE_PATH_CAP];
+    struct stat st;
+    char *text = NULL;
+    int fd;
+    vm_instance_list_reset(&e->instances);
+    if (!join_path(path, sizeof path, e->machines, "instances.txt")) return;
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0 ||
+        st.st_size > 1024 * 1024)
+        return;
+    text = malloc((size_t)st.st_size + 1u);
+    if (!text) return;
+    fd = open(path, O_RDONLY | O_CLOEXEC);
+    if (fd >= 0) {
+        ssize_t got = read(fd, text, (size_t)st.st_size);
+        close(fd);
+        if (got == (ssize_t)st.st_size) {
+            text[got] = '\0';
+            if (vm_instance_deserialize(&e->instances, text) != VM_INSTANCE_OK) {
+                ENGINE_WARN("instances.txt could not be parsed; starting empty");
+                vm_instance_list_reset(&e->instances);
+            }
+        }
+    }
+    free(text);
+}
+
+static int instance_index_locked(engine_t *e, const char *id)
+{
+    return vm_instance_index_of_id(&e->instances, id);
+}
+
+/* --------------------------------------------------------------- import --- */
+
+typedef struct {
+    int fd;
+} import_pread_ctx_t;
+
+static size_t import_pread(void *context, uint64_t offset,
+                           uint8_t *buffer, size_t length)
+{
+    import_pread_ctx_t *ctx = context;
+    ssize_t got;
+    do {
+        got = pread(ctx->fd, buffer, length, (off_t)offset);
+    } while (got < 0 && errno == EINTR);
+    if (got < 0) return VMFW_SOURCE_ERROR;
+    return (size_t)got;
+}
+
+static void *import_sink_open(void *context, const char *name)
+{
+    engine_t *e = context;
+    import_sink_t *sink;
+    if (!name || strchr(name, '/') || !strcmp(name, ".") || !strcmp(name, ".."))
+        return NULL;
+    sink = calloc(1, sizeof *sink);
+    if (!sink) return NULL;
+    if (!join_path(sink->path, sizeof sink->path, e->firmware, name)) {
+        free(sink);
+        return NULL;
+    }
+    sink->file = fopen(sink->path, "wb");
+    if (!sink->file) {
+        free(sink);
+        return NULL;
+    }
+    setvbuf(sink->file, NULL, _IONBF, 0);
+    return sink;
+}
+
+static bool import_sink_write(void *context, void *handle,
+                              const uint8_t *data, size_t length)
+{
+    import_sink_t *sink = handle;
+    (void)context;
+    if (!sink || !sink->file) return false;
+    return fwrite(data, 1, length, sink->file) == length;
+}
+
+static size_t import_sink_pread(void *context, void *handle,
+                                uint64_t offset, uint8_t *buffer, size_t length)
+{
+    import_sink_t *sink = handle;
+    ssize_t got;
+    (void)context;
+    if (!sink || !sink->file) return VMFW_SOURCE_ERROR;
+    if (fflush(sink->file) != 0) return VMFW_SOURCE_ERROR;
+    do {
+        got = pread(fileno(sink->file), buffer, length, (off_t)offset);
+    } while (got < 0 && errno == EINTR);
+    if (got < 0) return VMFW_SOURCE_ERROR;
+    return (size_t)got;
+}
+
+static void import_sink_close(void *context, void *handle, bool keep)
+{
+    import_sink_t *sink = handle;
+    (void)context;
+    if (!sink) return;
+    if (sink->file) fclose(sink->file);
+    if (!keep) unlink(sink->path);
+    free(sink);
+}
+
+static void import_progress_cb(void *context, vm_fw_artefact_t which,
+                               vm_fw_stage_t stage,
+                               uint64_t done, uint64_t total)
+{
+    engine_t *e = context;
+    atomic_store(&e->import_artefact, (int)which);
+    atomic_store(&e->import_stage, (int)stage);
+    atomic_store(&e->import_done, done);
+    atomic_store(&e->import_total, total);
+}
+
+static bool import_cancel_cb(void *context)
+{
+    engine_t *e = context;
+    return atomic_load(&e->import_cancel);
+}
+
+int engine_import_ipsw(engine_t *engine, int fd, uint64_t size,
+                       bool skip_stock_checksums,
+                       char *detail, size_t detail_capacity)
+{
+    engine_t *e = engine;
+    import_pread_ctx_t source;
+    vm_fw_files_t files;
+    vm_fw_import_t request;
+    vm_fw_report_t report;
+    vm_fw_status_t status;
+    bool prepared;
+    char rendered[ENGINE_IMPORT_REPORT_CAP];
+
+    if (!e || fd < 0 || size == 0) {
+        if (detail && detail_capacity) snprintf(detail, detail_capacity,
+                                                "No IPSW was provided.");
+        return -1;
+    }
+    pthread_mutex_lock(&e->lock);
+    if (e->phase != PHASE_IDLE) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "Stop the running machine before importing firmware.");
+        return -1;
+    }
+    if (atomic_load(&e->import_active)) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "An import is already running.");
+        return -1;
+    }
+    atomic_store(&e->import_active, true);
+    atomic_store(&e->import_cancel, false);
+    atomic_store(&e->import_ok, false);
+    atomic_store(&e->import_done, 0);
+    atomic_store(&e->import_total, 0);
+    e->import_report[0] = '\0';
+    pthread_mutex_unlock(&e->lock);
+
+    mkdir_p(e->firmware);
+
+    source.fd = fd;
+    files.open = import_sink_open;
+    files.write = import_sink_write;
+    files.pread = import_sink_pread;
+    files.close = import_sink_close;
+    files.ctx = e;
+
+    memset(&request, 0, sizeof request);
+    request.pread = import_pread;
+    request.pread_ctx = &source;
+    request.size = size;
+    request.files = &files;
+    request.keys = NULL;
+    request.progress = import_progress_cb;
+    request.progress_ctx = e;
+    request.cancel = import_cancel_cb;
+    request.cancel_ctx = e;
+    request.resolve_keys = vm_fw_resolve_public_keys;
+    request.require_supported = true;
+    request.skip_stock_checksums = skip_stock_checksums;
+
+    memset(&report, 0, sizeof report);
+    status = vm_fw_import_run(&request, &report);
+    prepared = vm_fw_report_is_prepared(&report);
+
+    rendered[0] = '\0';
+    vm_fw_report_render(&report, rendered, sizeof rendered);
+    if (detail && detail_capacity) {
+        const char *text = report.detail[0] ? report.detail
+                                            : vm_fw_strerror(status);
+        snprintf(detail, detail_capacity, "%s", text);
+    }
+
+    pthread_mutex_lock(&e->lock);
+    snprintf(e->import_report, sizeof e->import_report, "%s", rendered);
+    snprintf(e->import_source, sizeof e->import_source, "%s",
+             vm_fw_public_keys_source());
+    atomic_store(&e->import_ok, prepared);
+    atomic_store(&e->import_active, false);
+    pthread_mutex_unlock(&e->lock);
+
+    console_printf(e, "[fw] import %s: %s\n",
+                   prepared ? "complete" : "failed",
+                   report.detail[0] ? report.detail : vm_fw_strerror(status));
+    return prepared ? 0 : -1;
+}
+
+void engine_import_cancel(engine_t *engine)
+{
+    if (engine) atomic_store(&engine->import_cancel, true);
+}
+
+void engine_import_progress(engine_t *engine, int *active, int *artefact,
+                            int *stage, uint64_t *done, uint64_t *total)
+{
+    engine_t *e = engine;
+    if (!e) return;
+    if (active) *active = atomic_load(&e->import_active) ? 1 : 0;
+    if (artefact) *artefact = atomic_load(&e->import_artefact);
+    if (stage) *stage = atomic_load(&e->import_stage);
+    if (done) *done = atomic_load(&e->import_done);
+    if (total) *total = atomic_load(&e->import_total);
+}
+
+int engine_firmware_json(engine_t *engine, char *out, size_t capacity)
+{
+    engine_t *e = engine;
+    json_t j;
+    char path[ENGINE_PATH_CAP];
+    uint64_t kernel = 0, tree = 0, rootfs = 0;
+    bool have_kernel, have_tree, have_rootfs;
+    char report[ENGINE_IMPORT_REPORT_CAP];
+    char source[VM_FW_BOOT_DETAIL_CAPACITY];
+    bool import_ok;
+
+    if (!e || !out || capacity == 0) return -1;
+    json_reset(&j, out, capacity);
+
+    have_kernel = join_path(path, sizeof path, e->firmware,
+                            VM_FW_BOOT_KERNEL_FILE) &&
+                  file_present(path, &kernel);
+    have_tree = join_path(path, sizeof path, e->firmware,
+                          VM_FW_BOOT_DEVICETREE_FILE) &&
+                file_present(path, &tree);
+    have_rootfs = join_path(path, sizeof path, e->firmware,
+                            VM_FW_BOOT_ROOTFS_FILE) &&
+                  file_present(path, &rootfs);
+
+    pthread_mutex_lock(&e->lock);
+    snprintf(report, sizeof report, "%s", e->import_report);
+    snprintf(source, sizeof source, "%s", e->import_source);
+    import_ok = atomic_load(&e->import_ok);
+    pthread_mutex_unlock(&e->lock);
+
+    json_printf(&j,
+        "{\"ok\":%s,\"kernel\":{\"present\":%s,\"size\":%llu},"
+        "\"devicetree\":{\"present\":%s,\"size\":%llu},"
+        "\"rootfs\":{\"present\":%s,\"size\":%llu},"
+        "\"importOk\":%s,\"importActive\":%s,\"source\":",
+        have_kernel && have_tree && have_rootfs ? "true" : "false",
+        have_kernel ? "true" : "false", (unsigned long long)kernel,
+        have_tree ? "true" : "false", (unsigned long long)tree,
+        have_rootfs ? "true" : "false", (unsigned long long)rootfs,
+        import_ok ? "true" : "false",
+        atomic_load(&e->import_active) ? "true" : "false");
+    json_string(&j, source);
+    json_raw(&j, ",\"lastReport\":");
+    json_string(&j, report);
+    json_raw(&j, "}");
+    return (int)j.len;
+}
+
+/* ------------------------------------------------------------- machines --- */
+
+static void machine_json(engine_t *e, const vm_instance_t *instance, json_t *j)
+{
+    vm_instance_paths_t paths;
+    vm_firmware_boot_paths_t boot_paths;
+    vm_firmware_boot_state_t state;
+    bool derived;
+    vm_instance_paths_status_t ps;
+
+    json_raw(j, "{\"id\":");
+    json_string(j, instance->id);
+    json_raw(j, ",\"name\":");
+    json_string(j, instance->name);
+    json_printf(j,
+        ",\"created\":%llu,\"lastOpened\":%llu,\"retiredTotal\":%llu",
+        (unsigned long long)instance->created_unix,
+        (unsigned long long)instance->last_opened_unix,
+        (unsigned long long)instance->retired_total);
+
+    ps = vm_instance_paths_derive(e->firmware, e->machines, instance->id,
+                                  &paths);
+    derived = ps == VM_INSTANCE_PATHS_OK;
+    memset(&state, 0, sizeof state);
+    if (derived) {
+        vm_instance_paths_to_boot(&paths, &boot_paths);
+        vm_firmware_boot_probe(&boot_paths, &state);
+    }
+    json_printf(j,
+        ",\"ready\":%s,\"readyState\":%d,\"kernel\":%s,\"devicetree\":%s,"
+        "\"rootfs\":%s,\"work\":%s,\"detail\":",
+        derived && state.readiness == VM_FW_BOOT_READY ? "true" : "false",
+        derived ? (int)state.readiness : 3,
+        derived && state.kernel_present ? "true" : "false",
+        derived && state.devicetree_present ? "true" : "false",
+        derived && state.rootfs_present ? "true" : "false",
+        derived && state.work_present ? "true" : "false");
+    json_string(j, derived ? state.detail : vm_instance_paths_status_text(ps));
+    json_raw(j, "}");
+}
+
+int engine_machines_json(engine_t *engine, char *out, size_t capacity)
+{
+    engine_t *e = engine;
+    vm_instance_list_t snapshot;
+    json_t j;
+    unsigned i;
+
+    if (!e || !out || capacity == 0) return -1;
+    pthread_mutex_lock(&e->lock);
+    snapshot = e->instances;
+    pthread_mutex_unlock(&e->lock);
+
+    json_reset(&j, out, capacity);
+    json_printf(&j, "{\"ok\":true,\"runningId\":");
+    pthread_mutex_lock(&e->lock);
+    json_string(&j, e->phase != PHASE_IDLE ? e->instance_id : "");
+    pthread_mutex_unlock(&e->lock);
+    json_raw(&j, ",\"machines\":[");
+    for (i = 0; i < snapshot.count; i++) {
+        if (i) json_raw(&j, ",");
+        machine_json(e, &snapshot.slot[i], &j);
+    }
+    json_raw(&j, "]}");
+    return (int)j.len;
+}
+
+int engine_machine_create(engine_t *engine, const char *name,
+                          const bool *options, unsigned option_count,
+                          char *new_id, size_t id_capacity,
+                          char *detail, size_t detail_capacity)
+{
+    engine_t *e = engine;
+    vm_instance_status_t st;
+    char id[VM_INSTANCE_ID_LEN + 1u];
+    char trimmed[VM_INSTANCE_NAME_MAX + 1u];
+    bool values[VM_INSTANCE_OPTION_MAX];
+    unsigned count, i, tries;
+    int index = -1;
+
+    if (detail && detail_capacity) detail[0] = '\0';
+    if (!e || !name) {
+        if (detail && detail_capacity) snprintf(detail, detail_capacity,
+                                                "A machine needs a name.");
+        return -1;
+    }
+    snprintf(trimmed, sizeof trimmed, "%s", name);
+    while (trimmed[0] == ' ' || trimmed[0] == '\t') memmove(trimmed, trimmed + 1,
+                                                            strlen(trimmed));
+    {
+        size_t len = strlen(trimmed);
+        while (len && (trimmed[len - 1] == ' ' || trimmed[len - 1] == '\t'))
+            trimmed[--len] = '\0';
+    }
+    st = vm_instance_name_check(trimmed);
+    if (st != VM_INSTANCE_OK) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "%s", vm_instance_status_text(st));
+        return -1;
+    }
+
+    count = vm_option_count();
+    if (count > VM_INSTANCE_OPTION_MAX) count = VM_INSTANCE_OPTION_MAX;
+    for (i = 0; i < count; i++) {
+        values[i] = options && i < option_count
+                        ? options[i]
+                        : vm_option_new_machine_value(i, false, false);
+    }
+
+    pthread_mutex_lock(&e->lock);
+    if (e->instances.count >= VM_INSTANCE_MAX) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "%s",
+                     vm_instance_status_text(VM_INSTANCE_ERR_FULL));
+        return -1;
+    }
+    for (tries = 0; tries < 100; tries++) {
+        make_instance_id(e, id);
+        if (instance_index_locked(e, id) < 0) break;
+    }
+    st = vm_instance_add(&e->instances, id, trimmed, values, count,
+                         engine_unix_now(), NULL);
+    if (st == VM_INSTANCE_OK) {
+        index = instance_index_locked(e, id);
+        if (index >= 0) e->instances.slot[index].last_opened_unix = 0;
+        if (!persist_instances_locked(e)) st = VM_INSTANCE_ERR_PARSE;
+    }
+    pthread_mutex_unlock(&e->lock);
+
+    if (st != VM_INSTANCE_OK) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "%s", vm_instance_status_text(st));
+        return -1;
+    }
+
+    {
+        vm_instance_paths_t paths;
+        if (vm_instance_paths_derive(e->firmware, e->machines, id, &paths) ==
+            VM_INSTANCE_PATHS_OK) {
+            mkdir_p(paths.machine);
+        }
+    }
+    if (new_id && id_capacity) snprintf(new_id, id_capacity, "%s", id);
+    return 0;
+}
+
+int engine_machine_rename(engine_t *engine, const char *id, const char *name,
+                          char *detail, size_t detail_capacity)
+{
+    engine_t *e = engine;
+    int index;
+    vm_instance_status_t st;
+    if (detail && detail_capacity) detail[0] = '\0';
+    if (!e || !id || !name) return -1;
+    pthread_mutex_lock(&e->lock);
+    if (e->phase != PHASE_IDLE && !strcmp(id, e->instance_id)) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "Stop the machine before renaming it.");
+        return -1;
+    }
+    index = instance_index_locked(e, id);
+    if (index < 0) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "No such machine.");
+        return -1;
+    }
+    st = vm_instance_rename(&e->instances, (unsigned)index, name);
+    if (st == VM_INSTANCE_OK && !persist_instances_locked(e))
+        st = VM_INSTANCE_ERR_PARSE;
+    pthread_mutex_unlock(&e->lock);
+    if (st != VM_INSTANCE_OK) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "%s", vm_instance_status_text(st));
+        return -1;
+    }
+    return 0;
+}
+
+int engine_machine_delete(engine_t *engine, const char *id,
+                          char *detail, size_t detail_capacity)
+{
+    engine_t *e = engine;
+    int index;
+    vm_instance_status_t st;
+    vm_instance_paths_t paths;
+    bool have_paths = false;
+
+    if (detail && detail_capacity) detail[0] = '\0';
+    if (!e || !id) return -1;
+
+    pthread_mutex_lock(&e->lock);
+    if (e->phase != PHASE_IDLE) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "Stop the running machine before deleting a machine.");
+        return -1;
+    }
+    index = instance_index_locked(e, id);
+    if (index < 0) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "No such machine.");
+        return -1;
+    }
+    if (vm_instance_paths_derive(e->firmware, e->machines, id, &paths) ==
+        VM_INSTANCE_PATHS_OK)
+        have_paths = true;
+    st = vm_instance_remove(&e->instances, (unsigned)index);
+    if (st == VM_INSTANCE_OK && !persist_instances_locked(e))
+        st = VM_INSTANCE_ERR_PARSE;
+    pthread_mutex_unlock(&e->lock);
+
+    if (st != VM_INSTANCE_OK) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "%s", vm_instance_status_text(st));
+        return -1;
+    }
+    if (have_paths) {
+        if (rm_rf(paths.machine) != 0 && detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "The machine was removed from the list, but its files "
+                     "could not be deleted.");
+    }
+    return 0;
+}
+
+int engine_options_json(engine_t *engine, char *out, size_t capacity)
+{
+    json_t j;
+    unsigned i, groups;
+    (void)engine;
+    if (!out || capacity == 0) return -1;
+    json_reset(&j, out, capacity);
+    json_raw(&j, "{\"groups\":[");
+    groups = VM_OPT_GROUP_COUNT;
+    for (i = 0; i < groups; i++) {
+        const char *title = vm_option_group_title(i);
+        const char *note = vm_option_group_note(i);
+        if (i) json_raw(&j, ",");
+        json_raw(&j, "{\"title\":");
+        json_string(&j, title ? title : "");
+        json_raw(&j, ",\"note\":");
+        json_string(&j, note ? note : "");
+        json_raw(&j, "}");
+    }
+    json_raw(&j, "],\"options\":[");
+    for (i = 0; i < vm_option_count(); i++) {
+        const vm_option_t *option = vm_option_at(i);
+        if (!option) continue;
+        if (i) json_raw(&j, ",");
+        json_raw(&j, "{\"name\":");
+        json_string(&j, option->name);
+        json_raw(&j, ",\"title\":");
+        json_string(&j, option->title);
+        json_raw(&j, ",\"detail\":");
+        json_string(&j, option->detail);
+        json_printf(&j, ",\"default\":%s,\"group\":%u,\"implemented\":%s}",
+                    option->def ? "true" : "false", (unsigned)option->group,
+                    option->impl == VM_OPT_IMPL_HARNESS ? "true" : "false");
+    }
+    json_raw(&j, "]}");
+    return (int)j.len;
+}
+
+int engine_machine_options_json(engine_t *engine, const char *id,
+                                char *out, size_t capacity)
+{
+    engine_t *e = engine;
+    vm_instance_t instance;
+    bool found = false;
+    unsigned count, i;
+    json_t j;
+
+    if (!e || !out || capacity == 0) return -1;
+    pthread_mutex_lock(&e->lock);
+    {
+        int index = id ? instance_index_locked(e, id) : -1;
+        if (index >= 0) {
+            instance = e->instances.slot[index];
+            found = true;
+        }
+    }
+    pthread_mutex_unlock(&e->lock);
+
+    count = vm_option_count();
+    if (count > VM_INSTANCE_OPTION_MAX) count = VM_INSTANCE_OPTION_MAX;
+    json_reset(&j, out, capacity);
+    json_printf(&j, "{\"ok\":true,\"found\":%s,\"values\":[",
+                found ? "true" : "false");
+    for (i = 0; i < count; i++) {
+        bool value = found ? (i < VM_INSTANCE_OPTION_MAX && instance.options[i])
+                           : vm_option_new_machine_value(i, false, false);
+        if (i) json_raw(&j, ",");
+        json_raw(&j, value ? "true" : "false");
+    }
+    json_raw(&j, "]}");
+    return (int)j.len;
+}
+
+int engine_machine_set_options(engine_t *engine, const char *id,
+                               const bool *options, unsigned option_count,
+                               char *detail, size_t detail_capacity)
+{
+    engine_t *e = engine;
+    int index;
+    unsigned count, i;
+
+    if (detail && detail_capacity) detail[0] = '\0';
+    if (!e || !id || !options) return -1;
+    pthread_mutex_lock(&e->lock);
+    if (e->phase != PHASE_IDLE && !strcmp(id, e->instance_id)) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "Stop the machine before changing its settings.");
+        return -1;
+    }
+    index = instance_index_locked(e, id);
+    if (index < 0) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "No such machine.");
+        return -1;
+    }
+    count = vm_option_count();
+    if (count > VM_INSTANCE_OPTION_MAX) count = VM_INSTANCE_OPTION_MAX;
+    for (i = 0; i < VM_INSTANCE_OPTION_MAX; i++)
+        e->instances.slot[index].options[i] = false;
+    for (i = 0; i < count && i < option_count; i++)
+        e->instances.slot[index].options[i] = options[i];
+    if (!persist_instances_locked(e)) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "The settings could not be saved.");
+        return -1;
+    }
+    pthread_mutex_unlock(&e->lock);
+    return 0;
+}
+
+/* --------------------------------------------------------------- payload --- */
+
+static void provision_progress_cb(void *context, uint64_t done, uint64_t total)
+{
+    engine_t *e = context;
+    atomic_store(&e->prepare_done, done);
+    atomic_store(&e->prepare_total, total);
+}
+
+static bool abort_cb(void *context)
+{
+    engine_t *e = context;
+    return atomic_load(&e->abort_flag);
+}
+
+static bool arm_newest_overlay(engine_t *e, const vm_instance_paths_t *paths,
+                               vm_firmware_boot_t *boot)
+{
+    /* Must run between vm_firmware_boot_create() and _start(): _start() is
+     * where the overlay descriptor is opened and it refuses to boot if an
+     * armed overlay cannot be opened. */
+    char snapshots[ENGINE_PATH_CAP];
+    vm_snapshot_info_t infos[VM_SNAPSHOT_MAX];
+    size_t count = 0;
+    char detail[VM_FW_BOOT_DETAIL_CAPACITY];
+    char overlay[ENGINE_PATH_CAP];
+
+    if (vm_snapshot_dir(paths->machine, snapshots, sizeof snapshots) !=
+        VM_SNAPSHOT_OK)
+        return true;
+    if (vm_snapshot_list(snapshots, infos, VM_SNAPSHOT_MAX, &count,
+                         detail, sizeof detail) != VM_SNAPSHOT_OK)
+        return true;
+    if (count == 0) return true;
+    if (vm_snapshot_member_path(snapshots, infos[0].id, false,
+                                VM_SNAPSHOT_COW_FILE, overlay,
+                                sizeof overlay) != VM_SNAPSHOT_OK)
+        return true;
+    if (vm_firmware_boot_arm_overlay(boot, overlay)) {
+        console_printf(e, "[vm] snapshot protection will record into %s\n",
+                       infos[0].id);
+        return true;
+    }
+    console_printf(e,
+        "[vm] WARNING: snapshot protection could not be armed; writes from "
+        "this run are not recorded\n");
+    return false;
+}
+
+static bool install_payload(engine_t *e, s5l8900_t *machine,
+                            vm_firmware_boot_t **out_boot)
+{
+    vm_instance_paths_t paths;
+    vm_firmware_boot_paths_t boot_paths;
+    vm_firmware_boot_state_t state;
+    vm_instance_paths_status_t ps;
+    vm_instance_work_plan_t plan;
+    bool values[VM_INSTANCE_OPTION_MAX];
+    unsigned count;
+    const char *note = "";
+
+    *out_boot = NULL;
+    if (!e->instance_id[0]) {
+        if (!vm_guest_install(machine)) return false;
+        pthread_mutex_lock(&e->lock);
+        snprintf(e->mode, sizeof e->mode, "built-in test guest");
+        snprintf(e->note, sizeof e->note,
+                 "This machine has no identity, so it has no writable root "
+                 "filesystem. Open a machine from the list to boot iPhone OS.");
+        pthread_mutex_unlock(&e->lock);
+        return true;
+    }
+
+    ps = vm_instance_paths_derive(e->firmware, e->machines, e->instance_id,
+                                  &paths);
+    if (ps != VM_INSTANCE_PATHS_OK) {
+        if (!vm_guest_install(machine)) return false;
+        pthread_mutex_lock(&e->lock);
+        snprintf(e->mode, sizeof e->mode, "built-in test guest");
+        snprintf(e->note, sizeof e->note,
+                 "This machine's files cannot be located: %s.",
+                 vm_instance_paths_status_text(ps));
+        pthread_mutex_unlock(&e->lock);
+        return true;
+    }
+    if (!mkdir_p(paths.machine)) {
+        if (!vm_guest_install(machine)) return false;
+        pthread_mutex_lock(&e->lock);
+        snprintf(e->mode, sizeof e->mode, "built-in test guest");
+        snprintf(e->note, sizeof e->note,
+                 "This machine's directory could not be created.");
+        pthread_mutex_unlock(&e->lock);
+        return true;
+    }
+
+    plan = vm_instance_work_plan(&paths);
+    if (plan == VM_INSTANCE_WORK_ADOPT) {
+        char adopted[VM_FW_BOOT_DETAIL_CAPACITY];
+        bool ok = vm_instance_work_adopt(&paths, adopted, sizeof adopted);
+        console_printf(e, "[vm] %s\n", adopted);
+        if (!ok) note = adopted;
+    }
+
+    count = e->option_count;
+    if (count > VM_INSTANCE_OPTION_MAX) count = VM_INSTANCE_OPTION_MAX;
+    memcpy(values, e->options, sizeof values);
+
+    vm_instance_paths_to_boot(&paths, &boot_paths);
+    vm_firmware_boot_probe(&boot_paths, &state);
+
+    if (state.readiness == VM_FW_BOOT_NEEDS_WORK_IMAGE) {
+        char why[VM_FW_BOOT_DETAIL_CAPACITY] = {0};
+        bool ok;
+        pthread_mutex_lock(&e->lock);
+        e->preparing_root = true;
+        snprintf(e->status, sizeof e->status, "preparing the root filesystem");
+        pthread_mutex_unlock(&e->lock);
+        atomic_store(&e->prepare_done, 0);
+        atomic_store(&e->prepare_total, 0);
+        ok = vm_firmware_boot_provision_cancellable(
+            &boot_paths, values, count, provision_progress_cb, e,
+            why, sizeof why, abort_cb, e);
+        if (!ok) {
+            vm_firmware_boot_probe(&boot_paths, &state);
+            if (state.work_present) {
+                ok = true;
+                snprintf(why, sizeof why,
+                         "The root filesystem was already prepared.");
+            }
+        }
+        pthread_mutex_lock(&e->lock);
+        e->preparing_root = false;
+        if (!ok) {
+            snprintf(e->note, sizeof e->note, "%s",
+                     why[0] ? why
+                            : "The root filesystem could not be prepared.");
+        }
+        pthread_mutex_unlock(&e->lock);
+        console_printf(e, "[vm] root filesystem: %s\n",
+                       ok ? "ready" : "not prepared");
+        if (!ok) {
+            if (atomic_load(&e->abort_flag)) return false;
+            vm_firmware_boot_probe(&boot_paths, &state);
+        } else {
+            vm_firmware_boot_probe(&boot_paths, &state);
+        }
+    }
+
+    if (state.readiness == VM_FW_BOOT_READY) {
+        vm_firmware_boot_t *boot = vm_firmware_boot_create();
+        if (boot) {
+            vm_firmware_boot_report_t report;
+            /* Recording has to be armed before _start(), because _start() is
+             * where the overlay is opened and where a failure to open it is
+             * deliberately fatal rather than a silent unrecorded run. */
+            (void)arm_newest_overlay(e, &paths, boot);
+            memset(&report, 0, sizeof report);
+            if (vm_firmware_boot_start(boot, machine, &boot_paths,
+                                       values, count, &report)) {
+                char warning[VM_BOOT_OPTIONS_SUMMARY_CAPACITY];
+                warning[0] = '\0';
+                vm_boot_options_startup_warning(&report.options, warning,
+                                                 sizeof warning);
+                console_printf(e,
+                    "[vm] Apple firmware: kernel at pa 0x%08x, device tree at "
+                    "0x%08x (%u bytes), boot_args at 0x%08x\n",
+                    report.bringup.entry_pa, report.bringup.devicetree_pa,
+                    report.bringup.devicetree_size,
+                    report.bringup.boot_args_pa);
+                console_printf(e,
+                    "[vm] topOfKernelData 0x%08x, /vram pool 0x%08x+0x%x, "
+                    "free page pool %.1f MB\n",
+                    report.bringup.top_of_kernel_data_pa,
+                    report.bringup.framebuffer_pa, report.bringup.vram_bytes,
+                    report.bringup.free_pool_bytes / 1048576.0);
+                console_printf(e, "[vm] boot arguments: \"%s\"\n",
+                               report.bringup.cmdline);
+                if (report.options.summary[0])
+                    console_printf(e, "[vm] settings: %s\n",
+                                   report.options.summary);
+                pthread_mutex_lock(&e->lock);
+                snprintf(e->mode, sizeof e->mode, "%s", report.summary);
+                snprintf(e->note, sizeof e->note, "%s",
+                         warning[0] ? warning : note);
+                pthread_mutex_unlock(&e->lock);
+                *out_boot = boot;
+                return true;
+            }
+            console_printf(e,
+                "[vm] FIRMWARE BOOT FAILED: %s\n"
+                "[vm] falling back to the built-in test guest\n",
+                report.detail);
+            pthread_mutex_lock(&e->lock);
+            snprintf(e->note, sizeof e->note, "%s",
+                     report.detail[0] ? report.detail
+                                      : "Apple's kernel could not be started.");
+            pthread_mutex_unlock(&e->lock);
+            vm_firmware_boot_destroy(&boot);
+            s5l8900_free(machine);
+            memset(machine, 0, sizeof *machine);
+            if (!s5l8900_init(machine, VM_GUEST_RAM_BASE, VM_GUEST_RAM_SIZE))
+                return false;
+        } else {
+            pthread_mutex_lock(&e->lock);
+            snprintf(e->note, sizeof e->note,
+                     "Not enough memory to start Apple's kernel.");
+            pthread_mutex_unlock(&e->lock);
+        }
+    }
+
+    pthread_mutex_lock(&e->lock);
+    if (e->note[0] == '\0' && state.detail[0])
+        snprintf(e->note, sizeof e->note, "%s", state.detail);
+    pthread_mutex_unlock(&e->lock);
+
+    if (!vm_guest_install(machine)) return false;
+    pthread_mutex_lock(&e->lock);
+    snprintf(e->mode, sizeof e->mode, "built-in test guest");
+    if (e->note[0] == '\0') snprintf(e->note, sizeof e->note, "%s", note);
+    pthread_mutex_unlock(&e->lock);
+    return true;
+}
+
+/* ------------------------------------------------------------------ input --- */
+
+static void drain_one_touch(engine_t *e, s5l8900_t *machine)
+{
+    s5l_mt_contact_t contact;
+    pthread_mutex_lock(&e->lock);
+    if (!vm_touch_queue_peek(&e->touch, &contact)) {
+        pthread_mutex_unlock(&e->lock);
+        return;
+    }
+    if (s5l8900_set_contacts(machine, &contact, 1u)) {
+        vm_touch_queue_pop(&e->touch);
+        vm_touch_delivery_note_accepted(&e->touch_delivery, &contact);
+        e->touch_delivered++;
+        pthread_mutex_unlock(&e->lock);
+        s5l8900_tick(machine, 0);
+        return;
+    }
+    if (s5l_mtz2_irq(&machine->mtz2)) {
+        pthread_mutex_unlock(&e->lock);
+        return;
+    }
+    vm_touch_queue_pop(&e->touch);
+    e->touch.dropped++;
+    e->touch_dropped++;
+    pthread_mutex_unlock(&e->lock);
+}
+
+static void drain_one_button(engine_t *e, s5l8900_t *machine)
+{
+    vm_button_event_t event;
+    bool have;
+    vm_button_power_hold_t power;
+    vm_button_momentary_holds_t momentary;
+
+    pthread_mutex_lock(&e->lock);
+    have = vm_button_queue_peek(&e->button_queue, &event);
+    if (!have && vm_button_ringer_reconcile(&machine->buttons,
+            e->ringer_silent, &event)) {
+        vm_button_queue_push(&e->button_queue, event.which, event.pressed);
+        have = true;
+    }
+    power = e->power_hold;
+    momentary = e->momentary;
+    pthread_mutex_unlock(&e->lock);
+    if (!have) return;
+
+    {
+        uint64_t now_ns = engine_now_ns();
+        uint64_t now_cycles = machine->cpu.cycles;
+        bool display_running = s5l_clcd_running(&machine->clcd);
+        bool waking_home;
+        if (!vm_button_momentary_release_ready(&event, &momentary, now_ns,
+                                               display_running))
+            return;
+        if (!vm_button_power_release_ready(&event, &power, now_ns, now_cycles,
+                                           display_running))
+            return;
+        waking_home = vm_button_home_wake_hold_needed(&event, display_running,
+            s5l_pcf50635_in_hibernation(&machine->pmu),
+            s5l_pcf50635_in_standby(&machine->pmu));
+        if (s5l8900_set_button(machine, event.which, event.pressed)) {
+            if (now_ns == 0) now_ns = engine_now_ns();
+            now_cycles = machine->cpu.cycles;
+            pthread_mutex_lock(&e->lock);
+            vm_button_queue_pop(&e->button_queue);
+            e->button_delivered++;
+            vm_button_momentary_note_accepted(&event, &e->momentary, now_ns,
+                                              waking_home);
+            if (event.which == S5L_BUTTON_HOLD) {
+                if (event.pressed) {
+                    e->power_hold.active = true;
+                    e->power_hold.display_running_at_press = display_running;
+                    e->power_hold.delivered_ns = now_ns;
+                    e->power_hold.delivered_cycles = now_cycles;
+                } else {
+                    memset(&e->power_hold, 0, sizeof e->power_hold);
+                }
+            }
+            pthread_mutex_unlock(&e->lock);
+            return;
+        }
+    }
+    pthread_mutex_lock(&e->lock);
+    e->button_dropped++;
+    pthread_mutex_unlock(&e->lock);
+}
+
+static void quiesce_input(engine_t *e, s5l8900_t *machine)
+{
+    s5l_mt_contact_t release;
+    bool have_release = false;
+    pthread_mutex_lock(&e->lock);
+    vm_touch_queue_cancel_pending(&e->touch);
+    vm_button_queue_cancel_pending(&e->button_queue);
+    have_release = vm_touch_delivery_make_break(&e->touch_delivery, &release);
+    pthread_mutex_unlock(&e->lock);
+    if (have_release && s5l8900_set_contacts(machine, &release, 1u)) {
+        pthread_mutex_lock(&e->lock);
+        vm_touch_delivery_note_accepted(&e->touch_delivery, &release);
+        pthread_mutex_unlock(&e->lock);
+    }
+    s5l8900_tick(machine, 0);
+}
+
+/* --------------------------------------------------------------- display --- */
+
+static void publish_blank_locked(engine_t *e)
+{
+    if (!e->snapshot) return;
+    memset(e->snapshot, 0, VM_FB_BYTES);
+    e->snapshot_argb = false;
+    e->snapshot_fresh = true;
+    e->snapshot_blank = true;
+    e->snap_w = VM_FB_WIDTH;
+    e->snap_h = VM_FB_HEIGHT;
+    e->snap_stride = VM_FB_WIDTH * VM_FB_BPP;
+}
+
+static void post_frame(engine_t *e)
+{
+    ANativeWindow *window;
+    uint32_t width, height, stride;
+    bool argb;
+    const uint8_t *source;
+
+    pthread_mutex_lock(&e->lock);
+    if (!e->snapshot || !e->snapshot_fresh || !e->window) {
+        pthread_mutex_unlock(&e->lock);
+        return;
+    }
+    window = e->window;
+    ANativeWindow_acquire(window);
+    width = e->snap_w;
+    height = e->snap_h;
+    stride = e->snap_stride;
+    argb = e->snapshot_argb;
+    source = e->snapshot;
+    e->snapshot_fresh = false;
+    pthread_mutex_unlock(&e->lock);
+
+    if (ANativeWindow_setBuffersGeometry(window, (int32_t)width,
+                                         (int32_t)height,
+                                         WINDOW_FORMAT_RGBA_8888) == 0) {
+        ANativeWindow_Buffer buffer;
+        if (ANativeWindow_lock(window, &buffer, NULL) == 0) {
+            uint8_t *destination = buffer.bits;
+            uint32_t rows = height < (uint32_t)buffer.height
+                                ? height : (uint32_t)buffer.height;
+            uint32_t columns = width < (uint32_t)buffer.width
+                                   ? width : (uint32_t)buffer.width;
+            for (uint32_t y = 0; y < rows; y++) {
+                const uint8_t *src = source + (size_t)y * stride;
+                uint8_t *dst = destination +
+                    (size_t)y * (size_t)buffer.stride * 4u;
+                for (uint32_t x = 0; x < columns; x++) {
+                    uint8_t b0 = src[x * 4u + 0u];
+                    uint8_t b1 = src[x * 4u + 1u];
+                    uint8_t b2 = src[x * 4u + 2u];
+                    if (argb) {
+                        dst[x * 4u + 0u] = b1;
+                        dst[x * 4u + 1u] = b2;
+                        dst[x * 4u + 2u] = src[x * 4u + 3u];
+                    } else {
+                        dst[x * 4u + 0u] = b2;
+                        dst[x * 4u + 1u] = b1;
+                        dst[x * 4u + 2u] = b0;
+                    }
+                    dst[x * 4u + 3u] = 0xff;
+                }
+            }
+            ANativeWindow_unlockAndPost(window);
+        }
+    }
+    ANativeWindow_release(window);
+}
+
+static const char *status_text(arm_status_t status, const s5l8900_t *machine)
+{
+    static char line[96];
+    switch (status) {
+    case ARM_OK: return "running";
+    case ARM_UNDEFINED:
+        snprintf(line, sizeof line, "undefined instruction at 0x%08x",
+                 machine->cpu.r[15]);
+        return line;
+    case ARM_HALT:
+        snprintf(line, sizeof line, "halted at 0x%08x", machine->cpu.r[15]);
+        return line;
+    default:
+        snprintf(line, sizeof line, "cpu status %d", (int)status);
+        return line;
+    }
+}
+
+static void publish_retired(engine_t *e, s5l8900_t *machine,
+                            uint64_t retired, double instant_rate,
+                            arm_status_t status)
+{
+    uint32_t width = 0, height = 0, stride = 0;
+    vm_pixel_order_t order = VM_ORDER_BGRA;
+    const uint8_t *fb = vm_guest_display(machine, &width, &height,
+                                         &stride, &order);
+    size_t bytes = 0;
+    double now = engine_now();
+
+    if (!fb || width == 0 || height == 0 ||
+        stride < (size_t)width * VM_FB_BPP ||
+        (size_t)stride * height > VM_FB_BYTES ||
+        (size_t)stride * height == 0) {
+        fb = NULL;
+    } else {
+        bytes = (size_t)stride * height;
+    }
+
+    pthread_mutex_lock(&e->lock);
+    if (machine->uart0.tx_len > 0) {
+        size_t captured = machine->uart0.tx_len;
+        if (captured > UART_TX_BUFFER - 1u) captured = UART_TX_BUFFER - 1u;
+        console_append_len_locked(e, machine->uart0.tx, captured);
+        machine->uart0.tx_len = 0;
+    }
+    if (fb && e->snapshot) {
+        uint32_t guest_width = width, guest_height = height;
+        bool changed = !e->have_frame || e->snapshot_blank ||
+            e->snap_w != guest_width || e->snap_h != guest_height ||
+            e->snap_stride != stride ||
+            e->snapshot_argb != (order == VM_ORDER_ARGB) ||
+            memcmp(e->snapshot, fb, bytes) != 0;
+        if (changed) {
+            memcpy(e->snapshot, fb, bytes);
+            if (bytes < VM_FB_BYTES)
+                memset(e->snapshot + bytes, 0, VM_FB_BYTES - bytes);
+            e->snapshot_argb = order == VM_ORDER_ARGB;
+            e->snap_w = guest_width;
+            e->snap_h = guest_height;
+            e->snap_stride = stride;
+            e->snapshot_fresh = true;
+            e->snapshot_blank = false;
+            e->have_frame = true;
+            e->fps_window_frames++;
+        }
+        if (e->fps_window_start <= 0.0) {
+            e->fps_window_start = now;
+        } else if (now - e->fps_window_start >= 0.5) {
+            e->fps = (double)e->fps_window_frames /
+                     (now - e->fps_window_start);
+            e->fps_window_frames = 0;
+            e->fps_window_start = now;
+        }
+    } else if (e->snapshot && !e->snapshot_blank) {
+        publish_blank_locked(e);
+    }
+
+    e->retired = retired;
+    if (e->paused && e->phase == PHASE_RUNNING) {
+        e->rate = 0.0;
+        snprintf(e->status, sizeof e->status, "paused");
+    } else {
+        e->rate = e->rate > 0.0 ? e->rate * 0.8 + instant_rate * 0.2
+                                : instant_rate;
+        snprintf(e->status, sizeof e->status, "%s",
+                 status_text(status, machine));
+    }
+    e->last_arm_status = status;
+    pthread_mutex_unlock(&e->lock);
+
+    post_frame(e);
+}
+
+/* ------------------------------------------------------------------- run --- */
+
+static void thread_set_phase(engine_t *e, int phase)
+{
+    pthread_mutex_lock(&e->lock);
+    e->phase = phase;
+    pthread_mutex_unlock(&e->lock);
+}
+
+static void engine_thread_main(engine_t *e)
+{
+    s5l8900_t *machine = calloc(1, sizeof *machine);
+    vm_firmware_boot_t *boot = NULL;
+    bool ready = false;
+    uint64_t retired = 0, retired_at_publish = 0;
+    arm_status_t status = ARM_OK;
+    double last_publish, next_publish;
+    bool stopped_by_request = false;
+    bool reached_cap = false;
+    bool checkpoint_saved = false;
+    bool pause_active = false;
+    uint64_t pause_started_ns = 0;
+    bool audio_running = false;
+
+    if (!machine) {
+        pthread_mutex_lock(&e->lock);
+        e->note[0] = '\0';
+        snprintf(e->note, sizeof e->note,
+                 "Not enough memory for the emulated machine.");
+        e->phase = PHASE_IDLE;
+        e->thread_live = false;
+        pthread_mutex_unlock(&e->lock);
+        return;
+    }
+    if (!s5l8900_init(machine, VM_GUEST_RAM_BASE, VM_GUEST_RAM_SIZE)) {
+        free(machine);
+        pthread_mutex_lock(&e->lock);
+        snprintf(e->note, sizeof e->note,
+                 "Could not allocate 128 MB of guest DRAM.");
+        e->phase = PHASE_IDLE;
+        e->thread_live = false;
+        pthread_mutex_unlock(&e->lock);
+        return;
+    }
+
+    ready = install_payload(e, machine, &boot);
+    if (!ready) {
+        s5l8900_free(machine);
+        free(machine);
+        pthread_mutex_lock(&e->lock);
+        if (e->note[0] == '\0')
+            snprintf(e->note, sizeof e->note,
+                     "The machine could not be started.");
+        e->phase = PHASE_IDLE;
+        e->machine_ready = false;
+        e->thread_live = false;
+        pthread_mutex_unlock(&e->lock);
+        return;
+    }
+
+    if (e->audio_ok) {
+        machine->i2s[0].frame = vm_audio_guest_frame;
+        machine->i2s[0].frame_ctx = &e->audio;
+        vm_audio_buffer_active(&e->audio, true);
+        audio_running = true;
+    }
+
+    e->usb_active = machine->usbotg.enabled != 0;
+    if (e->usb_active) {
+        bool was_connected = machine->usbotg.connected != 0;
+        usb_host_disconnect(&e->usb_host, machine);
+        if (!was_connected) usb_host_init(&e->usb_host, machine);
+    }
+
+    pthread_mutex_lock(&e->lock);
+    e->machine_ready = true;
+    e->phase = e->paused ? PHASE_PAUSED : PHASE_RUNNING;
+    snprintf(e->status, sizeof e->status,
+             e->paused ? "paused" : "running");
+    pthread_mutex_unlock(&e->lock);
+
+    console_printf(e, "[vm] guest DRAM: %u MB at 0x%08x, framebuffer at 0x%08x\n",
+                   VM_GUEST_RAM_SIZE / (1024u * 1024u), VM_GUEST_RAM_BASE,
+                   vm_guest_fb_pa(VM_GUEST_RAM_BASE, VM_GUEST_RAM_SIZE));
+
+    last_publish = engine_now();
+    next_publish = last_publish + ENGINE_PUBLISH_SECONDS;
+
+    for (;;) {
+        bool stop, paused;
+        pthread_mutex_lock(&e->lock);
+        stop = e->stop_requested;
+        paused = e->paused;
+        if (!stop)
+            e->phase = paused ? PHASE_PAUSED : PHASE_RUNNING;
+        pthread_mutex_unlock(&e->lock);
+
+        if (stop) {
+            stopped_by_request = true;
+            break;
+        }
+
+        if (paused) {
+            if (!pause_active) {
+                pause_active = true;
+                pause_started_ns = engine_now_ns();
+            }
+            usleep(50 * 1000);
+            last_publish = engine_now();
+            next_publish = last_publish + ENGINE_PUBLISH_SECONDS;
+            retired_at_publish = retired;
+            continue;
+        }
+        if (pause_active) {
+            uint64_t resumed = engine_now_ns();
+            if (pause_started_ns && resumed >= pause_started_ns) {
+                (void)s5l8900_resume_active_host_clock(machine,
+                                                       pause_started_ns,
+                                                       resumed);
+                pthread_mutex_lock(&e->lock);
+                vm_button_holds_resume(&e->power_hold, &e->momentary,
+                                       pause_started_ns, resumed);
+                pthread_mutex_unlock(&e->lock);
+            }
+            pause_active = false;
+            pause_started_ns = 0;
+            last_publish = engine_now();
+            next_publish = last_publish + ENGINE_PUBLISH_SECONDS;
+            retired_at_publish = retired;
+        }
+
+        drain_one_touch(e, machine);
+        drain_one_button(e, machine);
+
+        retired += s5l8900_run(machine, ENGINE_CHUNK_INSTRUCTIONS, &status);
+
+        if (e->usb_active) {
+            usb_host_poll(&e->usb_host, machine);
+            pthread_mutex_lock(&e->lock);
+            e->usb_ready = usb_host_ready(&e->usb_host);
+            pthread_mutex_unlock(&e->lock);
+        }
+
+        {
+            uint64_t cap = atomic_load(&e->instruction_cap);
+            double now = engine_now();
+            double elapsed = now - last_publish;
+            if (now >= next_publish || status != ARM_OK) {
+                double instant = elapsed > 0.0
+                    ? (double)(retired - retired_at_publish) / elapsed : 0.0;
+                publish_retired(e, machine, retired, instant, status);
+                last_publish = now;
+                retired_at_publish = retired;
+                next_publish += ENGINE_PUBLISH_SECONDS;
+                if (next_publish <= now)
+                    next_publish = now + ENGINE_PUBLISH_SECONDS;
+            }
+            if (status != ARM_OK) break;
+            if (cap > 0 && retired >= cap) {
+                reached_cap = true;
+                publish_retired(e, machine, retired, 0.0, status);
+                break;
+            }
+        }
+    }
+
+    if (stopped_by_request)
+        publish_retired(e, machine, retired, 0.0, ARM_OK);
+
+    if (e->stop_mode == ENGINE_STOP_CHECKPOINT && boot && !reached_cap) {
+        quiesce_input(e, machine);
+        {
+            uint64_t deadline = engine_now_ns() + UINT64_C(15000000000);
+            for (;;) {
+                char why[VM_FW_BOOT_DETAIL_CAPACITY] = {0};
+                vm_firmware_checkpoint_status_t saved =
+                    vm_firmware_boot_save_resume_cancellable(
+                        boot, machine, why, sizeof why, abort_cb, e);
+                if (saved == VM_FW_CHECKPOINT_OK) {
+                    checkpoint_saved = true;
+                    console_append(e,
+                        "[vm] automatic resume checkpoint saved\n");
+                    pthread_mutex_lock(&e->lock);
+                    snprintf(e->note, sizeof e->note,
+                             "The machine was saved and will resume here next "
+                             "time.");
+                    pthread_mutex_unlock(&e->lock);
+                    break;
+                }
+                if (saved == VM_FW_CHECKPOINT_ERROR ||
+                    atomic_load(&e->abort_flag) ||
+                    engine_now_ns() >= deadline) {
+                    pthread_mutex_lock(&e->lock);
+                    snprintf(e->note, sizeof e->note, "%s",
+                             why[0] ? why
+                                    : "The checkpoint could not be saved.");
+                    pthread_mutex_unlock(&e->lock);
+                    if (why[0]) console_printf(e, "[vm] checkpoint failed: %s\n",
+                                               why);
+                    break;
+                }
+                /* BUSY: the memory-disk bridge is mid-continuation. */
+                retired += s5l8900_run(machine, ENGINE_CHUNK_INSTRUCTIONS,
+                                       &status);
+                if (status != ARM_OK) break;
+            }
+        }
+    }
+
+    if (audio_running) {
+        vm_audio_buffer_active(&e->audio, false);
+        audio_running = false;
+    }
+    if (e->usb_active) {
+        usb_host_disconnect(&e->usb_host, machine);
+    }
+
+    s5l8900_free(machine);
+    free(machine);
+    vm_firmware_boot_destroy(&boot);
+
+    if (e->stop_mode == ENGINE_STOP_POWER_OFF) {
+        vm_instance_paths_t paths;
+        if (e->instance_id[0] &&
+            vm_instance_paths_derive(e->firmware, e->machines,
+                                     e->instance_id, &paths) ==
+                VM_INSTANCE_PATHS_OK) {
+            char why[VM_FW_BOOT_DETAIL_CAPACITY] = {0};
+            (void)vm_resume_checkpoint_disarm(paths.machine, why, sizeof why);
+        }
+    }
+
+    pthread_mutex_lock(&e->lock);
+    {
+        int index = e->instance_id[0] ? instance_index_locked(e, e->instance_id)
+                                      : -1;
+        if (index >= 0) {
+            e->instances.slot[index].retired_total += retired;
+            (void)persist_instances_locked(e);
+        }
+    }
+    e->machine_ready = false;
+    e->preparing_root = false;
+    e->usb_active = false;
+    e->usb_ready = false;
+    e->boot = NULL;
+    e->phase = PHASE_IDLE;
+    e->thread_live = false;
+    if (reached_cap)
+        snprintf(e->status, sizeof e->status, "instruction cap reached");
+    else if (checkpoint_saved)
+        snprintf(e->status, sizeof e->status, "checkpoint saved");
+    else if (e->stop_mode == ENGINE_STOP_POWER_OFF)
+        snprintf(e->status, sizeof e->status, "powered off");
+    else if (stopped_by_request)
+        snprintf(e->status, sizeof e->status, "stopped");
+    else if (status != ARM_OK)
+        snprintf(e->status, sizeof e->status, "guest stopped (cpu status %d)",
+                 (int)status);
+    e->rate = 0.0;
+    e->paused = false;
+    e->stop_requested = false;
+    e->stop_mode = ENGINE_STOP_PLAIN;
+    publish_blank_locked(e);
+    pthread_mutex_unlock(&e->lock);
+    post_frame(e);
+}
+
+static void *engine_thread_entry(void *ctx)
+{
+    engine_thread_main(ctx);
+    return NULL;
+}
+
+/* --------------------------------------------------------------- lifecycle --- */
+
+engine_t *engine_create(const char *root_directory)
+{
+    engine_t *e;
+    if (!root_directory || !root_directory[0]) return NULL;
+    e = calloc(1, sizeof *e);
+    if (!e) return NULL;
+    if (snprintf(e->root, sizeof e->root, "%s", root_directory) <= 0 ||
+        strlen(root_directory) >= sizeof e->root) {
+        free(e);
+        return NULL;
+    }
+    if (!join_path(e->firmware, sizeof e->firmware, e->root, "firmware") ||
+        !join_path(e->machines, sizeof e->machines, e->root, "Machines")) {
+        free(e);
+        return NULL;
+    }
+    pthread_mutex_init(&e->lock, NULL);
+    vm_touch_queue_reset(&e->touch);
+    vm_touch_delivery_reset(&e->touch_delivery);
+    vm_touch_tracker_reset(&e->tracker);
+    vm_button_queue_reset(&e->button_queue);
+    e->audio_ok = vm_audio_buffer_init(&e->audio);
+    atomic_init(&e->abort_flag, false);
+    atomic_init(&e->prepare_done, 0);
+    atomic_init(&e->prepare_total, 0);
+    atomic_init(&e->instruction_cap, 0);
+    atomic_init(&e->import_active, false);
+    atomic_init(&e->import_cancel, false);
+    atomic_init(&e->import_ok, false);
+    atomic_init(&e->import_artefact, 0);
+    atomic_init(&e->import_stage, 0);
+    atomic_init(&e->import_done, 0);
+    atomic_init(&e->import_total, 0);
+    atomic_init(&e->microphone_on, false);
+    e->snapshot = calloc(1, VM_FB_BYTES);
+    mkdir_p(e->root);
+    mkdir_p(e->firmware);
+    mkdir_p(e->machines);
+    load_instances(e);
+    e->phase = PHASE_IDLE;
+    snprintf(e->status, sizeof e->status, "idle");
+    snprintf(e->mode, sizeof e->mode, "not started");
+    return e;
+}
+
+static void join_worker(engine_t *e)
+{
+    bool join = false;
+    pthread_mutex_lock(&e->lock);
+    if (e->join_pending) {
+        e->join_pending = false;
+        join = true;
+    }
+    pthread_mutex_unlock(&e->lock);
+    if (join) pthread_join(e->thread, NULL);
+}
+
+void engine_destroy(engine_t *engine)
+{
+    engine_t *e = engine;
+    ANativeWindow *window = NULL;
+    if (!e) return;
+    pthread_mutex_lock(&e->lock);
+    e->stop_requested = true;
+    atomic_store(&e->abort_flag, true);
+    atomic_store(&e->import_cancel, true);
+    if (e->thread_live) e->phase = PHASE_STOPPING;
+    pthread_mutex_unlock(&e->lock);
+
+    if (e->thread_live || e->join_pending) {
+        pthread_join(e->thread, NULL);
+        e->thread_live = false;
+        e->join_pending = false;
+    }
+
+    pthread_mutex_lock(&e->lock);
+    window = e->window;
+    e->window = NULL;
+    pthread_mutex_unlock(&e->lock);
+    if (window) ANativeWindow_release(window);
+
+    free(e->snapshot);
+    pthread_mutex_destroy(&e->lock);
+    free(e);
+}
+
+int engine_start(engine_t *engine, const char *instance_id,
+                 char *detail, size_t detail_capacity)
+{
+    engine_t *e = engine;
+    int index = -1;
+    unsigned i;
+    pthread_t thread;
+
+    if (detail && detail_capacity) detail[0] = '\0';
+    if (!e) return -1;
+    join_worker(e);
+
+    pthread_mutex_lock(&e->lock);
+    if (e->thread_live || e->phase != PHASE_IDLE) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "The previous machine is still stopping.");
+        return -1;
+    }
+    if (instance_id && instance_id[0])
+        index = instance_index_locked(e, instance_id);
+
+    e->instance_id[0] = '\0';
+    memset(e->options, 0, sizeof e->options);
+    e->option_count = 0;
+    if (instance_id && instance_id[0]) {
+        if (index < 0) {
+            pthread_mutex_unlock(&e->lock);
+            if (detail && detail_capacity)
+                snprintf(detail, detail_capacity, "No such machine.");
+            return -1;
+        }
+        snprintf(e->instance_id, sizeof e->instance_id, "%s", instance_id);
+        e->option_count = vm_option_count();
+        if (e->option_count > VM_INSTANCE_OPTION_MAX)
+            e->option_count = VM_INSTANCE_OPTION_MAX;
+        for (i = 0; i < e->option_count; i++)
+            e->options[i] = e->instances.slot[index].options[i];
+        e->instances.slot[index].last_opened_unix = engine_unix_now();
+        (void)persist_instances_locked(e);
+    } else {
+        e->option_count = vm_option_count();
+        if (e->option_count > VM_INSTANCE_OPTION_MAX)
+            e->option_count = VM_INSTANCE_OPTION_MAX;
+        for (i = 0; i < e->option_count; i++)
+            e->options[i] = vm_option_new_machine_value(i, false, false);
+    }
+
+    e->stop_requested = false;
+    e->stop_mode = ENGINE_STOP_PLAIN;
+    e->paused = false;
+    e->machine_ready = false;
+    e->preparing_root = false;
+    e->phase = PHASE_STARTING;
+    e->retired = 0;
+    e->rate = 0.0;
+    e->fps = 0.0;
+    e->fps_window_start = 0.0;
+    e->fps_window_frames = 0;
+    e->have_frame = false;
+    e->snapshot_fresh = false;
+    e->snapshot_blank = false;
+    e->touch_delivered = e->touch_dropped = 0;
+    e->button_delivered = e->button_dropped = 0;
+    e->last_arm_status = ARM_OK;
+    atomic_store(&e->abort_flag, false);
+    atomic_store(&e->prepare_done, 0);
+    atomic_store(&e->prepare_total, 0);
+    vm_touch_queue_reset(&e->touch);
+    vm_touch_delivery_reset(&e->touch_delivery);
+    vm_touch_tracker_reset(&e->tracker);
+    vm_button_queue_reset(&e->button_queue);
+    memset(e->buttons, 0, sizeof e->buttons);
+    e->ringer_silent = false;
+    memset(&e->power_hold, 0, sizeof e->power_hold);
+    memset(&e->momentary, 0, sizeof e->momentary);
+    e->console_len = 0;
+    e->console[0] = '\0';
+    e->note[0] = '\0';
+    snprintf(e->status, sizeof e->status, "starting");
+    snprintf(e->mode, sizeof e->mode, "starting");
+    publish_blank_locked(e);
+    pthread_mutex_unlock(&e->lock);
+
+    if (pthread_create(&thread, NULL, engine_thread_entry, e) != 0) {
+        pthread_mutex_lock(&e->lock);
+        e->phase = PHASE_IDLE;
+        snprintf(e->status, sizeof e->status, "stopped");
+        snprintf(e->note, sizeof e->note,
+                 "The emulator thread could not be started.");
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "The emulator thread could not be started.");
+        return -1;
+    }
+    pthread_mutex_lock(&e->lock);
+    e->thread = thread;
+    e->thread_live = true;
+    e->join_pending = true;
+    pthread_mutex_unlock(&e->lock);
+    return 0;
+}
+
+void engine_stop(engine_t *engine, engine_stop_mode_t mode)
+{
+    engine_t *e = engine;
+    if (!e) return;
+    pthread_mutex_lock(&e->lock);
+    if (e->phase == PHASE_IDLE) {
+        pthread_mutex_unlock(&e->lock);
+        return;
+    }
+    if (mode == ENGINE_STOP_POWER_OFF) {
+        e->stop_mode = ENGINE_STOP_POWER_OFF;
+        atomic_store(&e->abort_flag, true);
+        snprintf(e->status, sizeof e->status, "powering off");
+    } else if (mode == ENGINE_STOP_CHECKPOINT &&
+               e->stop_mode != ENGINE_STOP_POWER_OFF) {
+        e->stop_mode = ENGINE_STOP_CHECKPOINT;
+        snprintf(e->status, sizeof e->status, "saving checkpoint");
+    } else {
+        snprintf(e->status, sizeof e->status, "stopping");
+    }
+    e->stop_requested = true;
+    e->paused = false;
+    e->phase = PHASE_STOPPING;
+    pthread_mutex_unlock(&e->lock);
+}
+
+void engine_set_paused(engine_t *engine, bool paused)
+{
+    engine_t *e = engine;
+    if (!e) return;
+    pthread_mutex_lock(&e->lock);
+    e->paused = paused;
+    if (paused) snprintf(e->status, sizeof e->status, "paused");
+    else if (e->machine_ready)
+        snprintf(e->status, sizeof e->status, "running");
+    pthread_mutex_unlock(&e->lock);
+}
+
+void engine_set_instruction_cap(engine_t *engine, uint64_t cap)
+{
+    if (engine) atomic_store(&engine->instruction_cap, cap);
+}
+
+int engine_status_json(engine_t *engine, char *out, size_t capacity)
+{
+    static const char *names[] = {
+        "idle", "starting", "running", "paused", "stopping", "error"
+    };
+    engine_t *e = engine;
+    json_t j;
+    int phase;
+    char status[192], mode[128], note[320], id[VM_INSTANCE_ID_LEN + 1u];
+    bool ready, preparing, usb_ready;
+    uint64_t retired, done, total, fps_frames;
+    double rate, fps;
+    arm_status_t arm_status;
+    size_t console_len;
+
+    if (!e || !out || capacity == 0) return -1;
+    pthread_mutex_lock(&e->lock);
+    phase = e->phase;
+    if (phase < PHASE_IDLE || phase > PHASE_ERROR) phase = PHASE_ERROR;
+    snprintf(status, sizeof status, "%s", e->status);
+    snprintf(mode, sizeof mode, "%s", e->mode);
+    snprintf(note, sizeof note, "%s", e->note);
+    snprintf(id, sizeof id, "%s", e->instance_id);
+    ready = e->machine_ready;
+    preparing = e->preparing_root;
+    usb_ready = e->usb_ready;
+    retired = e->retired;
+    rate = e->rate;
+    fps = e->fps;
+    fps_frames = e->fps_window_frames;
+    arm_status = e->last_arm_status;
+    console_len = e->console_len;
+    pthread_mutex_unlock(&e->lock);
+
+    done = atomic_load(&e->prepare_done);
+    total = atomic_load(&e->prepare_total);
+
+    json_reset(&j, out, capacity);
+    json_printf(&j,
+        "{\"phase\":\"%s\",\"phaseCode\":%d,\"running\":%s,\"paused\":%s,"
+        "\"machineReady\":%s,\"preparing\":%s,\"instanceId\":",
+        names[phase], phase, phase >= PHASE_RUNNING && phase <= PHASE_PAUSED &&
+        ready ? "true" : "false",
+        phase == PHASE_PAUSED ? "true" : "false",
+        ready ? "true" : "false", preparing ? "true" : "false");
+    json_string(&j, id);
+    json_printf(&j,
+        ",\"status\":");
+    json_string(&j, status);
+    json_raw(&j, ",\"mode\":");
+    json_string(&j, mode);
+    json_raw(&j, ",\"note\":");
+    json_string(&j, note);
+    json_printf(&j,
+        ",\"retired\":%llu,\"rate\":%.3f,\"fps\":%.3f,\"fpsFrames\":%llu,"
+        "\"prepareDone\":%llu,\"prepareTotal\":%llu,\"cpuStatus\":%d,"
+        "\"usb\":%s,\"audio\":%s,\"consolePending\":%zu}",
+        (unsigned long long)retired, rate, fps,
+        (unsigned long long)fps_frames,
+        (unsigned long long)done, (unsigned long long)total, (int)arm_status,
+        usb_ready ? "true" : "false", e->audio_ok ? "true" : "false",
+        console_len);
+    return (int)j.len;
+}
+
+size_t engine_console_drain(engine_t *engine, char *out, size_t capacity)
+{
+    engine_t *e = engine;
+    size_t take;
+    if (!e || !out || capacity == 0) return 0;
+    pthread_mutex_lock(&e->lock);
+    take = e->console_len < capacity - 1u ? e->console_len : capacity - 1u;
+    memcpy(out, e->console, take);
+    out[take] = '\0';
+    if (take < e->console_len) {
+        memmove(e->console, e->console + take, e->console_len - take);
+        e->console_len -= take;
+        e->console[e->console_len] = '\0';
+    } else {
+        e->console_len = 0;
+        e->console[0] = '\0';
+    }
+    pthread_mutex_unlock(&e->lock);
+    return take;
+}
+
+/* ---------------------------------------------------------------- surface --- */
+
+void engine_set_surface(engine_t *engine, ANativeWindow *window)
+{
+    engine_t *e = engine;
+    ANativeWindow *old;
+    if (!e) {
+        if (window) ANativeWindow_release(window);
+        return;
+    }
+    pthread_mutex_lock(&e->lock);
+    old = e->window;
+    e->window = window;
+    /* Force the next publication to repaint even if the guest is idle. */
+    e->snapshot_fresh = e->snapshot != NULL;
+    pthread_mutex_unlock(&e->lock);
+    if (old) ANativeWindow_release(old);
+    /* Paint the frame we already have, so attaching a SurfaceView to a paused
+     * machine shows the guest rather than an empty buffer. */
+    post_frame(e);
+}
+
+/* ------------------------------------------------------------------ input --- */
+
+bool engine_touch(engine_t *engine, double x, double y,
+                  double view_w, double view_h, int phase)
+{
+    engine_t *e = engine;
+    vm_touch_point_t mapped;
+    int guest_x = 0, guest_y = 0;
+    s5l_mt_contact_t contact;
+    bool queued = false;
+
+    if (!e || phase < VM_TOUCH_BEGAN || phase > VM_TOUCH_CANCELLED)
+        return false;
+    mapped = vm_touch_map(view_w, view_h, VM_FB_WIDTH, VM_FB_HEIGHT, x, y);
+
+    pthread_mutex_lock(&e->lock);
+    if (!vm_touch_track(&e->tracker, (vm_touch_phase_t)phase, mapped,
+                        &guest_x, &guest_y)) {
+        pthread_mutex_unlock(&e->lock);
+        return false;
+    }
+    if (!vm_touch_contact_from_ui((vm_touch_phase_t)phase, guest_x, guest_y,
+                                  &contact)) {
+        pthread_mutex_unlock(&e->lock);
+        return false;
+    }
+    if (e->machine_ready && e->phase == PHASE_RUNNING)
+        queued = vm_touch_queue_push(&e->touch, &contact);
+    pthread_mutex_unlock(&e->lock);
+    return queued;
+}
+
+bool engine_button(engine_t *engine, unsigned app_button, bool pressed)
+{
+    engine_t *e = engine;
+    unsigned which = 0;
+    bool guest_pressed = false;
+    bool queued = false;
+    if (!e || app_button >= VM_BUTTON_COUNT) return false;
+    if (!vm_button_to_guest(app_button, pressed, &which, &guest_pressed))
+        return false;
+    pthread_mutex_lock(&e->lock);
+    if (e->machine_ready && e->phase == PHASE_RUNNING)
+        queued = vm_button_queue_push(&e->button_queue, which, guest_pressed);
+    if (queued) {
+        e->buttons[app_button] = pressed;
+        if (app_button == VM_BUTTON_RINGER_SILENT)
+            e->ringer_silent = pressed;
+    }
+    pthread_mutex_unlock(&e->lock);
+    return queued;
+}
+
+bool engine_button_pressed(engine_t *engine, unsigned app_button)
+{
+    bool pressed = false;
+    if (!engine || app_button >= VM_BUTTON_COUNT) return false;
+    pthread_mutex_lock(&engine->lock);
+    pressed = engine->buttons[app_button];
+    pthread_mutex_unlock(&engine->lock);
+    return pressed;
+}
+
+/* -------------------------------------------------------------- snapshots --- */
+
+static bool list_snapshots_for(const vm_instance_paths_t *paths,
+                               char *snapshots, size_t snapshots_cap,
+                               vm_snapshot_info_t *infos, size_t capacity,
+                               size_t *count, char *detail,
+                               size_t detail_capacity)
+{
+    if (count) *count = 0;
+    if (vm_snapshot_dir(paths->machine, snapshots, snapshots_cap) !=
+        VM_SNAPSHOT_OK) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "This machine's snapshot directory could not be named.");
+        return false;
+    }
+    if (!is_directory(snapshots)) return true;
+    if (vm_snapshot_list(snapshots, infos, capacity, count,
+                         detail, detail_capacity) != VM_SNAPSHOT_OK)
+        return false;
+    return true;
+}
+
+static int snapshot_index(const vm_snapshot_info_t *infos, size_t count,
+                          const char *id)
+{
+    for (size_t i = 0; i < count; i++)
+        if (!strcmp(infos[i].id, id)) return (int)i;
+    return -1;
+}
+
+int engine_snapshots_json(engine_t *engine, const char *id,
+                          char *out, size_t capacity)
+{
+    engine_t *e = engine;
+    vm_instance_paths_t paths;
+    vm_snapshot_info_t infos[VM_SNAPSHOT_MAX];
+    size_t count = 0;
+    char snapshots[ENGINE_PATH_CAP];
+    char detail[VM_FW_BOOT_DETAIL_CAPACITY] = {0};
+    json_t j;
+
+    if (!e || !id || !out || capacity == 0) return -1;
+    if (vm_instance_paths_derive(e->firmware, e->machines, id, &paths) !=
+        VM_INSTANCE_PATHS_OK) {
+        json_reset(&j, out, capacity);
+        json_raw(&j, "{\"ok\":false,\"snapshots\":[],\"detail\":"
+                     "\"No such machine.\"}");
+        return (int)j.len;
+    }
+    if (!list_snapshots_for(&paths, snapshots, sizeof snapshots, infos,
+                            VM_SNAPSHOT_MAX, &count, detail, sizeof detail)) {
+        json_reset(&j, out, capacity);
+        json_raw(&j, "{\"ok\":false,\"snapshots\":[],\"detail\":");
+        json_string(&j, detail);
+        json_raw(&j, "}");
+        return (int)j.len;
+    }
+
+    json_reset(&j, out, capacity);
+    json_raw(&j, "{\"ok\":true,\"snapshots\":[");
+    for (size_t i = 0; i < count; i++) {
+        char directory[ENGINE_PATH_CAP];
+        if (i) json_raw(&j, ",");
+        if (vm_snapshot_path(snapshots, infos[i].id, false, directory,
+                             sizeof directory) != VM_SNAPSHOT_OK)
+            directory[0] = '\0';
+        json_raw(&j, "{\"id\":");
+        json_string(&j, infos[i].id);
+        json_printf(&j,
+            ",\"created\":%llu,\"retired\":%llu,\"bytes\":%llu,"
+            "\"complete\":%s,\"directoryBytes\":%llu}",
+            (unsigned long long)infos[i].created_unix,
+            (unsigned long long)infos[i].retired,
+            (unsigned long long)infos[i].bytes,
+            infos[i].complete ? "true" : "false",
+            (unsigned long long)directory_size(directory));
+    }
+    json_raw(&j, "]}");
+    return (int)j.len;
+}
+
+static bool create_cow_header(const vm_instance_paths_t *paths,
+                              const char *cow_path,
+                              char *detail, size_t detail_capacity)
+{
+    struct stat st;
+    file_block_t *adapter = NULL;
+    vm_cow_t *cow = NULL;
+    bool ok = false;
+
+    if (stat(paths->work_image, &st) != 0 || !S_ISREG(st.st_mode) ||
+        st.st_size <= 0) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "The machine has no writable disk yet.");
+        return false;
+    }
+    adapter = file_block_create();
+    if (!adapter) return false;
+    if (file_block_open(adapter, paths->work_image, (uint64_t)st.st_size) !=
+        FILE_BLOCK_STATUS_OK) {
+        file_block_destroy(&adapter);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "The writable disk could not be opened.");
+        return false;
+    }
+    if (vm_cow_open(&cow, file_block_get(adapter), cow_path,
+                    detail, detail_capacity) == VM_COW_OK) {
+        ok = vm_cow_close(&cow) == VM_COW_OK;
+    }
+    if (cow) vm_cow_close(&cow);
+    file_block_close(adapter);
+    file_block_destroy(&adapter);
+    return ok;
+}
+
+int engine_snapshot_take(engine_t *engine, const char *id,
+                         char *snapshot_id, size_t id_capacity,
+                         char *detail, size_t detail_capacity)
+{
+    engine_t *e = engine;
+    vm_instance_paths_t paths;
+    vm_snapshot_info_t infos[VM_SNAPSHOT_MAX];
+    size_t count = 0;
+    char snapshots[ENGINE_PATH_CAP];
+    char partial[ENGINE_PATH_CAP], final_path[ENGINE_PATH_CAP];
+    char member[ENGINE_PATH_CAP];
+    char new_id[VM_SNAPSHOT_ID_CAPACITY];
+    char why[VM_FW_BOOT_DETAIL_CAPACITY] = {0};
+    uint64_t now = engine_unix_now();
+    uint64_t retired = 0;
+    unsigned sequence;
+    bool ok = false;
+    vm_snapshot_info_t info;
+
+    if (detail && detail_capacity) detail[0] = '\0';
+    if (!e || !id) return -1;
+    pthread_mutex_lock(&e->lock);
+    if (e->phase != PHASE_IDLE) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "Stop the machine and save its checkpoint before taking "
+                     "a snapshot.");
+        return -1;
+    }
+    retired = e->retired;
+    pthread_mutex_unlock(&e->lock);
+
+    if (vm_instance_paths_derive(e->firmware, e->machines, id, &paths) !=
+        VM_INSTANCE_PATHS_OK) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "No such machine.");
+        return -1;
+    }
+    if (!file_present(paths.state, NULL) ||
+        !file_present(paths.state_md, NULL)) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "There is no saved checkpoint for this machine. Stop it "
+                     "with \"Save state\" first.");
+        return -1;
+    }
+    if (!file_present(paths.work_image, NULL)) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "This machine has no writable disk to snapshot.");
+        return -1;
+    }
+    if (!mkdir_p(paths.machine) ||
+        vm_snapshot_dir(paths.machine, snapshots, sizeof snapshots) !=
+            VM_SNAPSHOT_OK ||
+        !mkdir_p(snapshots)) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "The snapshot directory could not be created.");
+        return -1;
+    }
+    if (!list_snapshots_for(&paths, snapshots, sizeof snapshots, infos,
+                            VM_SNAPSHOT_MAX, &count, why, sizeof why)) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "%s", why);
+        return -1;
+    }
+    for (sequence = 0; sequence < 100; sequence++) {
+        if (vm_snapshot_id_make(now, sequence, new_id, sizeof new_id) !=
+            VM_SNAPSHOT_OK)
+            break;
+        if (snapshot_index(infos, count, new_id) < 0)
+            break;
+    }
+    if (sequence >= 100 ||
+        vm_snapshot_id_make(now, sequence, new_id, sizeof new_id) !=
+            VM_SNAPSHOT_OK) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "A snapshot identifier could not be made.");
+        return -1;
+    }
+    if (vm_snapshot_path(snapshots, new_id, true, partial, sizeof partial) !=
+            VM_SNAPSHOT_OK ||
+        vm_snapshot_path(snapshots, new_id, false, final_path,
+                         sizeof final_path) != VM_SNAPSHOT_OK) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "The snapshot path could not be built.");
+        return -1;
+    }
+    rm_rf(partial);
+    if (!mkdir_p(partial)) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "The snapshot directory could not be created.");
+        return -1;
+    }
+
+    if (vm_snapshot_member_path(snapshots, new_id, true,
+                                VM_SNAPSHOT_STATE_FILE, member,
+                                sizeof member) == VM_SNAPSHOT_OK &&
+        copy_file(paths.state, member) &&
+        vm_snapshot_member_path(snapshots, new_id, true,
+                                VM_SNAPSHOT_MD_FILE, member,
+                                sizeof member) == VM_SNAPSHOT_OK &&
+        copy_file(paths.state_md, member) &&
+        vm_snapshot_member_path(snapshots, new_id, true,
+                                VM_SNAPSHOT_COW_FILE, member,
+                                sizeof member) == VM_SNAPSHOT_OK &&
+        create_cow_header(&paths, member, why, sizeof why)) {
+        memset(&info, 0, sizeof info);
+        snprintf(info.id, sizeof info.id, "%s", new_id);
+        info.created_unix = now;
+        info.retired = retired;
+        info.bytes = directory_size(partial);
+        info.complete = true;
+        if (vm_snapshot_member_path(snapshots, new_id, true,
+                                    VM_SNAPSHOT_META_FILE, member,
+                                    sizeof member) == VM_SNAPSHOT_OK &&
+            vm_snapshot_meta_write(member, &info, why, sizeof why) ==
+                VM_SNAPSHOT_OK) {
+            if (rename(partial, final_path) == 0) {
+                ok = true;
+            } else {
+                snprintf(why, sizeof why,
+                         "The snapshot could not be published.");
+            }
+        }
+    }
+    if (!ok) {
+        rm_rf(partial);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "%s",
+                     why[0] ? why : "The snapshot could not be written.");
+        return -1;
+    }
+    if (snapshot_id && id_capacity) snprintf(snapshot_id, id_capacity, "%s",
+                                             new_id);
+    console_printf(e, "[vm] snapshot %s saved\n", new_id);
+    return 0;
+}
+
+bool engine_snapshot_restore_needs_unlock(engine_t *engine, const char *id,
+                                          const char *snapshot_id)
+{
+    engine_t *e = engine;
+    vm_instance_paths_t paths;
+    vm_snapshot_info_t infos[VM_SNAPSHOT_MAX];
+    size_t count = 0;
+    char snapshots[ENGINE_PATH_CAP];
+    char detail[VM_FW_BOOT_DETAIL_CAPACITY] = {0};
+    int index;
+    if (!e || !id || !snapshot_id) return false;
+    if (vm_instance_paths_derive(e->firmware, e->machines, id, &paths) !=
+        VM_INSTANCE_PATHS_OK)
+        return false;
+    if (!list_snapshots_for(&paths, snapshots, sizeof snapshots, infos,
+                            VM_SNAPSHOT_MAX, &count, detail, sizeof detail))
+        return false;
+    index = snapshot_index(infos, count, snapshot_id);
+    return index > 0;
+}
+
+int engine_snapshot_restore(engine_t *engine, const char *id,
+                            const char *snapshot_id,
+                            char *detail, size_t detail_capacity)
+{
+    engine_t *e = engine;
+    vm_instance_paths_t paths;
+    vm_snapshot_info_t infos[VM_SNAPSHOT_MAX];
+    size_t count = 0;
+    char snapshots[ENGINE_PATH_CAP];
+    char why[VM_FW_BOOT_DETAIL_CAPACITY] = {0};
+    char member[ENGINE_PATH_CAP];
+    int target;
+    struct stat st;
+    file_block_t *adapter = NULL;
+    bool ok = false;
+    unsigned deleted = 0;
+
+    if (detail && detail_capacity) detail[0] = '\0';
+    if (!e || !id || !snapshot_id) return -1;
+    pthread_mutex_lock(&e->lock);
+    if (e->phase != PHASE_IDLE) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "Stop the machine before restoring a snapshot.");
+        return -1;
+    }
+    pthread_mutex_unlock(&e->lock);
+
+    if (vm_instance_paths_derive(e->firmware, e->machines, id, &paths) !=
+        VM_INSTANCE_PATHS_OK) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "No such machine.");
+        return -1;
+    }
+    if (!list_snapshots_for(&paths, snapshots, sizeof snapshots, infos,
+                            VM_SNAPSHOT_MAX, &count, why, sizeof why)) {
+        if (detail && detail_capacity) snprintf(detail, detail_capacity, "%s",
+                                                why);
+        return -1;
+    }
+    target = snapshot_index(infos, count, snapshot_id);
+    if (target < 0) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "That snapshot no longer exists.");
+        return -1;
+    }
+    if (stat(paths.work_image, &st) != 0 || !S_ISREG(st.st_mode) ||
+        st.st_size <= 0) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "This machine has no writable disk to restore onto.");
+        return -1;
+    }
+    adapter = file_block_create();
+    if (!adapter) return -1;
+    if (file_block_open(adapter, paths.work_image, (uint64_t)st.st_size) !=
+        FILE_BLOCK_STATUS_OK) {
+        file_block_destroy(&adapter);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "The writable disk could not be opened.");
+        return -1;
+    }
+
+    for (int i = 0; i <= target; i++) {
+        if (vm_snapshot_member_path(snapshots, infos[i].id, false,
+                                    VM_SNAPSHOT_COW_FILE, member,
+                                    sizeof member) != VM_SNAPSHOT_OK)
+            continue;
+        if (stat(member, &st) != 0) continue;
+        if (vm_cow_replay(member, file_block_get(adapter), NULL, NULL,
+                          why, sizeof why) != VM_COW_OK) {
+            goto done;
+        }
+    }
+    /* The historical contents are only real once they have reached the media;
+     * publishing the CPU state next to an unsynced disk is how a restore
+     * survives a power loss as RAM at S and disk at "somewhere after S". */
+    if (file_block_flush(adapter) != FILE_BLOCK_STATUS_OK) {
+        snprintf(why, sizeof why,
+                 "The restored disk could not be written back.");
+        goto done;
+    }
+
+    if (vm_snapshot_member_path(snapshots, infos[target].id, false,
+                                VM_SNAPSHOT_STATE_FILE, member,
+                                sizeof member) != VM_SNAPSHOT_OK ||
+        !copy_file(member, paths.state_tmp)) {
+        snprintf(why, sizeof why,
+                 "The snapshot's CPU state could not be installed.");
+        goto done;
+    }
+    if (vm_snapshot_member_path(snapshots, infos[target].id, false,
+                                VM_SNAPSHOT_MD_FILE, member,
+                                sizeof member) != VM_SNAPSHOT_OK ||
+        !copy_file(member, paths.state_md_tmp)) {
+        unlink(paths.state_tmp);
+        snprintf(why, sizeof why,
+                 "The snapshot's bridge state could not be installed.");
+        goto done;
+    }
+    if (rename(paths.state_tmp, paths.state) != 0 ||
+        rename(paths.state_md_tmp, paths.state_md) != 0) {
+        snprintf(why, sizeof why,
+                 "The restored state could not be published.");
+        goto done;
+    }
+    {
+        char marker[ENGINE_PATH_CAP];
+        if (!join_path(marker, sizeof marker, paths.machine,
+                       VM_FW_BOOT_RESTORE_ONCE_FILE) ||
+            !write_marker(marker)) {
+            snprintf(why, sizeof why,
+                     "The one-shot restore marker could not be written.");
+            goto done;
+        }
+    }
+
+    /* Everything newer than the chosen snapshot is now folded into the live
+     * disk by the replay above; those history layers are no longer needed. */
+    for (int i = 0; i < target; i++) {
+        char directory[ENGINE_PATH_CAP];
+        if (vm_snapshot_path(snapshots, infos[i].id, false, directory,
+                             sizeof directory) == VM_SNAPSHOT_OK &&
+            rm_rf(directory) == 0)
+            deleted++;
+    }
+    ok = true;
+done:
+    file_block_close(adapter);
+    file_block_destroy(&adapter);
+    if (!ok) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "%s",
+                     why[0] ? why : "The snapshot could not be restored.");
+        return -1;
+    }
+    console_printf(e, "[vm] snapshot %s restored (%u newer removed)\n",
+                   snapshot_id, deleted);
+    if (detail && detail_capacity)
+        snprintf(detail, detail_capacity,
+                 "Restored. %u newer snapshot%s removed.", deleted,
+                 deleted == 1 ? "" : "s");
+    return 0;
+}
+
+int engine_snapshot_delete(engine_t *engine, const char *id,
+                           const char *snapshot_id,
+                           char *detail, size_t detail_capacity)
+{
+    engine_t *e = engine;
+    vm_instance_paths_t paths;
+    char snapshots[ENGINE_PATH_CAP];
+    char directory[ENGINE_PATH_CAP];
+
+    if (detail && detail_capacity) detail[0] = '\0';
+    if (!e || !id || !snapshot_id) return -1;
+    if (vm_instance_paths_derive(e->firmware, e->machines, id, &paths) !=
+        VM_INSTANCE_PATHS_OK) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "No such machine.");
+        return -1;
+    }
+    if (vm_snapshot_dir(paths.machine, snapshots, sizeof snapshots) !=
+            VM_SNAPSHOT_OK ||
+        vm_snapshot_path(snapshots, snapshot_id, false, directory,
+                         sizeof directory) != VM_SNAPSHOT_OK) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "That snapshot's name is not one this app wrote.");
+        return -1;
+    }
+    if (!is_directory(directory)) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "That snapshot no longer exists.");
+        return -1;
+    }
+    if (rm_rf(directory) != 0) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "The snapshot's files could not be removed.");
+        return -1;
+    }
+    return 0;
+}
+
+/* ------------------------------------------------------------------ audio --- */
+
+int engine_render_audio(engine_t *engine, float *interleaved, unsigned frames)
+{
+    engine_t *e = engine;
+    unsigned done = 0;
+    if (!e || !interleaved || !e->audio_ok) return 0;
+    while (frames > 0) {
+        unsigned chunk = frames > ENGINE_AUDIO_SCRATCH
+                             ? ENGINE_AUDIO_SCRATCH : frames;
+        vm_audio_render(&e->audio, e->audio_left, e->audio_right, chunk);
+        for (unsigned i = 0; i < chunk; i++) {
+            interleaved[2u * i] = e->audio_left[i];
+            interleaved[2u * i + 1u] = e->audio_right[i];
+        }
+        interleaved += 2u * chunk;
+        frames -= chunk;
+        done += chunk;
+    }
+    return (int)done;
+}
+
+void engine_set_microphone(engine_t *engine, bool enabled)
+{
+    if (!engine) return;
+    atomic_store(&engine->microphone_on, enabled);
+    atomic_store(&engine->audio.microphone_enabled, enabled);
+}
+
+/* -------------------------------------------------------------------- USB --- */
+
+bool engine_usb_ready(engine_t *engine)
+{
+    bool ready;
+    if (!engine) return false;
+    pthread_mutex_lock(&engine->lock);
+    ready = engine->usb_ready;
+    pthread_mutex_unlock(&engine->lock);
+    return ready;
+}
+
+int engine_usb_open(engine_t *engine, const char *service,
+                    char *detail, size_t detail_capacity)
+{
+    (void)engine;
+    (void)service;
+    if (detail && detail_capacity)
+        snprintf(detail, detail_capacity,
+                 "Virtual USB services are not connected in this build yet.");
+    return -1;
+}
