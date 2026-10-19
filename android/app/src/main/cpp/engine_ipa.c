@@ -731,18 +731,16 @@ int engine_ipa_install_path(const char *machine_directory,
                 entries[ecount].permissions = 0755;
                 entries[ecount].existing_policy = ROOTFS_WORK_EXISTING_REUSE_DIRECTORY;
             } else if (vm_ipa_entry_is_symlink(&plan.files[i])) {
-                unsigned cidx = plan.content_indices[i];
                 entries[ecount].kind = ROOTFS_WORK_ENTRY_SYMLINK;
-                entries[ecount].content = packed_bytes + offsets[cidx];
-                entries[ecount].content_size = (size_t)plan.files[cidx].uncompressed_size;
+                entries[ecount].content = packed_bytes + offsets[i];
+                entries[ecount].content_size = (size_t)plan.files[i].uncompressed_size;
                 entries[ecount].permissions = 0777;
                 entries[ecount].existing_policy = ROOTFS_WORK_EXISTING_REFUSE;
             } else {
-                unsigned cidx = plan.content_indices[i];
                 entries[ecount].kind = ROOTFS_WORK_ENTRY_FILE;
-                entries[ecount].content = packed_bytes + offsets[cidx];
-                entries[ecount].content_size = (size_t)plan.files[cidx].uncompressed_size;
-                entries[ecount].permissions = ((plan.files[cidx].unix_mode & 0111u) || cidx == exec_idx) ? 0755 : 0644;
+                entries[ecount].content = packed_bytes + offsets[i];
+                entries[ecount].content_size = (size_t)plan.files[i].uncompressed_size;
+                entries[ecount].permissions = ((plan.files[i].unix_mode & 0111u) || i == exec_idx) ? 0755 : 0644;
                 entries[ecount].existing_policy = ROOTFS_WORK_EXISTING_REFUSE;
             }
             ecount++;
