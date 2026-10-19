@@ -419,7 +419,7 @@ private fun MachineCard(
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     val (label, tint) = when {
                         running -> "running" to MaterialTheme.colorScheme.secondary
-                        machine.ready -> "ready" to MaterialTheme.colorScheme.secondary
+                        machine.ready -> "ready to start" to MaterialTheme.colorScheme.onSurfaceVariant
                         machine.needsProvision -> "first boot prepares disk" to
                             MaterialTheme.colorScheme.tertiary
                         else -> "firmware incomplete" to MaterialTheme.colorScheme.error
