@@ -93,7 +93,9 @@ fun PackagesScreen(
         val machine = data.second.firstOrNull { it.id == machineId }
         machinePresent = machine != null
         machineReady = machine?.work == true
-        engineIdle = data.third.idle && data.third.instanceId.isEmpty()
+        // `instanceId` outlives a stopped machine, so only the phase tells
+        // whether the engine is free to replace a disk.
+        engineIdle = data.third.idle
         loaded = true
     }
 
