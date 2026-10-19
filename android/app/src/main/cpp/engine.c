@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
@@ -125,6 +126,7 @@ struct engine {
 
     char console[ENGINE_CONSOLE_CAP];
     size_t console_len;
+    char machine_log_path[ENGINE_PATH_CAP];
 
     vm_touch_queue_t touch;
     vm_touch_delivery_state_t touch_delivery;
@@ -413,6 +415,13 @@ static void json_string(json_t *j, const char *text)
 static void console_append_len_locked(engine_t *e, const char *text, size_t n)
 {
     if (!text || n == 0) return;
+    if (e->machine_log_path[0]) {
+        FILE *lf = fopen(e->machine_log_path, "ab");
+        if (lf) {
+            fwrite(text, 1, n, lf);
+            fclose(lf);
+        }
+    }
     if (n >= ENGINE_CONSOLE_CAP) {
         text += n - (ENGINE_CONSOLE_CAP - 1u);
         n = ENGINE_CONSOLE_CAP - 1u;
@@ -1575,6 +1584,10 @@ static bool install_payload(engine_t *e, s5l8900_t *machine,
         return true;
     }
 
+    pthread_mutex_lock(&e->lock);
+    snprintf(e->machine_log_path, sizeof e->machine_log_path, "%s/console.log", paths.machine);
+    pthread_mutex_unlock(&e->lock);
+
     plan = vm_instance_work_plan(&paths);
     if (plan == VM_INSTANCE_WORK_ADOPT) {
         char adopted[VM_FW_BOOT_DETAIL_CAPACITY];
@@ -1999,6 +2012,9 @@ static void thread_set_phase(engine_t *e, int phase)
 
 static void engine_thread_main(engine_t *e)
 {
+    /* Prioritize emulation thread for big/performance CPU cores (e.g. Cortex-A75/A78) */
+    (void)setpriority(PRIO_PROCESS, 0, -4);
+
     s5l8900_t *machine = calloc(1, sizeof *machine);
     vm_firmware_boot_t *boot = NULL;
     bool ready = false;
@@ -2244,6 +2260,7 @@ static void engine_thread_main(engine_t *e)
     e->boot = NULL;
     e->phase = PHASE_IDLE;
     e->instance_id[0] = '\0';
+    e->machine_log_path[0] = '\0';
     e->thread_live = false;
     if (reached_cap)
         snprintf(e->status, sizeof e->status, "instruction cap reached");

@@ -16,10 +16,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import android.os.Environment
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Extension
@@ -250,6 +252,31 @@ fun MachinesScreen(
                             },
                             onDelete = { menuFor = null; deleteTarget = machine },
                             onStop = { menuFor = null; stopMachine(machine.id) },
+                            onExportLog = {
+                                menuFor = null
+                                val machineDir = File(context.getExternalFilesDir(null), "Machines/${machine.id}")
+                                val logFile = File(machineDir, "console.log")
+                                if (logFile.exists() && logFile.length() > 0) {
+                                    try {
+                                        val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                                        downloadDir.mkdirs()
+                                        val safeName = machine.name.replace(" ", "_")
+                                        val target = File(downloadDir, "s5landbox-$safeName.log")
+                                        logFile.copyTo(target, overwrite = true)
+                                        scope.launch {
+                                            snackbar.showSnackbar("Log exported to Downloads/${target.name}")
+                                        }
+                                    } catch (e: Exception) {
+                                        scope.launch {
+                                            snackbar.showSnackbar("Export failed: ${e.message}")
+                                        }
+                                    }
+                                } else {
+                                    scope.launch {
+                                        snackbar.showSnackbar("No log file found for ${machine.name} yet.")
+                                    }
+                                }
+                            },
                         )
                     }
                 }
@@ -482,6 +509,7 @@ private fun MachineCard(
     onInstallIpa: () -> Unit,
     onDelete: () -> Unit,
     onStop: () -> Unit,
+    onExportLog: () -> Unit,
 ) {
     Card(
         onClick = onOpen,
@@ -597,6 +625,11 @@ private fun MachineCard(
                         text = { Text("Snapshots") },
                         leadingIcon = { Icon(Icons.Filled.CameraAlt, contentDescription = null) },
                         onClick = onSnapshots,
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Export log") },
+                        leadingIcon = { Icon(Icons.Filled.Description, contentDescription = null) },
+                        onClick = onExportLog,
                     )
                     DropdownMenuItem(
                         text = { Text("Delete") },

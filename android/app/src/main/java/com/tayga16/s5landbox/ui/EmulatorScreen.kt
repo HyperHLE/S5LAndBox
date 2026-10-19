@@ -25,9 +25,16 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.verticalScroll
+import android.os.Environment
+import java.io.File
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.SaveAlt
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.MoreVert
@@ -431,6 +438,39 @@ fun EmulatorScreen(
                 val current = status
                 if (current != null && current.preparing) {
                     PreparingCard(current, Modifier.align(Alignment.Center))
+                } else if (current != null && !current.idle && current.fps <= 0.0 && current.instructions in 100_000L..2_500_000_000L) {
+                    Card(
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
+                        ),
+                        shape = RoundedCornerShape(16.dp),
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(24.dp)
+                            .widthIn(max = 300.dp),
+                    ) {
+                        Column(
+                            Modifier.padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(32.dp), strokeWidth = 3.dp)
+                            Text(
+                                "Booting iOS…",
+                                style = MaterialTheme.typography.titleSmall,
+                            )
+                            val pct = (current.instructions.toDouble() / 2_500_000_000.0 * 100.0).coerceIn(1.0, 99.0).toInt()
+                            LinearProgressIndicator(
+                                progress = { pct / 100f },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Text(
+                                "First boot in progress ($pct%). Please wait.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                 }
 
                 if (current != null && current.idle && started && busy == null) {
@@ -572,7 +612,40 @@ fun EmulatorScreen(
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showConsole = false }) { Text("Close") }
+                val clipboard = LocalClipboardManager.current
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = {
+                        clipboard.setText(AnnotatedString(consoleText))
+                        scope.launch {
+                            snackbar.showSnackbar("Console log copied to clipboard.")
+                        }
+                    }) {
+                        Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Copy")
+                    }
+                    TextButton(onClick = {
+                        try {
+                            val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                            downloadDir.mkdirs()
+                            val safeName = machineName.replace(" ", "_")
+                            val logFile = File(downloadDir, "s5landbox-$safeName.log")
+                            logFile.writeText(consoleText)
+                            scope.launch {
+                                snackbar.showSnackbar("Saved to Downloads/${logFile.name}")
+                            }
+                        } catch (e: Exception) {
+                            scope.launch {
+                                snackbar.showSnackbar("Save failed: ${e.message}")
+                            }
+                        }
+                    }) {
+                        Icon(Icons.Filled.SaveAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("Save")
+                    }
+                    TextButton(onClick = { showConsole = false }) { Text("Close") }
+                }
             },
         )
     }

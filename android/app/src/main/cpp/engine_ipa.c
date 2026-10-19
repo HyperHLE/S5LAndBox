@@ -434,10 +434,12 @@ int engine_ipa_install_path(const char *machine_directory,
         return -1;
     }
 
-    if (vm_resume_checkpoint_probe_state(machine_directory, (uint64_t)live_st.st_size,
-        VM_GUEST_RAM_BASE, VM_GUEST_RAM_SIZE, detail, detail_capacity) != VM_RESUME_CHECKPOINT_POWERED_OFF) {
-        if (detail && detail_capacity) snprintf(detail, detail_capacity, "The guest is not verified powered off. Shut it down first.");
-        return -1;
+    vm_resume_checkpoint_state_t cs = vm_resume_checkpoint_probe_state(
+        machine_directory, (uint64_t)live_st.st_size,
+        VM_GUEST_RAM_BASE, VM_GUEST_RAM_SIZE, detail, detail_capacity);
+    if (cs == VM_RESUME_CHECKPOINT_RUNNING || cs == VM_RESUME_CHECKPOINT_INVALID) {
+        char disarm_why[VM_FW_BOOT_DETAIL_CAPACITY] = {0};
+        (void)vm_resume_checkpoint_disarm(machine_directory, disarm_why, sizeof disarm_why);
     }
 
     char snapshots[VM_GUEST_INSTALL_PATH_CAPACITY];
