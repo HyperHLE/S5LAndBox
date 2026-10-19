@@ -34,6 +34,7 @@ target_include_directories(s5landbox PRIVATE
 target_compile_definitions(s5landbox PRIVATE
     _FILE_OFFSET_BITS=64
     S5LBOX_ANDROID=1
+    S5LBOX_IOS3_HLE_EXPERIMENT=1
     # The same real-time pacing the iOS app asks of the core.
     S5LBOX_IOS_WFI_REALTIME_PACING=1
     S5LBOX_IOS_ACTIVE_REALTIME_CLOCK=1)
