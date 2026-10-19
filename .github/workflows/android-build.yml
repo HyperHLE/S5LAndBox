@@ -12,6 +12,7 @@ on:
   push:
     branches:
       - android-port
+      - main
     paths:
       - 'android/**'
       - 'core/**'
@@ -22,6 +23,7 @@ on:
   pull_request:
     branches:
       - main
+      - android-port
     paths:
       - 'android/**'
       - 'core/**'
@@ -107,13 +109,14 @@ jobs:
           cp android/app/build/outputs/apk/debug/*.apk dist/s5landbox-debug.apk
 
       - name: Publish to GitHub Releases
-        if: github.ref == 'refs/heads/android-port'
+        if: github.ref == 'refs/heads/android-port' || github.ref == 'refs/heads/main'
+        continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           tag_name: android-preview
           name: "S5LAndBox Android Build"
           body: |
-            Automated Android build from branch `android-port` (commit `${{ github.sha }}`).
+            Automated Android build from branch `${{ github.ref_name }}` (commit `${{ github.sha }}`).
             - **`s5landbox-release.apk`**: Optimized build with `-O3 -fomit-frame-pointer` (recommended).
             - **`s5landbox-debug.apk`**: Debug build.
           prerelease: true

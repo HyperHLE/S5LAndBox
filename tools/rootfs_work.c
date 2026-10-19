@@ -7363,6 +7363,18 @@ static bool catalog_root_folder(catalog_ctx_t *ctx,
     return true;
 }
 
+static bool catalog_read_parent_link(catalog_ctx_t *ctx, const uint8_t *data,
+                                      uint8_t *target, size_t *size,
+                                      rootfs_work_stage_t stage,
+                                      rootfs_work_result_t *result);
+
+static bool catalog_find_path_record(catalog_ctx_t *ctx, const char *path,
+                                     bool follow_parent_symlinks,
+                                     uint32_t *leaf, uint16_t *position,
+                                     bool *found, uint8_t **record_data,
+                                     rootfs_work_stage_t stage,
+                                     rootfs_work_result_t *result);
+
 static bool catalog_child_folder(catalog_ctx_t *ctx,
                                  const catalog_folder_ref_t *parent,
                                  const uint16_t *units, uint16_t unit_count,
@@ -7391,10 +7403,40 @@ static bool catalog_child_folder(catalog_ctx_t *ctx,
     offset = catalog_slot(node, ctx->node_size, position);
     data = node + offset + catalog_record_data_offset(node + offset);
     if (read_be16(data) != HFS_CAT_FOLDER_RECORD) {
-        result_fail(result, ROOTFS_WORK_PROVISION_PARENT_MISSING, stage, 0,
-                    "a path component under CNID %u exists but is not a "
-                    "folder", parent->cnid);
-        return false;
+        if (read_be16(data) == HFS_CAT_FILE_RECORD &&
+            (read_be16(data + 42u) & HFS_MODE_IFMT) == HFS_MODE_IFLNK) {
+            uint8_t target[ROOTFS_WORK_MAX_PATH + 1u];
+            size_t target_size = 0u;
+            uint32_t target_leaf = 0u;
+            uint16_t target_pos = 0u;
+            bool target_found = false;
+            uint8_t *target_record = NULL;
+
+            if (!catalog_read_parent_link(ctx, data, target, &target_size,
+                                          stage, result))
+                return false;
+            while (target_size > 0 && target[target_size - 1u] == '/')
+                target_size--;
+            target[target_size] = '\0';
+            if (!catalog_find_path_record(ctx, (const char *)target, true,
+                                          &target_leaf, &target_pos,
+                                          &target_found, &target_record,
+                                          stage, result))
+                return false;
+            if (!target_found || !target_record ||
+                read_be16(target_record) != HFS_CAT_FOLDER_RECORD) {
+                result_fail(result, ROOTFS_WORK_PROVISION_PARENT_MISSING, stage, 0,
+                            "a path component under CNID %u is a symlink to a non-folder",
+                            parent->cnid);
+                return false;
+            }
+            data = target_record;
+        } else {
+            result_fail(result, ROOTFS_WORK_PROVISION_PARENT_MISSING, stage, 0,
+                        "a path component under CNID %u exists but is not a "
+                        "folder", parent->cnid);
+            return false;
+        }
     }
     folder->cnid = read_be32(data + 8);
     if (folder->cnid < HFS_FIRST_USER_CNID) {

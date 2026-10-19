@@ -660,7 +660,9 @@ int engine_ipa_install_path(const char *machine_directory,
 
     size_t ecount = 0;
 
-    /* Base dirs */
+    /* Base dirs: app_dir is the new bundle directory. Pre-existing system directories
+     * (/Applications, /Library, /Library/LaunchDaemons, /usr, /usr/libexec) must not be
+     * provisioned as entries to prevent rejecting stashed symlinks like Cydia's /Applications. */
     #define ADD_DIR(p) do { \
         entry_paths[ecount] = strdup(p); \
         entries[ecount].kind = ROOTFS_WORK_ENTRY_DIRECTORY; \
@@ -670,12 +672,7 @@ int engine_ipa_install_path(const char *machine_directory,
         ecount++; \
     } while (0)
 
-    ADD_DIR("/Applications");
     ADD_DIR(app_dir);
-    ADD_DIR("/Library");
-    ADD_DIR("/Library/LaunchDaemons");
-    ADD_DIR("/usr");
-    ADD_DIR("/usr/libexec");
 
     /* Script and Daemon */
     entry_paths[ecount] = strdup(script_path);
