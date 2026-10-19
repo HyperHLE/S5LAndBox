@@ -239,3 +239,15 @@ object ImportStage {
 
     fun name(index: Int): String = names.getOrElse(index) { "working" }
 }
+
+data class IpaInfo(
+    val ok: Boolean,
+    val name: String = "",
+    val bundleId: String = "",
+    val version: String = "",
+    val executable: String = "",
+    val minOS: String = "",
+    val fileCount: Int = 0,
+    val uncompressedBytes: Long = 0,
+    val detail: String = "",
+)

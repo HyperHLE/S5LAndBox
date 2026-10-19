@@ -405,6 +405,49 @@ Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeMachineDelete(
 }
 
 JNIEXPORT jstring JNICALL
+Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeIpaInspect(
+    JNIEnv *env, jclass clazz, jstring ipa_path)
+{
+    char *path;
+    char out[2048];
+    (void)clazz;
+    if (!ipa_path) return new_string(env, "{\"ok\":false,\"detail\":\"No path.\"}");
+    path = string_from_jni(env, ipa_path);
+    if (!path) return new_string(env, "{\"ok\":false,\"detail\":\"Invalid path.\"}");
+    engine_ipa_inspect_json(path, out, sizeof out);
+    free(path);
+    return new_string(env, out);
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeMachineInstallIpa(
+    JNIEnv *env, jclass clazz, jlong handle, jstring id, jstring cache_dir, jstring ipa_path)
+{
+    engine_t *e = handle_of(handle);
+    char *wanted_id = NULL;
+    char *wanted_cache = NULL;
+    char *wanted_ipa = NULL;
+    char detail[512];
+    char out[1024];
+    int rc;
+    (void)clazz;
+    if (!e || !id || !ipa_path) return new_string(env, "{\"ok\":false,\"detail\":\"Invalid parameters.\"}");
+    wanted_id = string_from_jni(env, id);
+    wanted_cache = cache_dir ? string_from_jni(env, cache_dir) : NULL;
+    wanted_ipa = string_from_jni(env, ipa_path);
+    detail[0] = '\0';
+    rc = engine_machine_install_ipa(e, wanted_id ? wanted_id : "",
+                                    wanted_cache ? wanted_cache : "",
+                                    wanted_ipa ? wanted_ipa : "",
+                                    detail, sizeof detail);
+    free(wanted_id);
+    free(wanted_cache);
+    free(wanted_ipa);
+    result_json(out, sizeof out, rc == 0, "", detail);
+    return new_string(env, out);
+}
+
+JNIEXPORT jstring JNICALL
 Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeOptionsJson(
     JNIEnv *env, jclass clazz, jlong handle)
 {

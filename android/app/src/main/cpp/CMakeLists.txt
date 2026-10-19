@@ -21,6 +21,7 @@ list(FILTER S5LAND_APP_SOURCES EXCLUDE REGEX "/VMFirmwareHLE\\.c$")
 
 add_library(s5landbox SHARED
     engine.c
+    engine_ipa.c
     jni_bridge.c
     ${S5LAND_APP_SOURCES})
 

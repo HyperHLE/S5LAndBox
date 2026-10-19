@@ -60,8 +60,14 @@ import androidx.compose.ui.unit.dp
 import com.tayga16.s5landbox.data.BindResult
 import com.tayga16.s5landbox.data.EngineRepository
 import com.tayga16.s5landbox.data.FirmwareState
+import com.tayga16.s5landbox.data.IpaInfo
 import com.tayga16.s5landbox.data.Machine
 import com.tayga16.s5landbox.data.StopMode
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
+import java.io.File
+import java.io.FileOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -88,6 +94,43 @@ fun MachinesScreen(
     var renameTarget by remember { mutableStateOf<Machine?>(null) }
     var deleteTarget by remember { mutableStateOf<Machine?>(null) }
     var menuFor by remember { mutableStateOf<String?>(null) }
+
+    val context = LocalContext.current
+    var ipaMachineTarget by remember { mutableStateOf<Machine?>(null) }
+    var ipaInfoTarget by remember { mutableStateOf<Pair<File, IpaInfo>?>(null) }
+    var ipaInspecting by remember { mutableStateOf(false) }
+    var ipaInstalling by remember { mutableStateOf(false) }
+
+    val ipaPicker = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val machine = ipaMachineTarget ?: return@rememberLauncherForActivityResult
+        scope.launch {
+            ipaInspecting = true
+            val (cachedFile, info) = withContext(Dispatchers.IO) {
+                try {
+                    val temp = File(context.cacheDir, "ipa_install_${System.currentTimeMillis()}.ipa")
+                    context.contentResolver.openInputStream(uri)?.use { input ->
+                        FileOutputStream(temp).use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+                    val res = repository.inspectIpa(temp.absolutePath)
+                    temp to res
+                } catch (e: Exception) {
+                    null to IpaInfo(ok = false, detail = e.message ?: "Failed reading IPA")
+                }
+            }
+            ipaInspecting = false
+            if (cachedFile != null && info.ok) {
+                ipaInfoTarget = cachedFile to info
+            } else {
+                cachedFile?.delete()
+                snackbar.showSnackbar(info.detail.ifEmpty { "Invalid or unsupported IPA file." })
+            }
+        }
+    }
 
     suspend fun load() {
         val data = withContext(Dispatchers.IO) {
@@ -200,6 +243,11 @@ fun MachinesScreen(
                             onSettings = { menuFor = null; onSettings(machine.id) },
                             onSnapshots = { menuFor = null; onSnapshots(machine.id) },
                             onPackages = { menuFor = null; onPackages(machine.id) },
+                            onInstallIpa = {
+                                menuFor = null
+                                ipaMachineTarget = machine
+                                ipaPicker.launch(arrayOf("*/*"))
+                            },
                             onDelete = { menuFor = null; deleteTarget = machine },
                             onStop = { menuFor = null; stopMachine(machine.id) },
                         )
@@ -275,6 +323,76 @@ fun MachinesScreen(
                 TextButton(onClick = { deleteTarget = null }) { Text("Cancel") }
             },
         )
+    }
+
+    if (ipaInspecting) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Inspecting IPA") },
+            text = {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator()
+                    Text("Reading Info.plist and Mach-O binary…")
+                }
+            },
+            confirmButton = {},
+        )
+    }
+
+    if (ipaInstalling) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Installing Application") },
+            text = {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator()
+                    Text("Provisioning app into root filesystem…")
+                }
+            },
+            confirmButton = {},
+        )
+    }
+
+    ipaInfoTarget?.let { (cachedFile, info) ->
+        val targetMachine = ipaMachineTarget
+        if (targetMachine != null) {
+            val isRunning = targetMachine.id == runningId
+            InstallIpaDialog(
+                machine = targetMachine,
+                info = info,
+                running = isRunning,
+                onDismiss = {
+                    cachedFile.delete()
+                    ipaInfoTarget = null
+                    ipaMachineTarget = null
+                },
+                onInstall = {
+                    val m = targetMachine
+                    ipaInfoTarget = null
+                    ipaInstalling = true
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            repository.installIpa(m.id, context.cacheDir.absolutePath, cachedFile.absolutePath)
+                        }
+                        cachedFile.delete()
+                        ipaInstalling = false
+                        ipaMachineTarget = null
+                        if (result.ok) {
+                            snackbar.showSnackbar("Installed ${info.name}! Start the machine to see it on the Home screen.")
+                            load()
+                        } else {
+                            snackbar.showSnackbar(result.detail.ifEmpty { "Installation failed." })
+                        }
+                    }
+                },
+            )
+        }
     }
 }
 
@@ -361,6 +479,7 @@ private fun MachineCard(
     onSettings: () -> Unit,
     onSnapshots: () -> Unit,
     onPackages: () -> Unit,
+    onInstallIpa: () -> Unit,
     onDelete: () -> Unit,
     onStop: () -> Unit,
 ) {
@@ -470,6 +589,11 @@ private fun MachineCard(
                         onClick = onPackages,
                     )
                     DropdownMenuItem(
+                        text = { Text("Install IPA") },
+                        leadingIcon = { Icon(Icons.Filled.Download, contentDescription = null) },
+                        onClick = onInstallIpa,
+                    )
+                    DropdownMenuItem(
                         text = { Text("Snapshots") },
                         leadingIcon = { Icon(Icons.Filled.CameraAlt, contentDescription = null) },
                         onClick = onSnapshots,
@@ -561,5 +685,72 @@ private fun RenameMachineDialog(
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
+}
+
+@Composable
+private fun InstallIpaDialog(
+    machine: Machine,
+    info: IpaInfo,
+    running: Boolean,
+    onDismiss: () -> Unit,
+    onInstall: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Install Application") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = info.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                )
+                Text(
+                    text = "ID: ${info.bundleId}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (info.version.isNotBlank()) {
+                    Text(
+                        text = "Version: ${info.version}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Text(
+                    text = "Files: ${info.fileCount} (${info.uncompressedBytes / (1024 * 1024)} MB unpacked)",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(4.dp))
+                if (running) {
+                    Text(
+                        text = "The machine is currently running. Stop the machine before installing.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                } else {
+                    Text(
+                        text = "The application will be added to ${machine.name}. Start the machine to see it on the Home screen.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = onInstall,
+                enabled = !running,
+            ) {
+                Text("Install")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        },
     )
 }

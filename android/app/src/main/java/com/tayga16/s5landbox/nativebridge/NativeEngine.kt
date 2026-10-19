@@ -56,6 +56,13 @@ object NativeEngine {
         id: String,
         options: BooleanArray,
     ): String
+    external fun nativeIpaInspect(ipaPath: String): String
+    external fun nativeMachineInstallIpa(
+        handle: Long,
+        id: String,
+        cacheDir: String,
+        ipaPath: String,
+    ): String
 
     // Execution.
     external fun nativeStart(handle: Long, id: String?): String

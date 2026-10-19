@@ -118,6 +118,25 @@ class EngineRepository(private val handle: Long) {
     fun deleteMachine(id: String): BindResult =
         bind(NativeEngine.nativeMachineDelete(handle, id))
 
+    fun inspectIpa(ipaPath: String): IpaInfo {
+        val o = json(NativeEngine.nativeIpaInspect(ipaPath))
+        val ok = o.optBoolean("ok", false)
+        return IpaInfo(
+            ok = ok,
+            name = o.optString("name", ""),
+            bundleId = o.optString("bundleId", ""),
+            version = o.optString("version", ""),
+            executable = o.optString("executable", ""),
+            minOS = o.optString("minOS", ""),
+            fileCount = o.optInt("fileCount", 0),
+            uncompressedBytes = o.optLong("uncompressedBytes", 0L),
+            detail = o.optString("detail", ""),
+        )
+    }
+
+    fun installIpa(id: String, cacheDir: String, ipaPath: String): BindResult =
+        bind(NativeEngine.nativeMachineInstallIpa(handle, id, cacheDir, ipaPath))
+
     fun options(): OptionsCatalog {
         val o = json(NativeEngine.nativeOptionsJson(handle))
         val groups = buildList {

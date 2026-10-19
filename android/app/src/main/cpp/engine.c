@@ -38,6 +38,7 @@
 #include "VMGuest.h"
 #include "VMGuestInstallBuild.h"
 #include "VMDiskSize.h"
+#include "engine_ipa.h"
 #include "VMGuestPackageManifest.h"
 #include "VMInstancePaths.h"
 #include "VMInstances.h"
@@ -1298,6 +1299,70 @@ int engine_machine_delete(engine_t *engine, const char *id,
                      "could not be deleted.");
     }
     return 0;
+}
+
+int engine_ipa_inspect_json(const char *ipa_path, char *out, size_t capacity)
+{
+    json_t j;
+    engine_ipa_info_t info;
+    char detail[320] = {0};
+    if (!out || capacity == 0) return -1;
+    json_reset(&j, out, capacity);
+    if (!ipa_path || !ipa_path[0]) {
+        json_raw(&j, "{\"ok\":false,\"detail\":\"No IPA path specified.\"}");
+        return 0;
+    }
+    if (!engine_ipa_inspect_path(ipa_path, &info, detail, sizeof detail)) {
+        json_raw(&j, "{\"ok\":false,\"detail\":");
+        json_string(&j, detail[0] ? detail : "Failed to inspect IPA.");
+        json_raw(&j, "}");
+        return 0;
+    }
+    json_raw(&j, "{\"ok\":true,\"name\":");
+    json_string(&j, info.display_name);
+    json_raw(&j, ",\"bundleId\":");
+    json_string(&j, info.bundle_id);
+    json_raw(&j, ",\"version\":");
+    json_string(&j, info.version);
+    json_raw(&j, ",\"executable\":");
+    json_string(&j, info.executable);
+    json_raw(&j, ",\"minOS\":");
+    json_string(&j, info.min_os);
+    json_printf(&j, ",\"fileCount\":%u,\"uncompressedBytes\":%llu}",
+                info.file_count, (unsigned long long)info.uncompressed_bytes);
+    return 0;
+}
+
+int engine_machine_install_ipa(engine_t *engine, const char *id,
+                               const char *cache_directory,
+                               const char *ipa_path,
+                               char *detail, size_t detail_capacity)
+{
+    engine_t *e = engine;
+    vm_instance_paths_t paths;
+
+    if (detail && detail_capacity) detail[0] = '\0';
+    if (!e || !id || !id[0] || !ipa_path || !ipa_path[0]) {
+        if (detail && detail_capacity) snprintf(detail, detail_capacity, "Invalid arguments.");
+        return -1;
+    }
+
+    pthread_mutex_lock(&e->lock);
+    if (e->phase != PHASE_IDLE && !strcmp(id, e->instance_id)) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "Stop the machine before installing an IPA.");
+        return -1;
+    }
+    pthread_mutex_unlock(&e->lock);
+
+    if (vm_instance_paths_derive(e->firmware, e->machines, id, &paths) != VM_INSTANCE_PATHS_OK) {
+        if (detail && detail_capacity) snprintf(detail, detail_capacity, "Cannot derive machine paths.");
+        return -1;
+    }
+
+    const char *cache_dir = (cache_directory && cache_directory[0]) ? cache_directory : e->root;
+    return engine_ipa_install_path(paths.machine, cache_dir, ipa_path, detail, detail_capacity);
 }
 
 int engine_options_json(engine_t *engine, char *out, size_t capacity)

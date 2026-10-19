@@ -67,6 +67,11 @@ int engine_machine_options_json(engine_t *engine, const char *id,
 int engine_machine_set_options(engine_t *engine, const char *id,
                                const bool *options, unsigned option_count,
                                char *detail, size_t detail_capacity);
+int engine_ipa_inspect_json(const char *ipa_path, char *out, size_t capacity);
+int engine_machine_install_ipa(engine_t *engine, const char *id,
+                               const char *cache_directory,
+                               const char *ipa_path,
+                               char *detail, size_t detail_capacity);
 
 /* --------------------------------------------------------------- packages */
 /* The pinned, download-only package manifest: identity, sizes, every entry
