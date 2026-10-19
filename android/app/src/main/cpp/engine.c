@@ -528,7 +528,10 @@ static void *import_sink_open(void *context, const char *name)
         free(sink);
         return NULL;
     }
-    sink->file = fopen(sink->path, "wb");
+    /* "w+b", not "wb": the importer reads the scratch file back through
+     * pread() to unpack the disk image, and pread() on a descriptor opened
+     * write-only fails with EBADF. */
+    sink->file = fopen(sink->path, "w+b");
     if (!sink->file) {
         free(sink);
         return NULL;
