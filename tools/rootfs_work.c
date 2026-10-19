@@ -41,11 +41,11 @@
 #endif
 #endif
 
-#if defined(__linux__) && defined(SYS_renameat2)
+#if defined(__linux__) && !defined(__ANDROID__) && defined(SYS_renameat2)
 /* glibc hides syscall() behind _DEFAULT_SOURCE and declares renameat2() only
- * under _GNU_SOURCE; bionic does not declare renameat2() at all.  Defining
- * _GNU_SOURCE here is not an option: on glibc it would also expose O_PATH,
- * changing how every traversal directory in this file is opened. */
+ * under _GNU_SOURCE.  Defining _GNU_SOURCE here is not an option: it would
+ * also expose O_PATH, changing how every traversal directory in this file is
+ * opened.  bionic declares syscall() unconditionally. */
 extern long syscall(long number, ...);
 #endif
 
