@@ -22,6 +22,7 @@ list(FILTER S5LAND_APP_SOURCES EXCLUDE REGEX "/VMFirmwareHLE\\.c$")
 add_library(s5landbox SHARED
     engine.c
     engine_ipa.c
+    android_perf_hint.c
     jni_bridge.c
     ${S5LAND_APP_SOURCES})
 
@@ -64,7 +65,8 @@ target_link_libraries(s5landbox PRIVATE
     host_sha256
     android
     log
-    m)
+    m
+    dl)
 
 # Android 15+ devices can use 16 KiB pages; AGP also requires the flag.
 target_link_options(s5landbox PRIVATE "-Wl,-z,max-page-size=16384")

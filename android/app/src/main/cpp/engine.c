@@ -51,6 +51,7 @@
 #include "VMTouchQueue.h"
 #include "VMAudioBuffer.h"
 #include "file_block.h"
+#include "android_perf_hint.h"
 
 #define ENGINE_LOG_TAG "S5LAndBox"
 #define ENGINE_LOG(...) __android_log_print(ANDROID_LOG_INFO, ENGINE_LOG_TAG, __VA_ARGS__)
@@ -58,6 +59,7 @@
 
 #define ENGINE_CHUNK_INSTRUCTIONS 100000u
 #define ENGINE_PUBLISH_SECONDS (1.0 / 60.0)
+#define ENGINE_PERF_HINT_TARGET_NS INT64_C(16666667)
 #define ENGINE_CONSOLE_CAP 16000u
 #define ENGINE_PATH_CAP VM_FW_BOOT_PATH_CAPACITY
 #define ENGINE_IMPORT_REPORT_CAP 4096u
@@ -2012,7 +2014,7 @@ static void thread_set_phase(engine_t *e, int phase)
 
 static void engine_thread_main(engine_t *e)
 {
-    /* Prioritize emulation thread for big/performance CPU cores (e.g. Cortex-A75/A78) */
+    /* Best-effort priority; Android remains in control of CPU placement. */
     (void)setpriority(PRIO_PROCESS, 0, -4);
 
     s5l8900_t *machine = calloc(1, sizeof *machine);
@@ -2026,7 +2028,10 @@ static void engine_thread_main(engine_t *e)
     bool checkpoint_saved = false;
     bool pause_active = false;
     uint64_t pause_started_ns = 0;
+    uint64_t perf_hint_cycle_start_ns = 0;
     bool audio_running = false;
+    android_perf_hint_t *perf_hint = NULL;
+    bool perf_hint_disabled = false;
 
     if (!machine) {
         pthread_mutex_lock(&e->lock);
@@ -2090,6 +2095,13 @@ static void engine_thread_main(engine_t *e)
                    VM_GUEST_RAM_SIZE / (1024u * 1024u), VM_GUEST_RAM_BASE,
                    vm_guest_fb_pa(VM_GUEST_RAM_BASE, VM_GUEST_RAM_SIZE));
 
+    perf_hint = android_perf_hint_start(ENGINE_PERF_HINT_TARGET_NS);
+    perf_hint_disabled = perf_hint == NULL;
+    perf_hint_cycle_start_ns = perf_hint ? engine_now_ns() : 0;
+    if (perf_hint)
+        ENGINE_LOG("Android performance hint session enabled at 60 Hz");
+    else
+        ENGINE_LOG("Android performance hints unavailable; using OS scheduling");
     last_publish = engine_now();
     next_publish = last_publish + ENGINE_PUBLISH_SECONDS;
 
@@ -2111,6 +2123,11 @@ static void engine_thread_main(engine_t *e)
             if (!pause_active) {
                 pause_active = true;
                 pause_started_ns = engine_now_ns();
+                if (perf_hint) {
+                    android_perf_hint_stop(perf_hint);
+                    perf_hint = NULL;
+                }
+                perf_hint_cycle_start_ns = 0;
             }
             usleep(50 * 1000);
             last_publish = engine_now();
@@ -2131,6 +2148,15 @@ static void engine_thread_main(engine_t *e)
             }
             pause_active = false;
             pause_started_ns = 0;
+            if (!perf_hint && !perf_hint_disabled) {
+                perf_hint = android_perf_hint_start(
+                    ENGINE_PERF_HINT_TARGET_NS);
+                perf_hint_cycle_start_ns = perf_hint ? engine_now_ns() : 0;
+                if (!perf_hint) {
+                    perf_hint_disabled = true;
+                    ENGINE_LOG("Android performance hints unavailable after resume");
+                }
+            }
             last_publish = engine_now();
             next_publish = last_publish + ENGINE_PUBLISH_SECONDS;
             retired_at_publish = retired;
@@ -2163,7 +2189,24 @@ static void engine_thread_main(engine_t *e)
             if (now >= next_publish || status != ARM_OK) {
                 double instant = elapsed > 0.0
                     ? (double)(retired - retired_at_publish) / elapsed : 0.0;
+                bool retired_work = retired > retired_at_publish;
                 publish_retired(e, machine, retired, instant, status);
+                if (perf_hint) {
+                    uint64_t work_end_ns = engine_now_ns();
+                    if (retired_work && perf_hint_cycle_start_ns > 0 &&
+                        work_end_ns > perf_hint_cycle_start_ns) {
+                        int64_t actual_work_ns = (int64_t)(
+                            work_end_ns - perf_hint_cycle_start_ns);
+                        if (!android_perf_hint_report(perf_hint,
+                                                      actual_work_ns)) {
+                            ENGINE_WARN("Android performance hint report failed; disabling session");
+                            android_perf_hint_stop(perf_hint);
+                            perf_hint = NULL;
+                            perf_hint_disabled = true;
+                        }
+                    }
+                    perf_hint_cycle_start_ns = work_end_ns;
+                }
                 last_publish = now;
                 retired_at_publish = retired;
                 next_publish += ENGINE_PUBLISH_SECONDS;
@@ -2178,6 +2221,9 @@ static void engine_thread_main(engine_t *e)
             }
         }
     }
+
+    android_perf_hint_stop(perf_hint);
+    perf_hint = NULL;
 
     if (stopped_by_request)
         publish_retired(e, machine, retired, 0.0, ARM_OK);
