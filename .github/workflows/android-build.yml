@@ -54,8 +54,14 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      # The action defaults to installing "tools", a package that no longer
+      # exists in the SDK repository; that makes sdkmanager fail before our
+      # own install step runs. platform-tools is the only one we need here.
       - name: Set up the Android SDK command-line tools
         uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+          log-accepted-android-sdk-licenses: false
 
       - name: Install platform, build tools, NDK and CMake
         run: |
