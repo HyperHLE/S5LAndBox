@@ -91,6 +91,18 @@ object NativeEngine {
         snapshotId: String,
     ): Boolean
 
+    // Packages.
+    external fun nativePackagesJson(handle: Long, id: String): String
+    external fun nativeInstallPackages(
+        handle: Long,
+        id: String,
+        packageDirectory: String,
+        includeAppsync: Boolean,
+    ): String
+
+    /** [active, phase, done, total]. */
+    external fun nativeInstallProgress(handle: Long): LongArray
+
     // Audio.
     external fun nativeRenderAudio(handle: Long, buffer: FloatArray, frames: Int): Int
     external fun nativeSetMicrophone(handle: Long, enabled: Boolean)

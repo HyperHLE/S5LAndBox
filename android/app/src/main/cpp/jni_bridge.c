@@ -178,6 +178,66 @@ Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeDestroy(
     engine_destroy(handle_of(handle));
 }
 
+/* --------------------------------------------------------------- packages --- */
+
+JNIEXPORT jstring JNICALL
+Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativePackagesJson(
+    JNIEnv *env, jclass clazz, jlong handle, jstring id)
+{
+    (void)clazz;
+    return engine_id_json_string(env, handle, id, engine_packages_json, 49152);
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeInstallPackages(
+    JNIEnv *env, jclass clazz, jlong handle, jstring id,
+    jstring package_directory, jboolean include_appsync)
+{
+    engine_t *e = handle_of(handle);
+    char *machine = NULL;
+    char *directory = NULL;
+    char detail[512];
+    char out[4096];
+    int rc;
+    (void)clazz;
+
+    out[0] = '\0';
+    if (!e) return new_string(env, "{\"ok\":false,\"detail\":\"No engine.\"}");
+    machine = string_from_jni(env, id);
+    directory = string_from_jni(env, package_directory);
+    detail[0] = '\0';
+    rc = engine_install_packages(e, machine, directory,
+                                 include_appsync == JNI_TRUE,
+                                 out, sizeof out, detail, sizeof detail);
+    free(machine);
+    free(directory);
+    if (!out[0]) result_json(out, sizeof out, rc == 0, "", detail);
+    return new_string(env, out);
+}
+
+JNIEXPORT jlongArray JNICALL
+Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeInstallProgress(
+    JNIEnv *env, jclass clazz, jlong handle)
+{
+    engine_t *e = handle_of(handle);
+    jlong values[4] = {0, 0, 0, 0};
+    jlongArray array;
+    int active = 0, phase = 0;
+    uint64_t done = 0, total = 0;
+    (void)clazz;
+    if (e) {
+        engine_install_progress(e, &active, &phase, &done, &total);
+        values[0] = active;
+        values[1] = phase;
+        values[2] = (jlong)done;
+        values[3] = (jlong)total;
+    }
+    array = (*env)->NewLongArray(env, 4);
+    if (!array) return NULL;
+    (*env)->SetLongArrayRegion(env, array, 0, 4, values);
+    return array;
+}
+
 /* --------------------------------------------------------------- firmware --- */
 
 JNIEXPORT jstring JNICALL

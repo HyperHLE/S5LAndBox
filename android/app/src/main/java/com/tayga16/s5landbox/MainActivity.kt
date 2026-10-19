@@ -14,6 +14,7 @@ import androidx.navigation.navArgument
 import com.tayga16.s5landbox.ui.EmulatorScreen
 import com.tayga16.s5landbox.ui.ImportScreen
 import com.tayga16.s5landbox.ui.MachinesScreen
+import com.tayga16.s5landbox.ui.PackagesScreen
 import com.tayga16.s5landbox.ui.SettingsScreen
 import com.tayga16.s5landbox.ui.SnapshotsScreen
 import com.tayga16.s5landbox.ui.rememberRepository
@@ -45,6 +46,7 @@ private fun S5LAndBoxNav() {
                 onImport = { nav.navigate("import") },
                 onSettings = { id -> nav.navigate("settings/$id") },
                 onSnapshots = { id -> nav.navigate("snapshots/$id") },
+                onPackages = { id -> nav.navigate("packages/$id") },
             )
         }
         composable("import") {
@@ -80,6 +82,17 @@ private fun S5LAndBoxNav() {
         ) { entry ->
             val id = entry.arguments?.getString("id").orEmpty()
             SnapshotsScreen(
+                repository = repository,
+                machineId = id,
+                onBack = { nav.popBackStack() },
+            )
+        }
+        composable(
+            route = "packages/{id}",
+            arguments = listOf(navArgument("id") { type = NavType.StringType }),
+        ) { entry ->
+            val id = entry.arguments?.getString("id").orEmpty()
+            PackagesScreen(
                 repository = repository,
                 machineId = id,
                 onBack = { nav.popBackStack() },

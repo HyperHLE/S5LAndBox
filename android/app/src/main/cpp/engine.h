@@ -64,6 +64,27 @@ int engine_machine_set_options(engine_t *engine, const char *id,
                                const bool *options, unsigned option_count,
                                char *detail, size_t detail_capacity);
 
+/* --------------------------------------------------------------- packages */
+/* The pinned, download-only package manifest: identity, sizes, every entry
+ * with its URL and SHA-256, and the optional AppSync entry. */
+int engine_packages_json(engine_t *engine, const char *id,
+                         char *out, size_t capacity);
+/*
+ * Build (or repair) one machine's jailbroken guest disk.  The machine must be
+ * stopped and its disk closed; unsaved guest RAM is discarded.  An empty
+ * `package_directory` probes an existing installation and answers
+ * ERR_ARGUMENT when a fresh install still needs downloaded packages.  The
+ * JSON answer carries ok, status, detail and the builder's flags.
+ */
+int engine_install_packages(engine_t *engine, const char *id,
+                            const char *package_directory,
+                            bool include_appsync,
+                            char *out, size_t capacity,
+                            char *detail, size_t detail_capacity);
+/* Writes: active, phase, done, total. */
+void engine_install_progress(engine_t *engine, int *active, int *phase,
+                             uint64_t *done, uint64_t *total);
+
 /* -------------------------------------------------------------------- run */
 /* Returns 0 when the start was scheduled; detail says why otherwise. */
 int engine_start(engine_t *engine, const char *instance_id,

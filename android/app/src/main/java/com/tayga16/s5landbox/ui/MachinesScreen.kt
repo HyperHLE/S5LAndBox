@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Smartphone
@@ -71,6 +72,7 @@ fun MachinesScreen(
     onImport: () -> Unit,
     onSettings: (String) -> Unit,
     onSnapshots: (String) -> Unit,
+    onPackages: (String) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -179,6 +181,7 @@ fun MachinesScreen(
                             onRename = { menuFor = null; renameTarget = machine },
                             onSettings = { menuFor = null; onSettings(machine.id) },
                             onSnapshots = { menuFor = null; onSnapshots(machine.id) },
+                            onPackages = { menuFor = null; onPackages(machine.id) },
                             onDelete = { menuFor = null; deleteTarget = machine },
                         )
                     }
@@ -338,6 +341,7 @@ private fun MachineCard(
     onRename: () -> Unit,
     onSettings: () -> Unit,
     onSnapshots: () -> Unit,
+    onPackages: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Card(
@@ -432,6 +436,11 @@ private fun MachineCard(
                         text = { Text("Settings") },
                         leadingIcon = { Icon(Icons.Filled.Settings, contentDescription = null) },
                         onClick = onSettings,
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Packages") },
+                        leadingIcon = { Icon(Icons.Filled.Extension, contentDescription = null) },
+                        onClick = onPackages,
                     )
                     DropdownMenuItem(
                         text = { Text("Snapshots") },
