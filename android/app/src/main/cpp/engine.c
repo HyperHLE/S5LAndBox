@@ -1983,6 +1983,14 @@ static void engine_thread_main(engine_t *e)
 
         retired += s5l8900_run(machine, ENGINE_CHUNK_INSTRUCTIONS, &status);
 
+        if (s5l_pcf50635_in_standby(&machine->pmu)) {
+            stopped_by_request = true;
+            e->stop_mode = ENGINE_STOP_POWER_OFF;
+            console_append(e, "[vm] guest standby confirmed; powering off\n");
+            publish_retired(e, machine, retired, 0.0, ARM_OK);
+            break;
+        }
+
         if (e->usb_active) {
             usb_host_poll(&e->usb_host, machine);
             pthread_mutex_lock(&e->lock);
@@ -2094,6 +2102,7 @@ static void engine_thread_main(engine_t *e)
     e->usb_ready = false;
     e->boot = NULL;
     e->phase = PHASE_IDLE;
+    e->instance_id[0] = '\0';
     e->thread_live = false;
     if (reached_cap)
         snprintf(e->status, sizeof e->status, "instruction cap reached");
@@ -2345,6 +2354,10 @@ void engine_set_paused(engine_t *engine, bool paused)
     engine_t *e = engine;
     if (!e) return;
     pthread_mutex_lock(&e->lock);
+    if (e->phase == PHASE_IDLE) {
+        pthread_mutex_unlock(&e->lock);
+        return;
+    }
     e->paused = paused;
     if (paused) snprintf(e->status, sizeof e->status, "paused");
     else if (e->machine_ready)

@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material3.AlertDialog
@@ -59,6 +60,7 @@ import com.tayga16.s5landbox.data.BindResult
 import com.tayga16.s5landbox.data.EngineRepository
 import com.tayga16.s5landbox.data.FirmwareState
 import com.tayga16.s5landbox.data.Machine
+import com.tayga16.s5landbox.data.StopMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -100,6 +102,21 @@ fun MachinesScreen(
         scope.launch {
             val message = if (result.ok) success else result.detail.ifEmpty { "That did not work." }
             snackbar.showSnackbar(message)
+            load()
+        }
+    }
+
+    fun stopMachine(id: String) {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                repository.stop(StopMode.POWER_OFF)
+                var waited = 0
+                while (!repository.status().idle && waited < 600) {
+                    delay(100)
+                    waited++
+                }
+            }
+            snackbar.showSnackbar("Machine powered off.")
             load()
         }
     }
@@ -183,6 +200,7 @@ fun MachinesScreen(
                             onSnapshots = { menuFor = null; onSnapshots(machine.id) },
                             onPackages = { menuFor = null; onPackages(machine.id) },
                             onDelete = { menuFor = null; deleteTarget = machine },
+                            onStop = { menuFor = null; stopMachine(machine.id) },
                         )
                     }
                 }
@@ -343,6 +361,7 @@ private fun MachineCard(
     onSnapshots: () -> Unit,
     onPackages: () -> Unit,
     onDelete: () -> Unit,
+    onStop: () -> Unit,
 ) {
     Card(
         onClick = onOpen,
@@ -427,6 +446,13 @@ private fun MachineCard(
                     Icon(Icons.Filled.MoreVert, contentDescription = "Machine actions")
                 }
                 DropdownMenu(expanded = menuOpen, onDismissRequest = onDismissMenu) {
+                    if (running) {
+                        DropdownMenuItem(
+                            text = { Text("Power off") },
+                            leadingIcon = { Icon(Icons.Filled.PowerSettingsNew, contentDescription = null) },
+                            onClick = onStop,
+                        )
+                    }
                     DropdownMenuItem(
                         text = { Text("Rename") },
                         leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },

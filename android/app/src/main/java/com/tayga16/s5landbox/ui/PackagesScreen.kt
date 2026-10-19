@@ -5,8 +5,10 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -16,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -44,6 +47,7 @@ import com.tayga16.s5landbox.data.GuestPackage
 import com.tayga16.s5landbox.data.GuestPackageDownloader
 import com.tayga16.s5landbox.data.InstallPhase
 import com.tayga16.s5landbox.data.InstallResult
+import com.tayga16.s5landbox.data.StopMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -109,13 +113,30 @@ fun PackagesScreen(
 
     if (busy) KeepScreenOn()
 
+    fun stopMachine() {
+        if (busy) return
+        busy = true
+        stage = "Powering off the machine…"
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                repository.stop(StopMode.POWER_OFF)
+                var waited = 0
+                while (!repository.status().idle && waited < 600) {
+                    delay(100)
+                    waited++
+                }
+            }
+            busy = false
+            refresh()
+        }
+    }
+
     fun blockerFor(state: GuestManifest?): String? = when {
         state == null -> null
         !state.machineOk || !machinePresent -> "This machine no longer exists."
         !machineReady ->
             "Boot this machine once first. The installer replaces the writable " +
                 "guest disk, so it must exist before Cydia can be added."
-        !engineIdle -> "Stop the machine before installing packages."
         state.snapshots > 0L ->
             "This machine has ${state.snapshots} snapshot(s). Delete them in " +
                 "Snapshots first: the installer refuses to replace a disk that " +
@@ -136,6 +157,25 @@ fun PackagesScreen(
         scope.launch {
             var poller: Job? = null
             try {
+                if (!repository.status().idle) {
+                    stage = "Powering off the machine…"
+                    val stopped = withContext(Dispatchers.IO) {
+                        repository.stop(StopMode.POWER_OFF)
+                        var waited = 0
+                        while (!repository.status().idle && waited < 600) {
+                            delay(100)
+                            waited++
+                        }
+                        repository.status().idle
+                    }
+                    if (!stopped) {
+                        error = "The machine could not be stopped. Try again in a moment."
+                        busy = false
+                        return@launch
+                    }
+                    refresh()
+                }
+
                 poller = launch {
                     while (isActive) {
                         val p = withContext(Dispatchers.IO) { repository.installProgress() }
@@ -266,6 +306,18 @@ fun PackagesScreen(
                         tone = NoticeTone.SUCCESS,
                         title = "Done",
                         body = message,
+                    )
+                }
+            }
+
+            if (!engineIdle && !busy) {
+                item(key = "running-notice") {
+                    NoticeCard(
+                        tone = NoticeTone.WARNING,
+                        title = "Machine is active",
+                        body = "The machine is currently running or paused. Starting installation will power it off automatically, discarding unsaved guest RAM.",
+                        action = "Power off now",
+                        onAction = { stopMachine() },
                     )
                 }
             }
@@ -478,7 +530,13 @@ private fun ProgressCard(stage: String, fraction: Float) {
 private enum class NoticeTone { ERROR, WARNING, SUCCESS }
 
 @Composable
-private fun NoticeCard(tone: NoticeTone, title: String, body: String) {
+private fun NoticeCard(
+    tone: NoticeTone,
+    title: String,
+    body: String,
+    action: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
     val color = when (tone) {
         NoticeTone.ERROR -> MaterialTheme.colorScheme.errorContainer
         NoticeTone.WARNING -> MaterialTheme.colorScheme.secondaryContainer
@@ -519,6 +577,18 @@ private fun NoticeCard(tone: NoticeTone, title: String, body: String) {
                 style = MaterialTheme.typography.bodySmall,
                 color = content,
             )
+            if (action != null && onAction != null) {
+                Spacer(Modifier.height(4.dp))
+                Button(
+                    onClick = onAction,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = content,
+                        contentColor = color,
+                    ),
+                ) {
+                    Text(action)
+                }
+            }
         }
     }
 }
