@@ -75,11 +75,9 @@ jobs:
         run: |
           set -euo pipefail
           yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install \
-            "platforms;android-35" \
-            "build-tools;35.0.0" \
-            "ndk;27.0.12077973" \
-            "cmake;3.22.1"
+          sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
+          sdkmanager --install "cmake;3.22.1"
+          sdkmanager --install "ndk;27.0.12077973" || (sleep 5 && sdkmanager --install "ndk;27.0.12077973")
 
       - name: Build the release and debug APKs
         run: gradle -p android :app:assembleRelease :app:assembleDebug --stacktrace
