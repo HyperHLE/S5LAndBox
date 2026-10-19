@@ -12,11 +12,6 @@
 #ifndef _FILE_OFFSET_BITS
 #define _FILE_OFFSET_BITS 64
 #endif
-/* renameat2() and RENAME_NOREPLACE are GNU extensions on glibc; bionic
- * declares them unconditionally from API 21. */
-#ifndef _GNU_SOURCE
-#define _GNU_SOURCE 1
-#endif
 #define _POSIX_C_SOURCE 200809L
 #define _XOPEN_SOURCE 700
 #endif
@@ -44,6 +39,14 @@
 #if defined(__linux__)
 #include <sys/syscall.h>
 #endif
+#endif
+
+#if defined(__linux__) && defined(SYS_renameat2)
+/* glibc hides syscall() behind _DEFAULT_SOURCE and declares renameat2() only
+ * under _GNU_SOURCE; bionic does not declare renameat2() at all.  Defining
+ * _GNU_SOURCE here is not an option: on glibc it would also expose O_PATH,
+ * changing how every traversal directory in this file is opened. */
+extern long syscall(long number, ...);
 #endif
 
 #define HFS_VH_OFF 1024u
@@ -1368,6 +1371,28 @@ static int posix_fsync_bounded(int descriptor) {
         rc = fsync(descriptor);
     } while (rc != 0 && errno == EINTR &&
              retries++ < ROOTFS_EINTR_RETRY_LIMIT);
+    return rc;
+}
+
+/*
+ * The destination descriptor is a traversal handle: Linux and bionic open it
+ * with O_PATH (O_SEARCH on Darwin), where fsync() answers EBADF.  Durability
+ * needs a descriptor that holds the directory itself, so retry through one
+ * opened relative to the traversal handle.  Filesystems that refuse the read
+ * right keep the original descriptor's answer. */
+static int posix_fsync_directory(int descriptor) {
+    int sync;
+    int rc;
+    int error;
+
+    rc = posix_fsync_bounded(descriptor);
+    if (rc == 0 || (errno != EBADF && errno != EINVAL)) return rc;
+    sync = openat(descriptor, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (sync < 0) return -1;
+    rc = posix_fsync_bounded(sync);
+    error = errno;
+    close(sync);
+    errno = error;
     return rc;
 }
 
@@ -9560,7 +9585,7 @@ static bool publish(destination_dir_t *destination,
          * directory-durability contract that the link path checks. */
         return true;
     }
-    if (posix_fsync_bounded(destination->descriptor) != 0) {
+    if (posix_fsync_directory(destination->descriptor) != 0) {
         result->temporary_left = true;
         result_fail(result, ROOTFS_WORK_PUBLISH_DURABILITY_FAILED,
                     ROOTFS_WORK_STAGE_DIRECTORY_SYNC, errno,
@@ -9574,7 +9599,7 @@ static bool publish(destination_dir_t *destination,
                     "destination was published but temporary link removal failed");
         return false;
     }
-    if (posix_fsync_bounded(destination->descriptor) != 0) {
+    if (posix_fsync_directory(destination->descriptor) != 0) {
         result_fail(result, ROOTFS_WORK_PUBLISH_DURABILITY_FAILED,
                     ROOTFS_WORK_STAGE_DIRECTORY_SYNC, errno,
                     "destination is durable but temporary-link removal sync failed");
