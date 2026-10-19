@@ -1,14 +1,16 @@
-# S5LBox
+# S5LAndBox
 
-**Classic iPhone OS. On your iPhone.**
+**Classic iPhone OS. On your Android.**
 
+This is fork of S5LBox
 Slide to unlock. Open an old favorite. Make it yours again.
 
 S5LBox brings the iPhone 3G and its original iPhone OS 3.1.3 to your iPhone.
 It's the real operating system, running inside an app—not a theme or a recreation.
 Your iPhone doesn't need to be jailbroken.
 
-[Download S5LBox](https://github.com/j0shua-SYSON/S5LBox/releases)
+[Download S5LAndBox](https://github.com/HyperHLE/S5LAndBox/releases)
+
 
 <table>
   <tr>
