@@ -4,6 +4,10 @@ name: android-build
 # identity in CI: the debug APK is installable as-is, and a manual run also
 # produces the release APK, signed with the debug key by android/app's Gradle
 # configuration. Nothing is published to a store from here.
+# The app's native library compiles a set of files out of tools/ (rootfs
+# provisioning, the file-block device, payload extraction, SHA-256 and the
+# iOS 3 host shims, see android/app/src/main/cpp/CMakeLists.txt), so a change
+# there changes the APK and has to run this job.
 on:
   push:
     branches:
@@ -12,6 +16,7 @@ on:
       - 'android/**'
       - 'core/**'
       - 'app/Sources/**'
+      - 'tools/**'
       - 'CMakeLists.txt'
       - '.github/workflows/android-build.yml'
   pull_request:
@@ -21,12 +26,13 @@ on:
       - 'android/**'
       - 'core/**'
       - 'app/Sources/**'
+      - 'tools/**'
       - 'CMakeLists.txt'
       - '.github/workflows/android-build.yml'
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: android-${{ github.ref }}
@@ -73,14 +79,18 @@ jobs:
             "ndk;27.0.12077973" \
             "cmake;3.22.1"
 
-      - name: Build the debug APK
-        run: gradle -p android :app:assembleDebug --stacktrace
+      - name: Build the release and debug APKs
+        run: gradle -p android :app:assembleRelease :app:assembleDebug --stacktrace
 
       # The release variant is signed with the debug key (see app/build.gradle.kts)
-      # so it is installable for testing; it is not a store artifact.
-      - name: Build the release APK (manual runs)
-        if: github.event_name == 'workflow_dispatch'
-        run: gradle -p android :app:assembleRelease --stacktrace
+      # so it is installable for testing without store signing.
+      - name: Upload the release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: s5landbox-release-apk
+          path: android/app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Upload the debug APK
         uses: actions/upload-artifact@v4
@@ -90,11 +100,25 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload the release APK (manual runs)
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
+      - name: Prepare APKs for GitHub Release
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/*.apk dist/s5landbox-release.apk
+          cp android/app/build/outputs/apk/debug/*.apk dist/s5landbox-debug.apk
+
+      - name: Publish to GitHub Releases
+        if: github.ref == 'refs/heads/android-port'
+        uses: softprops/action-gh-release@v2
         with:
-          name: s5landbox-release-apk
-          path: android/app/build/outputs/apk/release/*.apk
-          if-no-files-found: ignore
-          retention-days: 30
+          tag_name: android-preview
+          name: "S5LAndBox Android Build"
+          body: |
+            Automated Android build from branch `android-port` (commit `${{ github.sha }}`).
+            - **`s5landbox-release.apk`**: Optimized build with `-O3 -fomit-frame-pointer` (recommended).
+            - **`s5landbox-debug.apk`**: Debug build.
+          prerelease: true
+          files: |
+            dist/s5landbox-release.apk
+            dist/s5landbox-debug.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

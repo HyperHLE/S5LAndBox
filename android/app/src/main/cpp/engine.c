@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
@@ -36,6 +37,10 @@
 #include "VMFirmwareImport.h"
 #include "VMFirmwareKeys.h"
 #include "VMGuest.h"
+#include "VMGuestInstallBuild.h"
+#include "VMDiskSize.h"
+#include "engine_ipa.h"
+#include "VMGuestPackageManifest.h"
 #include "VMInstancePaths.h"
 #include "VMInstances.h"
 #include "VMOptions.h"
@@ -116,9 +121,12 @@ struct engine {
     bool snapshot_argb;
     uint32_t snap_w, snap_h, snap_stride;
     ANativeWindow *window;
+    ANativeWindow *window_geo_ptr;
+    uint32_t window_geo_w, window_geo_h;
 
     char console[ENGINE_CONSOLE_CAP];
     size_t console_len;
+    char machine_log_path[ENGINE_PATH_CAP];
 
     vm_touch_queue_t touch;
     vm_touch_delivery_state_t touch_delivery;
@@ -148,6 +156,11 @@ struct engine {
     _Atomic uint64_t import_total;
     char import_report[ENGINE_IMPORT_REPORT_CAP];
     char import_source[VM_FW_BOOT_DETAIL_CAPACITY];
+
+    _Atomic bool install_active;
+    _Atomic int install_phase;
+    _Atomic uint64_t install_done;
+    _Atomic uint64_t install_total;
 
     vm_firmware_boot_t *boot;
 
@@ -402,6 +415,13 @@ static void json_string(json_t *j, const char *text)
 static void console_append_len_locked(engine_t *e, const char *text, size_t n)
 {
     if (!text || n == 0) return;
+    if (e->machine_log_path[0]) {
+        FILE *lf = fopen(e->machine_log_path, "ab");
+        if (lf) {
+            fwrite(text, 1, n, lf);
+            fclose(lf);
+        }
+    }
     if (n >= ENGINE_CONSOLE_CAP) {
         text += n - (ENGINE_CONSOLE_CAP - 1u);
         n = ENGINE_CONSOLE_CAP - 1u;
@@ -528,7 +548,10 @@ static void *import_sink_open(void *context, const char *name)
         free(sink);
         return NULL;
     }
-    sink->file = fopen(sink->path, "wb");
+    /* "w+b", not "wb": the importer reads the scratch file back through
+     * pread() to unpack the disk image, and pread() on a descriptor opened
+     * write-only fails with EBADF. */
+    sink->file = fopen(sink->path, "w+b");
     if (!sink->file) {
         free(sink);
         return NULL;
@@ -742,6 +765,262 @@ int engine_firmware_json(engine_t *engine, char *out, size_t capacity)
     return (int)j.len;
 }
 
+/* -------------------------------------------------------------- packages --- */
+
+static void package_json(json_t *j, const vm_guest_package_t *package)
+{
+    json_raw(j, "{\"package\":");
+    json_string(j, package->package);
+    json_raw(j, ",\"version\":");
+    json_string(j, package->version);
+    json_raw(j, ",\"filename\":");
+    json_string(j, package->filename);
+    json_raw(j, ",\"url\":");
+    json_string(j, package->source_url);
+    json_printf(j, ",\"size\":%llu,\"sha256\":",
+                (unsigned long long)package->size);
+    json_string(j, package->sha256_hex);
+    json_printf(j, ",\"roles\":%u}", (unsigned)package->roles);
+}
+
+static void hex_encode(const uint8_t *bytes, size_t count, char *out)
+{
+    static const char digits[] = "0123456789abcdef";
+    size_t i;
+    for (i = 0; i < count; i++) {
+        out[i * 2u] = digits[bytes[i] >> 4];
+        out[i * 2u + 1u] = digits[bytes[i] & 0x0fu];
+    }
+    out[count * 2u] = '\0';
+}
+
+int engine_packages_json(engine_t *engine, const char *id,
+                         char *out, size_t capacity)
+{
+    engine_t *e = engine;
+    json_t j;
+    uint8_t digest[VM_GUEST_PACKAGE_SHA256_SIZE];
+    char identity[VM_GUEST_PACKAGE_SHA256_HEX_SIZE];
+    const vm_guest_package_t *appsync;
+    bool manifest_ok;
+    bool machine_ok = false;
+    bool installed = false;
+    uint64_t work_size = 0;
+    uint64_t snapshots = 0;
+    char machine[ENGINE_PATH_CAP];
+    size_t count, i;
+
+    if (!e || !out || capacity == 0) return -1;
+    manifest_ok = vm_guest_package_manifest_sha256(digest);
+    if (manifest_ok)
+        hex_encode(digest, sizeof digest, identity);
+    else
+        identity[0] = '\0';
+    appsync = vm_guest_package_appsync();
+    machine[0] = '\0';
+
+    if (id && id[0]) {
+        vm_instance_paths_t paths;
+        pthread_mutex_lock(&e->lock);
+        if (instance_index_locked(e, id) >= 0 &&
+            vm_instance_paths_derive(e->firmware, e->machines, id, &paths) ==
+                VM_INSTANCE_PATHS_OK) {
+            snprintf(machine, sizeof machine, "%s", paths.machine);
+            machine_ok = true;
+        }
+        pthread_mutex_unlock(&e->lock);
+    }
+    if (machine_ok) {
+        char path[ENGINE_PATH_CAP];
+        char snaps[ENGINE_PATH_CAP];
+        char snap_detail[128];
+        vm_snapshot_info_t list[VM_SNAPSHOT_MAX];
+        size_t snap_count = 0;
+        bool work, marker;
+        uint64_t size = 0;
+
+        work = join_path(path, sizeof path, machine,
+                         VM_GUEST_INSTALL_LIVE_FILE) &&
+               file_present(path, &size);
+        if (work) work_size = size;
+        marker = join_path(path, sizeof path, machine,
+                           VM_GUEST_INSTALL_MARKER_FILE) &&
+                 file_present(path, NULL);
+        installed = work && marker;
+        if (vm_snapshot_dir(machine, snaps, sizeof snaps) == VM_SNAPSHOT_OK &&
+            vm_snapshot_list(snaps, list, VM_SNAPSHOT_MAX, &snap_count,
+                             snap_detail, sizeof snap_detail) ==
+                VM_SNAPSHOT_OK)
+            snapshots = snap_count;
+    }
+
+    json_reset(&j, out, capacity);
+    json_printf(&j, "{\"ok\":%s,\"busy\":%s,\"identity\":",
+                manifest_ok ? "true" : "false",
+                atomic_load(&e->install_active) ? "true" : "false");
+    json_string(&j, identity);
+    json_raw(&j, ",\"machine\":");
+    json_string(&j, machine);
+    json_printf(&j,
+        ",\"machineOk\":%s,\"installed\":%s,\"workImage\":%llu,"
+        "\"snapshots\":%llu,\"totalBytes\":%llu,\"appsyncBytes\":%llu,"
+        "\"packages\":[",
+        machine_ok ? "true" : "false",
+        installed ? "true" : "false",
+        (unsigned long long)work_size,
+        (unsigned long long)snapshots,
+        (unsigned long long)vm_guest_package_total_download_bytes(),
+        (unsigned long long)(appsync ? appsync->size : 0u));
+    count = vm_guest_package_count();
+    for (i = 0; i < count; i++) {
+        const vm_guest_package_t *package = vm_guest_package_at(i);
+        if (!package) continue;
+        if (i) json_raw(&j, ",");
+        package_json(&j, package);
+    }
+    json_raw(&j, "],\"appsync\":");
+    if (appsync)
+        package_json(&j, appsync);
+    else
+        json_raw(&j, "null");
+    json_raw(&j, "}");
+    return (int)j.len;
+}
+
+static void install_progress_cb(void *context,
+                                vm_guest_install_build_phase_t phase,
+                                uint64_t done, uint64_t total)
+{
+    engine_t *e = context;
+    atomic_store(&e->install_phase, (int)phase);
+    atomic_store(&e->install_done, done);
+    atomic_store(&e->install_total, total);
+}
+
+/*
+ * One blocking call.  `package_directory` may be empty: the builder then
+ * verifies or repairs an existing jailbreak without needing downloads, and
+ * answers ERR_ARGUMENT when a fresh install still requires packages.
+ */
+int engine_install_packages(engine_t *engine, const char *id,
+                            const char *package_directory,
+                            bool include_appsync,
+                            char *out, size_t capacity,
+                            char *detail, size_t detail_capacity)
+{
+    engine_t *e = engine;
+    vm_instance_paths_t paths;
+    vm_guest_install_build_result_t result;
+    vm_guest_install_build_status_t status;
+    char machine[ENGINE_PATH_CAP];
+    char message[VM_GUEST_INSTALL_BUILD_DETAIL_CAPACITY];
+    json_t j;
+    int rc = -1;
+
+    if (detail && detail_capacity) detail[0] = '\0';
+    if (!e || !id || !id[0]) {
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "No machine was selected.");
+        return -1;
+    }
+
+    pthread_mutex_lock(&e->lock);
+    if (e->thread_live || e->phase != PHASE_IDLE) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "Stop the machine before installing packages.");
+        return -1;
+    }
+    if (atomic_load(&e->install_active)) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "A package installation is already running.");
+        return -1;
+    }
+    if (instance_index_locked(e, id) < 0) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "No such machine.");
+        return -1;
+    }
+    if (vm_instance_paths_derive(e->firmware, e->machines, id, &paths) !=
+        VM_INSTANCE_PATHS_OK) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity,
+                     "That machine's directory could not be resolved.");
+        return -1;
+    }
+    snprintf(machine, sizeof machine, "%s", paths.machine);
+    atomic_store(&e->install_active, true);
+    atomic_store(&e->install_phase, VM_GUEST_INSTALL_BUILD_RECOVERING);
+    atomic_store(&e->install_done, 0);
+    atomic_store(&e->install_total, 0);
+    pthread_mutex_unlock(&e->lock);
+
+    message[0] = '\0';
+    memset(&result, 0, sizeof result);
+    status = vm_guest_install_build_after_force_off_with_appsync(
+        machine,
+        package_directory && package_directory[0] ? package_directory : NULL,
+        include_appsync, install_progress_cb, e, &result,
+        message, sizeof message);
+
+    pthread_mutex_lock(&e->lock);
+    atomic_store(&e->install_active, false);
+    pthread_mutex_unlock(&e->lock);
+
+    if (detail && detail_capacity) {
+        snprintf(detail, detail_capacity, "%s",
+                 message[0] ? message
+                            : vm_guest_install_build_status_text(status));
+    }
+
+    if (out && capacity) {
+        json_reset(&j, out, capacity);
+        json_printf(&j, "{\"ok\":%s,\"status\":%d,\"statusText\":",
+                    status == VM_GUEST_INSTALL_BUILD_OK ? "true" : "false",
+                    (int)status);
+        json_string(&j, vm_guest_install_build_status_text(status));
+        json_raw(&j, ",\"detail\":");
+        json_string(&j, detail && detail_capacity ? detail : message);
+        json_printf(&j,
+            ",\"alreadyInstalled\":%s,\"forcedPowerOff\":%s,"
+            "\"storageUpgraded\":%s,\"cydiaPrivilegesRepaired\":%s,"
+            "\"cydiaSourcesAdded\":%s,\"aptTrustInstalled\":%s,"
+            "\"aptVerifierStaged\":%s,\"cydiaCacheStaged\":%s,"
+            "\"filesystemRepaired\":%s,\"snapshots\":%llu}",
+            result.already_installed ? "true" : "false",
+            result.forced_power_off ? "true" : "false",
+            result.storage_upgraded ? "true" : "false",
+            result.cydia_privileges_repaired ? "true" : "false",
+            result.cydia_sources_added ? "true" : "false",
+            result.apt_trust_installed ? "true" : "false",
+            result.apt_verifier_staged ? "true" : "false",
+            result.cydia_cache_staged ? "true" : "false",
+            result.filesystem_repaired ? "true" : "false",
+            (unsigned long long)result.historical_snapshots);
+    }
+    if (status == VM_GUEST_INSTALL_BUILD_OK) rc = 0;
+    console_printf(e, "[pkg] install %s: %s\n",
+                   rc == 0 ? "complete" : "failed",
+                   detail && detail_capacity ? detail : message);
+    return rc;
+}
+
+void engine_install_progress(engine_t *engine, int *active, int *phase,
+                             uint64_t *done, uint64_t *total)
+{
+    engine_t *e = engine;
+    if (!e) return;
+    if (active) *active = atomic_load(&e->install_active) ? 1 : 0;
+    if (phase) *phase = atomic_load(&e->install_phase);
+    if (done) *done = atomic_load(&e->install_done);
+    if (total) *total = atomic_load(&e->install_total);
+}
+
 /* ------------------------------------------------------------- machines --- */
 
 static void machine_json(engine_t *e, const vm_instance_t *instance, json_t *j)
@@ -770,15 +1049,22 @@ static void machine_json(engine_t *e, const vm_instance_t *instance, json_t *j)
         vm_instance_paths_to_boot(&paths, &boot_paths);
         vm_firmware_boot_probe(&boot_paths, &state);
     }
+    uint64_t disk_capacity = 0;
+    unsigned disk_gib = 2;
+    if (derived && vm_disk_size_read(paths.machine, &disk_capacity) && disk_capacity > 0) {
+        disk_gib = (unsigned)(disk_capacity / VM_DISK_GIB);
+        if (disk_gib != 2 && disk_gib != 4 && disk_gib != 8) disk_gib = 2;
+    }
     json_printf(j,
         ",\"ready\":%s,\"readyState\":%d,\"kernel\":%s,\"devicetree\":%s,"
-        "\"rootfs\":%s,\"work\":%s,\"detail\":",
+        "\"rootfs\":%s,\"work\":%s,\"diskGiB\":%u,\"detail\":",
         derived && state.readiness == VM_FW_BOOT_READY ? "true" : "false",
         derived ? (int)state.readiness : 3,
         derived && state.kernel_present ? "true" : "false",
         derived && state.devicetree_present ? "true" : "false",
         derived && state.rootfs_present ? "true" : "false",
-        derived && state.work_present ? "true" : "false");
+        derived && state.work_present ? "true" : "false",
+        disk_gib);
     json_string(j, derived ? state.detail : vm_instance_paths_status_text(ps));
     json_raw(j, "}");
 }
@@ -811,6 +1097,7 @@ int engine_machines_json(engine_t *engine, char *out, size_t capacity)
 
 int engine_machine_create(engine_t *engine, const char *name,
                           const bool *options, unsigned option_count,
+                          unsigned disk_size_gib,
                           char *new_id, size_t id_capacity,
                           char *detail, size_t detail_capacity)
 {
@@ -883,9 +1170,59 @@ int engine_machine_create(engine_t *engine, const char *name,
         if (vm_instance_paths_derive(e->firmware, e->machines, id, &paths) ==
             VM_INSTANCE_PATHS_OK) {
             mkdir_p(paths.machine);
+            unsigned gib = (disk_size_gib == 4 || disk_size_gib == 8) ? disk_size_gib : 2u;
+            const char *rec = vm_disk_size_record(gib);
+            if (rec) {
+                char size_path[ENGINE_PATH_CAP];
+                if (join_path(size_path, sizeof size_path, paths.machine, VM_DISK_SIZE_FILE)) {
+                    FILE *sf = fopen(size_path, "wb");
+                    if (sf) {
+                        fputs(rec, sf);
+                        fclose(sf);
+                    }
+                }
+            }
         }
     }
     if (new_id && id_capacity) snprintf(new_id, id_capacity, "%s", id);
+    return 0;
+}
+
+int engine_machine_set_disk_size(engine_t *engine, const char *id,
+                                 unsigned disk_size_gib,
+                                 char *detail, size_t detail_capacity)
+{
+    engine_t *e = engine;
+    vm_instance_paths_t paths;
+    unsigned gib;
+    const char *rec;
+    char size_path[ENGINE_PATH_CAP];
+    FILE *f;
+
+    if (detail && detail_capacity) detail[0] = '\0';
+    if (!e || !id || !id[0]) return -1;
+    gib = (disk_size_gib == 4 || disk_size_gib == 8) ? disk_size_gib : 2u;
+    rec = vm_disk_size_record(gib);
+    if (!rec) return -1;
+
+    pthread_mutex_lock(&e->lock);
+    if (e->phase != PHASE_IDLE && !strcmp(id, e->instance_id)) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "Stop the machine before changing disk size.");
+        return -1;
+    }
+    pthread_mutex_unlock(&e->lock);
+
+    if (vm_instance_paths_derive(e->firmware, e->machines, id, &paths) != VM_INSTANCE_PATHS_OK)
+        return -1;
+    mkdir_p(paths.machine);
+    if (!join_path(size_path, sizeof size_path, paths.machine, VM_DISK_SIZE_FILE))
+        return -1;
+    f = fopen(size_path, "wb");
+    if (!f) return -1;
+    fputs(rec, f);
+    fclose(f);
     return 0;
 }
 
@@ -971,6 +1308,70 @@ int engine_machine_delete(engine_t *engine, const char *id,
                      "could not be deleted.");
     }
     return 0;
+}
+
+int engine_ipa_inspect_json(const char *ipa_path, char *out, size_t capacity)
+{
+    json_t j;
+    engine_ipa_info_t info;
+    char detail[320] = {0};
+    if (!out || capacity == 0) return -1;
+    json_reset(&j, out, capacity);
+    if (!ipa_path || !ipa_path[0]) {
+        json_raw(&j, "{\"ok\":false,\"detail\":\"No IPA path specified.\"}");
+        return 0;
+    }
+    if (!engine_ipa_inspect_path(ipa_path, &info, detail, sizeof detail)) {
+        json_raw(&j, "{\"ok\":false,\"detail\":");
+        json_string(&j, detail[0] ? detail : "Failed to inspect IPA.");
+        json_raw(&j, "}");
+        return 0;
+    }
+    json_raw(&j, "{\"ok\":true,\"name\":");
+    json_string(&j, info.display_name);
+    json_raw(&j, ",\"bundleId\":");
+    json_string(&j, info.bundle_id);
+    json_raw(&j, ",\"version\":");
+    json_string(&j, info.version);
+    json_raw(&j, ",\"executable\":");
+    json_string(&j, info.executable);
+    json_raw(&j, ",\"minOS\":");
+    json_string(&j, info.min_os);
+    json_printf(&j, ",\"fileCount\":%u,\"uncompressedBytes\":%llu}",
+                info.file_count, (unsigned long long)info.uncompressed_bytes);
+    return 0;
+}
+
+int engine_machine_install_ipa(engine_t *engine, const char *id,
+                               const char *cache_directory,
+                               const char *ipa_path,
+                               char *detail, size_t detail_capacity)
+{
+    engine_t *e = engine;
+    vm_instance_paths_t paths;
+
+    if (detail && detail_capacity) detail[0] = '\0';
+    if (!e || !id || !id[0] || !ipa_path || !ipa_path[0]) {
+        if (detail && detail_capacity) snprintf(detail, detail_capacity, "Invalid arguments.");
+        return -1;
+    }
+
+    pthread_mutex_lock(&e->lock);
+    if (e->phase != PHASE_IDLE && !strcmp(id, e->instance_id)) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "Stop the machine before installing an IPA.");
+        return -1;
+    }
+    pthread_mutex_unlock(&e->lock);
+
+    if (vm_instance_paths_derive(e->firmware, e->machines, id, &paths) != VM_INSTANCE_PATHS_OK) {
+        if (detail && detail_capacity) snprintf(detail, detail_capacity, "Cannot derive machine paths.");
+        return -1;
+    }
+
+    const char *cache_dir = (cache_directory && cache_directory[0]) ? cache_directory : e->root;
+    return engine_ipa_install_path(paths.machine, cache_dir, ipa_path, detail, detail_capacity);
 }
 
 int engine_options_json(engine_t *engine, char *out, size_t capacity)
@@ -1182,6 +1583,10 @@ static bool install_payload(engine_t *e, s5l8900_t *machine,
         pthread_mutex_unlock(&e->lock);
         return true;
     }
+
+    pthread_mutex_lock(&e->lock);
+    snprintf(e->machine_log_path, sizeof e->machine_log_path, "%s/console.log", paths.machine);
+    pthread_mutex_unlock(&e->lock);
 
     plan = vm_instance_work_plan(&paths);
     if (plan == VM_INSTANCE_WORK_ADOPT) {
@@ -1436,6 +1841,7 @@ static void post_frame(engine_t *e)
     uint32_t width, height, stride;
     bool argb;
     const uint8_t *source;
+    bool need_geo = false;
 
     pthread_mutex_lock(&e->lock);
     if (!e->snapshot || !e->snapshot_fresh || !e->window) {
@@ -1450,40 +1856,54 @@ static void post_frame(engine_t *e)
     argb = e->snapshot_argb;
     source = e->snapshot;
     e->snapshot_fresh = false;
+    if (e->window_geo_ptr != window || e->window_geo_w != width || e->window_geo_h != height) {
+        need_geo = true;
+        e->window_geo_ptr = window;
+        e->window_geo_w = width;
+        e->window_geo_h = height;
+    }
     pthread_mutex_unlock(&e->lock);
 
-    if (ANativeWindow_setBuffersGeometry(window, (int32_t)width,
-                                         (int32_t)height,
-                                         WINDOW_FORMAT_RGBA_8888) == 0) {
-        ANativeWindow_Buffer buffer;
-        if (ANativeWindow_lock(window, &buffer, NULL) == 0) {
-            uint8_t *destination = buffer.bits;
-            uint32_t rows = height < (uint32_t)buffer.height
-                                ? height : (uint32_t)buffer.height;
-            uint32_t columns = width < (uint32_t)buffer.width
-                                   ? width : (uint32_t)buffer.width;
-            for (uint32_t y = 0; y < rows; y++) {
-                const uint8_t *src = source + (size_t)y * stride;
-                uint8_t *dst = destination +
-                    (size_t)y * (size_t)buffer.stride * 4u;
+    if (need_geo) {
+        if (ANativeWindow_setBuffersGeometry(window, (int32_t)width,
+                                             (int32_t)height,
+                                             WINDOW_FORMAT_RGBA_8888) != 0) {
+            ANativeWindow_release(window);
+            return;
+        }
+    }
+
+    ANativeWindow_Buffer buffer;
+    if (ANativeWindow_lock(window, &buffer, NULL) == 0) {
+        uint8_t *destination = buffer.bits;
+        uint32_t rows = height < (uint32_t)buffer.height
+                            ? height : (uint32_t)buffer.height;
+        uint32_t columns = width < (uint32_t)buffer.width
+                               ? width : (uint32_t)buffer.width;
+        for (uint32_t y = 0; y < rows; y++) {
+            const uint32_t *src32 = (const uint32_t *)(source + (size_t)y * stride);
+            uint32_t *dst32 = (uint32_t *)(destination +
+                (size_t)y * (size_t)buffer.stride * 4u);
+            if (argb) {
                 for (uint32_t x = 0; x < columns; x++) {
-                    uint8_t b0 = src[x * 4u + 0u];
-                    uint8_t b1 = src[x * 4u + 1u];
-                    uint8_t b2 = src[x * 4u + 2u];
-                    if (argb) {
-                        dst[x * 4u + 0u] = b1;
-                        dst[x * 4u + 1u] = b2;
-                        dst[x * 4u + 2u] = src[x * 4u + 3u];
-                    } else {
-                        dst[x * 4u + 0u] = b2;
-                        dst[x * 4u + 1u] = b1;
-                        dst[x * 4u + 2u] = b0;
-                    }
-                    dst[x * 4u + 3u] = 0xff;
+                    uint32_t px = src32[x];
+                    uint8_t a = (uint8_t)(px >> 24);
+                    uint8_t r = (uint8_t)(px >> 16);
+                    uint8_t g = (uint8_t)(px >> 8);
+                    uint8_t b = (uint8_t)px;
+                    dst32[x] = (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | ((uint32_t)a << 24);
+                }
+            } else {
+                for (uint32_t x = 0; x < columns; x++) {
+                    uint32_t px = src32[x];
+                    uint8_t b = (uint8_t)px;
+                    uint8_t g = (uint8_t)(px >> 8);
+                    uint8_t r = (uint8_t)(px >> 16);
+                    dst32[x] = (uint32_t)r | ((uint32_t)g << 8) | ((uint32_t)b << 16) | 0xff000000u;
                 }
             }
-            ANativeWindow_unlockAndPost(window);
         }
+        ANativeWindow_unlockAndPost(window);
     }
     ANativeWindow_release(window);
 }
@@ -1592,6 +2012,9 @@ static void thread_set_phase(engine_t *e, int phase)
 
 static void engine_thread_main(engine_t *e)
 {
+    /* Prioritize emulation thread for big/performance CPU cores (e.g. Cortex-A75/A78) */
+    (void)setpriority(PRIO_PROCESS, 0, -4);
+
     s5l8900_t *machine = calloc(1, sizeof *machine);
     vm_firmware_boot_t *boot = NULL;
     bool ready = false;
@@ -1645,6 +2068,7 @@ static void engine_thread_main(engine_t *e)
         machine->i2s[0].frame = vm_audio_guest_frame;
         machine->i2s[0].frame_ctx = &e->audio;
         vm_audio_buffer_active(&e->audio, true);
+        atomic_store_explicit(&e->audio.host_running, true, memory_order_release);
         audio_running = true;
     }
 
@@ -1716,6 +2140,14 @@ static void engine_thread_main(engine_t *e)
         drain_one_button(e, machine);
 
         retired += s5l8900_run(machine, ENGINE_CHUNK_INSTRUCTIONS, &status);
+
+        if (s5l_pcf50635_in_standby(&machine->pmu)) {
+            stopped_by_request = true;
+            e->stop_mode = ENGINE_STOP_POWER_OFF;
+            console_append(e, "[vm] guest standby confirmed; powering off\n");
+            publish_retired(e, machine, retired, 0.0, ARM_OK);
+            break;
+        }
 
         if (e->usb_active) {
             usb_host_poll(&e->usb_host, machine);
@@ -1791,6 +2223,7 @@ static void engine_thread_main(engine_t *e)
     }
 
     if (audio_running) {
+        atomic_store_explicit(&e->audio.host_running, false, memory_order_release);
         vm_audio_buffer_active(&e->audio, false);
         audio_running = false;
     }
@@ -1828,6 +2261,8 @@ static void engine_thread_main(engine_t *e)
     e->usb_ready = false;
     e->boot = NULL;
     e->phase = PHASE_IDLE;
+    e->instance_id[0] = '\0';
+    e->machine_log_path[0] = '\0';
     e->thread_live = false;
     if (reached_cap)
         snprintf(e->status, sizeof e->status, "instruction cap reached");
@@ -1935,6 +2370,7 @@ void engine_destroy(engine_t *engine)
     pthread_mutex_lock(&e->lock);
     window = e->window;
     e->window = NULL;
+    e->window_geo_ptr = NULL;
     pthread_mutex_unlock(&e->lock);
     if (window) ANativeWindow_release(window);
 
@@ -2079,6 +2515,10 @@ void engine_set_paused(engine_t *engine, bool paused)
     engine_t *e = engine;
     if (!e) return;
     pthread_mutex_lock(&e->lock);
+    if (e->phase == PHASE_IDLE) {
+        pthread_mutex_unlock(&e->lock);
+        return;
+    }
     e->paused = paused;
     if (paused) snprintf(e->status, sizeof e->status, "paused");
     else if (e->machine_ready)
@@ -2190,6 +2630,7 @@ void engine_set_surface(engine_t *engine, ANativeWindow *window)
     pthread_mutex_lock(&e->lock);
     old = e->window;
     e->window = window;
+    e->window_geo_ptr = NULL;
     /* Force the next publication to repaint even if the guest is idle. */
     e->snapshot_fresh = e->snapshot != NULL;
     pthread_mutex_unlock(&e->lock);
@@ -2738,7 +3179,9 @@ int engine_render_audio(engine_t *engine, float *interleaved, unsigned frames)
 {
     engine_t *e = engine;
     unsigned done = 0;
-    if (!e || !interleaved || !e->audio_ok) return 0;
+    if (!e || !interleaved || !e->audio_ok ||
+        !atomic_load_explicit(&e->audio.host_running, memory_order_acquire))
+        return 0;
     while (frames > 0) {
         unsigned chunk = frames > ENGINE_AUDIO_SCRATCH
                              ? ENGINE_AUDIO_SCRATCH : frames;

@@ -51,18 +51,48 @@ int engine_firmware_json(engine_t *engine, char *out, size_t capacity);
 int engine_machines_json(engine_t *engine, char *out, size_t capacity);
 int engine_machine_create(engine_t *engine, const char *name,
                           const bool *options, unsigned option_count,
+                          unsigned disk_size_gib,
                           char *new_id, size_t id_capacity,
                           char *detail, size_t detail_capacity);
 int engine_machine_rename(engine_t *engine, const char *id, const char *name,
                           char *detail, size_t detail_capacity);
 int engine_machine_delete(engine_t *engine, const char *id,
                           char *detail, size_t detail_capacity);
+int engine_machine_set_disk_size(engine_t *engine, const char *id,
+                                 unsigned disk_size_gib,
+                                 char *detail, size_t detail_capacity);
 int engine_options_json(engine_t *engine, char *out, size_t capacity);
 int engine_machine_options_json(engine_t *engine, const char *id,
                                 char *out, size_t capacity);
 int engine_machine_set_options(engine_t *engine, const char *id,
                                const bool *options, unsigned option_count,
                                char *detail, size_t detail_capacity);
+int engine_ipa_inspect_json(const char *ipa_path, char *out, size_t capacity);
+int engine_machine_install_ipa(engine_t *engine, const char *id,
+                               const char *cache_directory,
+                               const char *ipa_path,
+                               char *detail, size_t detail_capacity);
+
+/* --------------------------------------------------------------- packages */
+/* The pinned, download-only package manifest: identity, sizes, every entry
+ * with its URL and SHA-256, and the optional AppSync entry. */
+int engine_packages_json(engine_t *engine, const char *id,
+                         char *out, size_t capacity);
+/*
+ * Build (or repair) one machine's jailbroken guest disk.  The machine must be
+ * stopped and its disk closed; unsaved guest RAM is discarded.  An empty
+ * `package_directory` probes an existing installation and answers
+ * ERR_ARGUMENT when a fresh install still needs downloaded packages.  The
+ * JSON answer carries ok, status, detail and the builder's flags.
+ */
+int engine_install_packages(engine_t *engine, const char *id,
+                            const char *package_directory,
+                            bool include_appsync,
+                            char *out, size_t capacity,
+                            char *detail, size_t detail_capacity);
+/* Writes: active, phase, done, total. */
+void engine_install_progress(engine_t *engine, int *active, int *phase,
+                             uint64_t *done, uint64_t *total);
 
 /* -------------------------------------------------------------------- run */
 /* Returns 0 when the start was scheduled; detail says why otherwise. */

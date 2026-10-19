@@ -96,6 +96,7 @@ class EngineRepository(private val handle: Long) {
                         rootfs = m.optBoolean("rootfs", false),
                         work = m.optBoolean("work", false),
                         detail = m.optString("detail", ""),
+                        diskGiB = m.optInt("diskGiB", 2),
                     ),
                 )
             }
@@ -105,14 +106,36 @@ class EngineRepository(private val handle: Long) {
     fun runningMachineId(): String =
         json(NativeEngine.nativeMachinesJson(handle)).optString("runningId", "")
 
-    fun createMachine(name: String, values: BooleanArray): BindResult =
-        bind(NativeEngine.nativeMachineCreate(handle, name, values))
+    fun createMachine(name: String, values: BooleanArray, diskGib: Int = 2): BindResult =
+        bind(NativeEngine.nativeMachineCreate(handle, name, values, diskGib))
+
+    fun setMachineDiskSize(id: String, diskGib: Int): BindResult =
+        bind(NativeEngine.nativeMachineSetDiskSize(handle, id, diskGib))
 
     fun renameMachine(id: String, name: String): BindResult =
         bind(NativeEngine.nativeMachineRename(handle, id, name))
 
     fun deleteMachine(id: String): BindResult =
         bind(NativeEngine.nativeMachineDelete(handle, id))
+
+    fun inspectIpa(ipaPath: String): IpaInfo {
+        val o = json(NativeEngine.nativeIpaInspect(ipaPath))
+        val ok = o.optBoolean("ok", false)
+        return IpaInfo(
+            ok = ok,
+            name = o.optString("name", ""),
+            bundleId = o.optString("bundleId", ""),
+            version = o.optString("version", ""),
+            executable = o.optString("executable", ""),
+            minOS = o.optString("minOS", ""),
+            fileCount = o.optInt("fileCount", 0),
+            uncompressedBytes = o.optLong("uncompressedBytes", 0L),
+            detail = o.optString("detail", ""),
+        )
+    }
+
+    fun installIpa(id: String, cacheDir: String, ipaPath: String): BindResult =
+        bind(NativeEngine.nativeMachineInstallIpa(handle, id, cacheDir, ipaPath))
 
     fun options(): OptionsCatalog {
         val o = json(NativeEngine.nativeOptionsJson(handle))
@@ -247,6 +270,88 @@ class EngineRepository(private val handle: Long) {
 
     fun snapshotsError(id: String): String =
         json(NativeEngine.nativeSnapshotsJson(handle, id)).optString("detail", "")
+
+    // ------------------------------------------------------------- packages --
+
+    fun packages(id: String): GuestManifest {
+        val o = json(NativeEngine.nativePackagesJson(handle, id))
+        val packages = o.optJSONArray("packages").let { array ->
+            buildList {
+                if (array == null) return@buildList
+                for (i in 0 until array.length()) {
+                    array.optJSONObject(i)?.let { add(packageOf(it)) }
+                }
+            }
+        }
+        return GuestManifest(
+            ok = o.optBoolean("ok", false),
+            busy = o.optBoolean("busy", false),
+            identity = o.optString("identity", ""),
+            machineId = o.optString("machine", ""),
+            machineOk = o.optBoolean("machineOk", false),
+            installed = o.optBoolean("installed", false),
+            workImageBytes = o.optLong("workImage", 0L),
+            snapshots = o.optLong("snapshots", 0L),
+            totalBytes = o.optLong("totalBytes", 0L),
+            appsyncBytes = o.optLong("appsyncBytes", 0L),
+            packages = packages,
+            appsync = o.optJSONObject("appsync")?.let { packageOf(it) },
+        )
+    }
+
+    /**
+     * Build or repair the jailbroken guest disk. Blocking — call on
+     * Dispatchers.IO. An empty [directory] probes an existing installation.
+     */
+    fun installPackages(
+        id: String,
+        directory: String,
+        includeAppsync: Boolean,
+    ): InstallResult {
+        val o = json(
+            NativeEngine.nativeInstallPackages(handle, id, directory, includeAppsync),
+        )
+        return InstallResult(
+            ok = o.optBoolean("ok", false),
+            status = o.optInt("status", -1),
+            statusText = o.optString("statusText", ""),
+            detail = o.optString("detail", ""),
+            alreadyInstalled = o.optBoolean("alreadyInstalled", false),
+            forcedPowerOff = o.optBoolean("forcedPowerOff", false),
+            storageUpgraded = o.optBoolean("storageUpgraded", false),
+            cydiaPrivilegesRepaired = o.optBoolean("cydiaPrivilegesRepaired", false),
+            cydiaSourcesAdded = o.optBoolean("cydiaSourcesAdded", false),
+            aptTrustInstalled = o.optBoolean("aptTrustInstalled", false),
+            aptVerifierStaged = o.optBoolean("aptVerifierStaged", false),
+            cydiaCacheStaged = o.optBoolean("cydiaCacheStaged", false),
+            filesystemRepaired = o.optBoolean("filesystemRepaired", false),
+            snapshots = o.optLong("snapshots", 0L),
+        )
+    }
+
+    fun installProgress(): InstallProgress {
+        val v = try {
+            NativeEngine.nativeInstallProgress(handle)
+        } catch (_: Throwable) {
+            LongArray(4)
+        }
+        return InstallProgress(
+            active = v.getOrElse(0) { 0L } != 0L,
+            phase = v.getOrElse(1) { 0L }.toInt(),
+            done = v.getOrElse(2) { 0L },
+            total = v.getOrElse(3) { 0L },
+        )
+    }
+
+    private fun packageOf(o: JSONObject): GuestPackage = GuestPackage(
+        name = o.optString("package", ""),
+        version = o.optString("version", ""),
+        filename = o.optString("filename", ""),
+        url = o.optString("url", ""),
+        size = o.optLong("size", 0L),
+        sha256 = o.optString("sha256", ""),
+        roles = o.optInt("roles", 0),
+    )
 
     // ---------------------------------------------------------------- audio --
 

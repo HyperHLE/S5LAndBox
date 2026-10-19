@@ -125,7 +125,11 @@ fun ImportScreen(repository: EngineRepository, onDone: () -> Unit) {
                         pfd.close()
                         null
                     } else {
-                        pfd.detachFd() to size
+                        // Keep the ParcelFileDescriptor open for the duration
+                        // of the native import: detachFd() would hand us a raw
+                        // int, and Android exposes no way to wrap it back into
+                        // a FileDescriptor for closing.
+                        pfd to size
                     }
                 } catch (_: Throwable) {
                     null
@@ -137,16 +141,16 @@ fun ImportScreen(repository: EngineRepository, onDone: () -> Unit) {
                 return@launch
             }
 
-            val fd = descriptor.first
+            val file = descriptor.first
             val size = descriptor.second
             val result = withContext(Dispatchers.IO) {
                 try {
-                    repository.importIpsw(fd, size, skipChecksums)
+                    repository.importIpsw(file.fd, size, skipChecksums)
                 } catch (error: Throwable) {
                     ImportOutcome(false, error.message ?: "The import stopped unexpectedly.")
                 } finally {
                     try {
-                        Os.close(fd)
+                        file.close()
                     } catch (_: Throwable) {
                     }
                 }

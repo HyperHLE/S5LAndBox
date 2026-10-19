@@ -40,6 +40,12 @@ object NativeEngine {
         handle: Long,
         name: String,
         options: BooleanArray,
+        diskGib: Int,
+    ): String
+    external fun nativeMachineSetDiskSize(
+        handle: Long,
+        id: String,
+        diskGib: Int,
     ): String
     external fun nativeMachineRename(handle: Long, id: String, name: String): String
     external fun nativeMachineDelete(handle: Long, id: String): String
@@ -49,6 +55,13 @@ object NativeEngine {
         handle: Long,
         id: String,
         options: BooleanArray,
+    ): String
+    external fun nativeIpaInspect(ipaPath: String): String
+    external fun nativeMachineInstallIpa(
+        handle: Long,
+        id: String,
+        cacheDir: String,
+        ipaPath: String,
     ): String
 
     // Execution.
@@ -90,6 +103,18 @@ object NativeEngine {
         id: String,
         snapshotId: String,
     ): Boolean
+
+    // Packages.
+    external fun nativePackagesJson(handle: Long, id: String): String
+    external fun nativeInstallPackages(
+        handle: Long,
+        id: String,
+        packageDirectory: String,
+        includeAppsync: Boolean,
+    ): String
+
+    /** [active, phase, done, total]. */
+    external fun nativeInstallProgress(handle: Long): LongArray
 
     // Audio.
     external fun nativeRenderAudio(handle: Long, buffer: FloatArray, frames: Int): Int

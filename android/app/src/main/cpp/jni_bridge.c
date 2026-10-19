@@ -178,6 +178,66 @@ Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeDestroy(
     engine_destroy(handle_of(handle));
 }
 
+/* --------------------------------------------------------------- packages --- */
+
+JNIEXPORT jstring JNICALL
+Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativePackagesJson(
+    JNIEnv *env, jclass clazz, jlong handle, jstring id)
+{
+    (void)clazz;
+    return engine_id_json_string(env, handle, id, engine_packages_json, 49152);
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeInstallPackages(
+    JNIEnv *env, jclass clazz, jlong handle, jstring id,
+    jstring package_directory, jboolean include_appsync)
+{
+    engine_t *e = handle_of(handle);
+    char *machine = NULL;
+    char *directory = NULL;
+    char detail[512];
+    char out[4096];
+    int rc;
+    (void)clazz;
+
+    out[0] = '\0';
+    if (!e) return new_string(env, "{\"ok\":false,\"detail\":\"No engine.\"}");
+    machine = string_from_jni(env, id);
+    directory = string_from_jni(env, package_directory);
+    detail[0] = '\0';
+    rc = engine_install_packages(e, machine, directory,
+                                 include_appsync == JNI_TRUE,
+                                 out, sizeof out, detail, sizeof detail);
+    free(machine);
+    free(directory);
+    if (!out[0]) result_json(out, sizeof out, rc == 0, "", detail);
+    return new_string(env, out);
+}
+
+JNIEXPORT jlongArray JNICALL
+Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeInstallProgress(
+    JNIEnv *env, jclass clazz, jlong handle)
+{
+    engine_t *e = handle_of(handle);
+    jlong values[4] = {0, 0, 0, 0};
+    jlongArray array;
+    int active = 0, phase = 0;
+    uint64_t done = 0, total = 0;
+    (void)clazz;
+    if (e) {
+        engine_install_progress(e, &active, &phase, &done, &total);
+        values[0] = active;
+        values[1] = phase;
+        values[2] = (jlong)done;
+        values[3] = (jlong)total;
+    }
+    array = (*env)->NewLongArray(env, 4);
+    if (!array) return NULL;
+    (*env)->SetLongArrayRegion(env, array, 0, 4, values);
+    return array;
+}
+
 /* --------------------------------------------------------------- firmware --- */
 
 JNIEXPORT jstring JNICALL
@@ -252,7 +312,7 @@ Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeMachinesJson(
 JNIEXPORT jstring JNICALL
 Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeMachineCreate(
     JNIEnv *env, jclass clazz, jlong handle, jstring name,
-    jbooleanArray options)
+    jbooleanArray options, jint disk_gib)
 {
     engine_t *e = handle_of(handle);
     char *wanted;
@@ -270,10 +330,30 @@ Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeMachineCreate(
     read_options(env, options, values, &count);
     id[0] = '\0';
     detail[0] = '\0';
-    rc = engine_machine_create(e, wanted, values, count, id, sizeof id,
-                               detail, sizeof detail);
+    rc = engine_machine_create(e, wanted, values, count, (unsigned)disk_gib,
+                               id, sizeof id, detail, sizeof detail);
     free(wanted);
     result_json(out, sizeof out, rc == 0, id, detail);
+    return new_string(env, out);
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeMachineSetDiskSize(
+    JNIEnv *env, jclass clazz, jlong handle, jstring id, jint disk_gib)
+{
+    engine_t *e = handle_of(handle);
+    char *wanted_id;
+    char detail[512];
+    char out[1024];
+    int rc;
+    (void)clazz;
+    if (!e || !id) return new_string(env, "{\"ok\":false}");
+    wanted_id = string_from_jni(env, id);
+    if (!wanted_id) return new_string(env, "{\"ok\":false}");
+    detail[0] = '\0';
+    rc = engine_machine_set_disk_size(e, wanted_id, (unsigned)disk_gib, detail, sizeof detail);
+    free(wanted_id);
+    result_json(out, sizeof out, rc == 0, "", detail);
     return new_string(env, out);
 }
 
@@ -320,6 +400,49 @@ Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeMachineDelete(
     detail[0] = '\0';
     rc = engine_machine_delete(e, wanted, detail, sizeof detail);
     free(wanted);
+    result_json(out, sizeof out, rc == 0, "", detail);
+    return new_string(env, out);
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeIpaInspect(
+    JNIEnv *env, jclass clazz, jstring ipa_path)
+{
+    char *path;
+    char out[2048];
+    (void)clazz;
+    if (!ipa_path) return new_string(env, "{\"ok\":false,\"detail\":\"No path.\"}");
+    path = string_from_jni(env, ipa_path);
+    if (!path) return new_string(env, "{\"ok\":false,\"detail\":\"Invalid path.\"}");
+    engine_ipa_inspect_json(path, out, sizeof out);
+    free(path);
+    return new_string(env, out);
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeMachineInstallIpa(
+    JNIEnv *env, jclass clazz, jlong handle, jstring id, jstring cache_dir, jstring ipa_path)
+{
+    engine_t *e = handle_of(handle);
+    char *wanted_id = NULL;
+    char *wanted_cache = NULL;
+    char *wanted_ipa = NULL;
+    char detail[512];
+    char out[1024];
+    int rc;
+    (void)clazz;
+    if (!e || !id || !ipa_path) return new_string(env, "{\"ok\":false,\"detail\":\"Invalid parameters.\"}");
+    wanted_id = string_from_jni(env, id);
+    wanted_cache = cache_dir ? string_from_jni(env, cache_dir) : NULL;
+    wanted_ipa = string_from_jni(env, ipa_path);
+    detail[0] = '\0';
+    rc = engine_machine_install_ipa(e, wanted_id ? wanted_id : "",
+                                    wanted_cache ? wanted_cache : "",
+                                    wanted_ipa ? wanted_ipa : "",
+                                    detail, sizeof detail);
+    free(wanted_id);
+    free(wanted_cache);
+    free(wanted_ipa);
     result_json(out, sizeof out, rc == 0, "", detail);
     return new_string(env, out);
 }
