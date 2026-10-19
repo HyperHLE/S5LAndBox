@@ -2170,7 +2170,11 @@ static void engine_thread_main(engine_t *e)
                 if (next_publish <= now)
                     next_publish = now + ENGINE_PUBLISH_SECONDS;
             }
-            if (status != ARM_OK) break;
+            if (status != ARM_OK) {
+                console_printf(e, "[vm] CPU stop / fault: status=%d at PC=0x%08x, LR=0x%08x, CPSR=0x%08x, retired=%" PRIu64 "\n",
+                               status, machine->cpu.pc, machine->cpu.r[14], machine->cpu.cpsr, retired);
+                break;
+            }
             if (cap > 0 && retired >= cap) {
                 reached_cap = true;
                 publish_retired(e, machine, retired, 0.0, status);
@@ -2217,7 +2221,11 @@ static void engine_thread_main(engine_t *e)
                 /* BUSY: the memory-disk bridge is mid-continuation. */
                 retired += s5l8900_run(machine, ENGINE_CHUNK_INSTRUCTIONS,
                                        &status);
-                if (status != ARM_OK) break;
+                if (status != ARM_OK) {
+                    console_printf(e, "[vm] CPU stop / fault during checkpoint: status=%d at PC=0x%08x, LR=0x%08x\n",
+                                   status, machine->cpu.pc, machine->cpu.r[14]);
+                    break;
+                }
             }
         }
     }

@@ -1602,6 +1602,19 @@ bool vm_firmware_boot_start(vm_firmware_boot_t *boot,
     vm_boot_options_reconcile_jailbreak(
         &report->options, &request, guest_install_committed);
 
+    char verbose_cmdline[S5L_BRINGUP_CMDLINE_CAPACITY];
+    const char *base_cmd = request.cmdline ? request.cmdline : S5L_BRINGUP_DEFAULT_CMDLINE;
+    if (strstr(base_cmd, "debug=0x8")) {
+        const char *p = strstr(base_cmd, "debug=0x8");
+        size_t pre = (size_t)(p - base_cmd);
+        (void)snprintf(verbose_cmdline, sizeof verbose_cmdline, "-v %.*sdebug=0x14e%s",
+                       (int)pre, base_cmd, p + strlen("debug=0x8"));
+        request.cmdline = verbose_cmdline;
+    } else if (!strstr(base_cmd, "-v")) {
+        (void)snprintf(verbose_cmdline, sizeof verbose_cmdline, "-v %s", base_cmd);
+        request.cmdline = verbose_cmdline;
+    }
+
     s5l_bringup_status_t status =
         s5l_bringup(machine, &request, boot->bridges, &report->bringup);
 

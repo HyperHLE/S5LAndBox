@@ -20,6 +20,8 @@ import android.os.Environment
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Download
@@ -27,8 +29,20 @@ import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Extension
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.PowerSettingsNew
+import androidx.compose.material.icons.filled.SaveAlt
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Smartphone
+import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.sp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -95,6 +109,7 @@ fun MachinesScreen(
     var creating by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<Machine?>(null) }
     var deleteTarget by remember { mutableStateOf<Machine?>(null) }
+    var kernelLogTarget by remember { mutableStateOf<Machine?>(null) }
     var menuFor by remember { mutableStateOf<String?>(null) }
 
     val context = LocalContext.current
@@ -252,6 +267,7 @@ fun MachinesScreen(
                             },
                             onDelete = { menuFor = null; deleteTarget = machine },
                             onStop = { menuFor = null; stopMachine(machine.id) },
+                            onOpenKernelLog = { menuFor = null; kernelLogTarget = machine },
                             onExportLog = {
                                 menuFor = null
                                 val machineDir = File(context.getExternalFilesDir(null), "Machines/${machine.id}")
@@ -421,6 +437,30 @@ fun MachinesScreen(
             )
         }
     }
+
+    kernelLogTarget?.let { machine ->
+        KernelLogDialog(
+            machine = machine,
+            isRunning = machine.id == runningId,
+            onDismiss = { kernelLogTarget = null },
+            onSaveToDownloads = { text ->
+                try {
+                    val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+                    downloadDir.mkdirs()
+                    val safeName = machine.name.replace(" ", "_")
+                    val target = File(downloadDir, "s5landbox-$safeName-kernel.log")
+                    target.writeText(text)
+                    scope.launch {
+                        snackbar.showSnackbar("Saved to Downloads/${target.name}")
+                    }
+                } catch (e: Exception) {
+                    scope.launch {
+                        snackbar.showSnackbar("Save failed: ${e.message}")
+                    }
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -509,6 +549,7 @@ private fun MachineCard(
     onInstallIpa: () -> Unit,
     onDelete: () -> Unit,
     onStop: () -> Unit,
+    onOpenKernelLog: () -> Unit,
     onExportLog: () -> Unit,
 ) {
     Card(
@@ -625,6 +666,11 @@ private fun MachineCard(
                         text = { Text("Snapshots") },
                         leadingIcon = { Icon(Icons.Filled.CameraAlt, contentDescription = null) },
                         onClick = onSnapshots,
+                    )
+                    DropdownMenuItem(
+                        text = { Text("Kernel log") },
+                        leadingIcon = { Icon(Icons.Filled.Terminal, contentDescription = null) },
+                        onClick = onOpenKernelLog,
                     )
                     DropdownMenuItem(
                         text = { Text("Export log") },
@@ -783,6 +829,188 @@ private fun InstallIpaDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) {
                 Text("Cancel")
+            }
+        },
+    )
+}
+
+@Composable
+private fun KernelLogDialog(
+    machine: Machine,
+    isRunning: Boolean,
+    onDismiss: () -> Unit,
+    onSaveToDownloads: (String) -> Unit,
+) {
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
+    val machineDir = remember(machine.id) {
+        File(context.getExternalFilesDir(null), "Machines/${machine.id}")
+    }
+    val logFile = remember(machineDir) { File(machineDir, "console.log") }
+
+    var logText by remember { mutableStateOf("") }
+    var filterQuery by remember { mutableStateOf("") }
+
+    fun readLog() {
+        if (logFile.exists() && logFile.length() > 0) {
+            try {
+                val len = logFile.length()
+                val text = if (len > 300_000) {
+                    logFile.inputStream().use { stream ->
+                        stream.skip(len - 300_000)
+                        val bytes = stream.readBytes()
+                        "[… earlier kernel log truncated, showing last 300 KB …]\n" + String(bytes)
+                    }
+                } else {
+                    logFile.readText()
+                }
+                logText = text
+            } catch (e: Exception) {
+                logText = "Error reading kernel log: ${e.message}"
+            }
+        } else {
+            logText = "(no kernel log output yet. Start the machine to record kernel console output.)"
+        }
+    }
+
+    LaunchedEffect(machine.id) {
+        readLog()
+        if (isRunning) {
+            while (isActive) {
+                delay(1000)
+                readLog()
+            }
+        }
+    }
+
+    val displayedText = remember(logText, filterQuery) {
+        if (filterQuery.isBlank()) {
+            logText
+        } else {
+            val q = filterQuery.trim()
+            val filtered = logText.lineSequence().filter { it.contains(q, ignoreCase = true) }.joinToString("\n")
+            if (filtered.isBlank()) "(no lines matching \"$q\")" else filtered
+        }
+    }
+
+    val scroll = rememberScrollState()
+    LaunchedEffect(displayedText) {
+        if (filterQuery.isBlank()) {
+            scroll.scrollTo(scroll.maxValue)
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    Icons.Filled.Terminal,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Text(
+                    text = "Kernel Log: ${machine.name}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f, fill = false),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (isRunning) {
+                    Text(
+                        text = "LIVE",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.secondary,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = filterQuery,
+                    onValueChange = { filterQuery = it },
+                    placeholder = { Text("Filter log (e.g. panic, launchd, error)…", style = MaterialTheme.typography.bodySmall) },
+                    leadingIcon = { Icon(Icons.Filled.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+                    trailingIcon = {
+                        if (filterQuery.isNotEmpty()) {
+                            IconButton(onClick = { filterQuery = "" }, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Filled.Clear, contentDescription = "Clear", modifier = Modifier.size(16.dp))
+                            }
+                        }
+                    },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                )
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(360.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFF0D1117))
+                        .padding(10.dp),
+                ) {
+                    SelectionContainer {
+                        Text(
+                            text = displayedText,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 11.sp,
+                                lineHeight = 15.sp,
+                            ),
+                            color = Color(0xFF7EE787),
+                            modifier = Modifier.verticalScroll(scroll),
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                ) {
+                    val sizeKb = if (logFile.exists()) logFile.length() / 1024 else 0
+                    val lineCount = logText.count { it == '\n' }
+                    Text(
+                        text = "$sizeKb KB · $lineCount lines",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    if (filterQuery.isNotEmpty()) {
+                        Text(
+                            text = "${displayedText.count { it == '\n' }} matches",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = {
+                    clipboard.setText(AnnotatedString(displayedText))
+                }) {
+                    Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Copy")
+                }
+                TextButton(onClick = {
+                    onSaveToDownloads(logText)
+                }) {
+                    Icon(Icons.Filled.SaveAlt, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Save")
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("Close")
+                }
             }
         },
     )
