@@ -7008,53 +7008,110 @@ static uint16_t catalog_build_symlink(catalog_ctx_t *ctx, uint32_t parent,
     return record_len;
 }
 
-/* Prove that an absolute or parent-relative target names a directory in the
- * catalog state currently being planned. `..` is resolved through the current
- * folder's own HFS thread record, not by string surgery, so normalization never
- * guesses which catalog parent a symlink traversal reaches. */
-static bool catalog_target_is_directory(catalog_ctx_t *ctx,
+static bool catalog_read_parent_link(catalog_ctx_t *ctx, const uint8_t *data,
+                                     uint8_t *target, size_t *size,
+                                     rootfs_work_stage_t stage,
+                                     rootfs_work_result_t *result);
+
+static bool catalog_resolve_folder_thread(catalog_ctx_t *ctx,
+                                          uint32_t cnid,
+                                          catalog_folder_ref_t *folder,
+                                          rootfs_work_stage_t stage,
+                                          rootfs_work_result_t *result) {
+    uint32_t leaf = 0u;
+    uint16_t position = 0u;
+    bool found = false;
+    uint8_t *node = NULL;
+    uint16_t offset;
+    const uint8_t *data;
+    uint16_t length;
+    uint16_t i;
+
+    if (!catalog_search(ctx, cnid, NULL, 0u, &leaf, &position,
+                        &found, stage, result))
+        return false;
+    if (!found) {
+        result_fail(result, ROOTFS_WORK_PROVISION_CATALOG_CORRUPT, stage, 0,
+                    "folder CNID %u has no thread record", cnid);
+        return false;
+    }
+    if (!catalog_node_load(ctx, leaf, &node, stage, result))
+        return false;
+    offset = catalog_slot(node, ctx->node_size, position);
+    data = node + offset + catalog_record_data_offset(node + offset);
+    if (read_be16(data) != HFS_CAT_FOLDER_THREAD) {
+        result_fail(result, ROOTFS_WORK_PROVISION_CATALOG_CORRUPT, stage, 0,
+                    "folder CNID %u has a non-folder thread", cnid);
+        return false;
+    }
+    folder->cnid = cnid;
+    folder->key_parent = read_be32(data + 4u);
+    length = read_be16(data + 8u);
+    if (length > HFS_NAME_MAX_UNITS) {
+        result_fail(result, ROOTFS_WORK_PROVISION_CATALOG_CORRUPT, stage, 0,
+                    "folder CNID %u thread has an invalid name length %u",
+                    cnid, length);
+        return false;
+    }
+    folder->key_length = length;
+    for (i = 0u; i < length; i++)
+        folder->key_unit[i] = read_be16(data + 10u + (uint32_t)i * 2u);
+    return true;
+}
+
+static bool catalog_resolve_target_cnid(catalog_ctx_t *ctx,
                                         uint32_t parent_cnid,
                                         const uint8_t *target,
                                         size_t target_size,
-                                        bool *is_directory,
+                                        uint32_t *target_cnid,
                                         rootfs_work_stage_t stage,
                                         rootfs_work_result_t *result) {
     uint32_t current = parent_cnid;
     size_t cursor = 0u;
+    unsigned hops = 0u;
+    uint16_t units[HFS_NAME_MAX_UNITS];
+    size_t start;
+    size_t length;
+    uint32_t leaf = 0u;
+    uint16_t position = 0u;
+    bool found = false;
+    uint8_t *node = NULL;
+    const uint8_t *data;
+    uint16_t offset;
+    size_t index;
+    uint8_t sub_target[ROOTFS_WORK_MAX_PATH + 1u];
+    size_t sub_target_size = 0u;
+    uint32_t sub_cnid = 0u;
 
-    *is_directory = false;
-    if (target_size == 0u)
+    *target_cnid = 0u;
+    if (target_size == 0u) {
+        *target_cnid = parent_cnid;
         return true;
+    }
     if (target[0] == '/') {
         current = HFS_ROOT_FOLDER_CNID;
         cursor = 1u;
         if (cursor == target_size) {
-            *is_directory = true;
+            *target_cnid = HFS_ROOT_FOLDER_CNID;
             return true;
         }
     }
     while (cursor < target_size) {
-        uint16_t units[HFS_NAME_MAX_UNITS];
-        size_t start = cursor;
-        size_t length;
-        uint32_t leaf = 0u;
-        uint16_t position = 0u;
-        bool found = false;
-        uint8_t *node = NULL;
-        const uint8_t *data;
-        uint16_t offset;
-        size_t index;
-
+        while (cursor < target_size && target[cursor] == '/')
+            cursor++;
+        if (cursor >= target_size)
+            break;
+        start = cursor;
         while (cursor < target_size && target[cursor] != '/')
             cursor++;
         length = cursor - start;
-        if (length == 0u || length > HFS_NAME_MAX_UNITS)
-            return true;
-        if (length == 1u && target[start] == '.') {
-            if (cursor < target_size)
-                cursor++;
-            continue;
+        if (length > HFS_NAME_MAX_UNITS) {
+            result_fail(result, ROOTFS_WORK_PROVISION_INVALID, stage, 0,
+                        "invalid symlink target path component");
+            return false;
         }
+        if (length == 1u && target[start] == '.')
+            continue;
         if (length == 2u && target[start] == '.' &&
             target[start + 1u] == '.') {
             if (current != HFS_ROOT_FOLDER_CNID) {
@@ -7080,7 +7137,7 @@ static bool catalog_target_is_directory(catalog_ctx_t *ctx,
                                 current);
                     return false;
                 }
-                current = read_be32(data + 4);
+                current = read_be32(data + 4u);
                 if (current < HFS_ROOT_FOLDER_CNID) {
                     result_fail(result,
                                 ROOTFS_WORK_PROVISION_CATALOG_CORRUPT, stage, 0,
@@ -7089,8 +7146,6 @@ static bool catalog_target_is_directory(catalog_ctx_t *ctx,
                     return false;
                 }
             }
-            if (cursor < target_size)
-                cursor++;
             continue;
         }
         for (index = 0u; index < length; index++)
@@ -7098,25 +7153,71 @@ static bool catalog_target_is_directory(catalog_ctx_t *ctx,
         if (!catalog_search(ctx, current, units, (uint16_t)length, &leaf,
                             &position, &found, stage, result))
             return false;
-        if (!found)
-            return true;
+        if (!found) {
+            result_fail(result, ROOTFS_WORK_PROVISION_PARENT_MISSING, stage, 0,
+                        "symlink target path component not found under CNID %u",
+                        current);
+            return false;
+        }
         if (!catalog_node_load(ctx, leaf, &node, stage, result))
             return false;
         offset = catalog_slot(node, ctx->node_size, position);
         data = node + offset + catalog_record_data_offset(node + offset);
-        if (read_be16(data) != HFS_CAT_FOLDER_RECORD)
-            return true;
-        current = read_be32(data + 8);
-        if (current < HFS_FIRST_USER_CNID) {
-            result_fail(result, ROOTFS_WORK_PROVISION_CATALOG_CORRUPT, stage, 0,
-                        "a symlink target directory claims reserved CNID %u",
+        if (read_be16(data) == HFS_CAT_FILE_RECORD &&
+            (read_be16(data + 42u) & HFS_MODE_IFMT) == HFS_MODE_IFLNK) {
+            if (++hops > 16u) {
+                result_fail(result, ROOTFS_WORK_PROVISION_LIMIT, stage, 0,
+                            "symlink traversal exceeds 16 hops");
+                return false;
+            }
+            if (!catalog_read_parent_link(ctx, data, sub_target, &sub_target_size,
+                                          stage, result))
+                return false;
+            while (sub_target_size > 0u && sub_target[sub_target_size - 1u] == '/')
+                sub_target_size--;
+            sub_target[sub_target_size] = '\0';
+            if (!catalog_resolve_target_cnid(ctx, current, sub_target, sub_target_size,
+                                             &sub_cnid, stage, result))
+                return false;
+            current = sub_cnid;
+        } else if (read_be16(data) == HFS_CAT_FOLDER_RECORD) {
+            current = read_be32(data + 8u);
+            if (current < HFS_FIRST_USER_CNID) {
+                result_fail(result, ROOTFS_WORK_PROVISION_CATALOG_CORRUPT, stage, 0,
+                            "a symlink target directory claims reserved CNID %u",
+                            current);
+                return false;
+            }
+        } else {
+            result_fail(result, ROOTFS_WORK_PROVISION_PARENT_MISSING, stage, 0,
+                        "symlink target path component under CNID %u is not a folder",
                         current);
             return false;
         }
-        if (cursor < target_size)
-            cursor++;
     }
-    *is_directory = true;
+    *target_cnid = current;
+    return true;
+}
+
+/* Prove that an absolute or parent-relative target names a directory in the
+ * catalog state currently being planned. `..` is resolved through the current
+ * folder's own HFS thread record, not by string surgery, so normalization never
+ * guesses which catalog parent a symlink traversal reaches. */
+static bool catalog_target_is_directory(catalog_ctx_t *ctx,
+                                        uint32_t parent_cnid,
+                                        const uint8_t *target,
+                                        size_t target_size,
+                                        bool *is_directory,
+                                        rootfs_work_stage_t stage,
+                                        rootfs_work_result_t *result) {
+    uint32_t target_cnid = 0u;
+    *is_directory = false;
+    if (target_size == 0u)
+        return true;
+    if (!catalog_resolve_target_cnid(ctx, parent_cnid, target, target_size,
+                                     &target_cnid, stage, result))
+        return false;
+    *is_directory = target_cnid != 0u;
     return true;
 }
 
@@ -7369,13 +7470,18 @@ static bool catalog_child_folder(catalog_ctx_t *ctx,
                                  catalog_folder_ref_t *folder,
                                  rootfs_work_stage_t stage,
                                  rootfs_work_result_t *result) {
-    uint32_t leaf = 0;
-    uint16_t position = 0;
+    uint32_t leaf = 0u;
+    uint16_t position = 0u;
     bool found = false;
     uint8_t *node = NULL;
     uint16_t offset;
     const uint8_t *data;
     uint16_t index;
+    uint8_t target[ROOTFS_WORK_MAX_PATH + 1u];
+    size_t target_size = 0u;
+    uint32_t target_cnid = 0u;
+    char name[256];
+    size_t nlen;
 
     if (!catalog_search(ctx, parent->cnid, units, unit_count, &leaf, &position,
                         &found, stage, result))
@@ -7390,23 +7496,43 @@ static bool catalog_child_folder(catalog_ctx_t *ctx,
         return false;
     offset = catalog_slot(node, ctx->node_size, position);
     data = node + offset + catalog_record_data_offset(node + offset);
-    if (read_be16(data) != HFS_CAT_FOLDER_RECORD) {
-        result_fail(result, ROOTFS_WORK_PROVISION_PARENT_MISSING, stage, 0,
-                    "a path component under CNID %u exists but is not a "
-                    "folder", parent->cnid);
-        return false;
+    if (read_be16(data) == HFS_CAT_FOLDER_RECORD) {
+        folder->cnid = read_be32(data + 8u);
+        if (folder->cnid < HFS_FIRST_USER_CNID) {
+            result_fail(result, ROOTFS_WORK_PROVISION_CATALOG_CORRUPT, stage, 0,
+                        "a folder record claims reserved CNID %u", folder->cnid);
+            return false;
+        }
+        folder->key_parent = parent->cnid;
+        folder->key_length = unit_count;
+        for (index = 0u; index < unit_count; index++)
+            folder->key_unit[index] = units[index];
+        return true;
     }
-    folder->cnid = read_be32(data + 8);
-    if (folder->cnid < HFS_FIRST_USER_CNID) {
-        result_fail(result, ROOTFS_WORK_PROVISION_CATALOG_CORRUPT, stage, 0,
-                    "a folder record claims reserved CNID %u", folder->cnid);
-        return false;
+    if (read_be16(data) == HFS_CAT_FILE_RECORD &&
+        (read_be16(data + 42u) & HFS_MODE_IFMT) == HFS_MODE_IFLNK) {
+        if (!catalog_read_parent_link(ctx, data, target, &target_size,
+                                      stage, result))
+            return false;
+        while (target_size > 0u && target[target_size - 1u] == '/')
+            target_size--;
+        target[target_size] = '\0';
+
+        if (!catalog_resolve_target_cnid(ctx, parent->cnid, target, target_size,
+                                         &target_cnid, stage, result))
+            return false;
+
+        return catalog_resolve_folder_thread(ctx, target_cnid, folder,
+                                             stage, result);
     }
-    folder->key_parent = parent->cnid;
-    folder->key_length = unit_count;
-    for (index = 0; index < unit_count; index++)
-        folder->key_unit[index] = units[index];
-    return true;
+    nlen = unit_count < 255u ? (size_t)unit_count : 255u;
+    for (index = 0u; index < nlen; index++)
+        name[index] = (char)units[index];
+    name[nlen] = '\0';
+    result_fail(result, ROOTFS_WORK_PROVISION_PARENT_MISSING, stage, 0,
+                "path component '%s' under CNID %u exists but is not a folder",
+                name, parent->cnid);
+    return false;
 }
 
 static bool rootfs_path_split(const char *path,
@@ -7514,14 +7640,21 @@ static bool catalog_read_parent_link(catalog_ctx_t *ctx, const uint8_t *data,
     uint32_t blocks = 0u;
     size_t copied = 0u;
     bool empty = false;
+    unsigned i;
+    size_t byte_idx;
+    uint32_t start;
+    uint32_t count;
+    uint64_t capacity;
+    size_t amount;
+
     if (!logical || logical > ROOTFS_WORK_MAX_PATH) {
         result_fail(result, ROOTFS_WORK_FILE_REPAIR_MISMATCH, stage, 0,
                     "metadata-repair parent link has an invalid target size");
         return false;
     }
-    for (unsigned i = 0u; i < 8u; i++) {
-        uint32_t start = read_be32(data + 104u + i * 8u);
-        uint32_t count = read_be32(data + 108u + i * 8u);
+    for (i = 0u; i < 8u; i++) {
+        start = read_be32(data + 104u + i * 8u);
+        count = read_be32(data + 108u + i * 8u);
         if (!count) { empty = true; continue; }
         if (empty || (uint64_t)start + count > ctx->total_blocks ||
             UINT32_MAX - blocks < count) {
@@ -7536,19 +7669,19 @@ static bool catalog_read_parent_link(catalog_ctx_t *ctx, const uint8_t *data,
                     "metadata-repair parent link is not an inline data fork");
         return false;
     }
-    for (unsigned i = 0u; i < 8u && copied < (size_t)logical; i++) {
-        uint32_t start = read_be32(data + 104u + i * 8u);
-        uint32_t count = read_be32(data + 108u + i * 8u);
-        uint64_t capacity = (uint64_t)count * ctx->block_size;
-        size_t amount = (size_t)logical - copied;
+    for (i = 0u; i < 8u && copied < (size_t)logical; i++) {
+        start = read_be32(data + 104u + i * 8u);
+        count = read_be32(data + 108u + i * 8u);
+        capacity = (uint64_t)count * ctx->block_size;
+        amount = (size_t)logical - copied;
         if ((uint64_t)amount > capacity) amount = (size_t)capacity;
         if (!checked_read(ctx->file, ctx->file_size,
                           (uint64_t)start * ctx->block_size, target + copied,
                           amount, stage, result)) return false;
         copied += amount;
     }
-    for (size_t i = 0u; i < copied; i++) {
-        if (target[i] < 0x20u || target[i] > 0x7eu || target[i] == ':') {
+    for (byte_idx = 0u; byte_idx < copied; byte_idx++) {
+        if (target[byte_idx] < 0x20u || target[byte_idx] > 0x7eu || target[byte_idx] == ':') {
             result_fail(result, ROOTFS_WORK_FILE_REPAIR_MISMATCH, stage, 0,
                         "metadata-repair parent link has an invalid target byte");
             return false;
