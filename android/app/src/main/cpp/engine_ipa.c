@@ -10,6 +10,7 @@
 #include "rootfs_work.h"
 #include "sha256.h"
 
+#include <android/log.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -761,17 +762,22 @@ int engine_ipa_install_path(const char *machine_directory,
         entries[unique++] = entries[i];
     }
 
-    /* 6. Repair clone and provision */
+    /* 6. Repair clone (best effort) and provision */
     rootfs_work_result_t rw_result;
     bool provision_ok = false;
-    if (rootfs_work_repair_powered_off_clone(stage_img, &rw_result) == ROOTFS_WORK_OK) {
-        if (rootfs_work_provision_clone(stage_img, entries, unique, true, &rw_result) == ROOTFS_WORK_OK) {
-            provision_ok = true;
-        } else {
-            if (detail && detail_capacity) snprintf(detail, detail_capacity, "Provision failed: %s", rw_result.detail);
-        }
+    rootfs_work_status_t repair_st = rootfs_work_repair_powered_off_clone(stage_img, &rw_result);
+    if (repair_st != ROOTFS_WORK_OK) {
+        /* Powered-off allocation recovery is only supported when the extents-overflow
+         * tree is empty. If the guest disk has fragmented files or active overflow extents,
+         * skip repair and proceed directly with provisioning (allow_unclean=true). */
+        __android_log_print(ANDROID_LOG_WARN, "S5LAndBox",
+            "engine_ipa: repair clone skipped (%s), proceeding to provision",
+            rw_result.detail[0] ? rw_result.detail : "unsupported repair state");
+    }
+    if (rootfs_work_provision_clone(stage_img, entries, unique, true, &rw_result) == ROOTFS_WORK_OK) {
+        provision_ok = true;
     } else {
-        if (detail && detail_capacity) snprintf(detail, detail_capacity, "Repair clone failed: %s", rw_result.detail);
+        if (detail && detail_capacity) snprintf(detail, detail_capacity, "Provision failed: %s", rw_result.detail);
     }
 
     /* Free entries */
