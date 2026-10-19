@@ -932,6 +932,14 @@ size_t rootfs_work_standard_entries(bool activate, bool ppp,
                                     rootfs_work_entry_t *entries,
                                     size_t capacity);
 
+/*
+ * Resolves symlinks in an absolute path within a rootfs image, e.g.
+ * "/Applications" -> "/private/var/stash/Applications.pwn".
+ * Returns true if resolved or unchanged, false on file/catalog error.
+ */
+bool rootfs_work_resolve_parent_symlinks(const char *image_path, const char *input_path,
+                                         char *out_resolved, size_t out_capacity);
+
 #ifdef __cplusplus
 }
 #endif

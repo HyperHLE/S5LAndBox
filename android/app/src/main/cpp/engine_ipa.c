@@ -601,8 +601,11 @@ int engine_ipa_install_path(const char *machine_directory,
     }
 
     /* 5. Build directory and file entries */
+    char apps_base[512] = "/Applications";
+    rootfs_work_resolve_parent_symlinks(stage_img, "/Applications", apps_base, sizeof apps_base);
+
     char app_dir[512];
-    snprintf(app_dir, sizeof app_dir, "/Applications/%s.app", slug);
+    snprintf(app_dir, sizeof app_dir, "%s/%s.app", apps_base, slug);
 
     char script_path[512];
     snprintf(script_path, sizeof script_path, "/usr/libexec/%s", slug);

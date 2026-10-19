@@ -7363,18 +7363,6 @@ static bool catalog_root_folder(catalog_ctx_t *ctx,
     return true;
 }
 
-static bool catalog_read_parent_link(catalog_ctx_t *ctx, const uint8_t *data,
-                                      uint8_t *target, size_t *size,
-                                      rootfs_work_stage_t stage,
-                                      rootfs_work_result_t *result);
-
-static bool catalog_find_path_record(catalog_ctx_t *ctx, const char *path,
-                                     bool follow_parent_symlinks,
-                                     uint32_t *leaf, uint16_t *position,
-                                     bool *found, uint8_t **record_data,
-                                     rootfs_work_stage_t stage,
-                                     rootfs_work_result_t *result);
-
 static bool catalog_child_folder(catalog_ctx_t *ctx,
                                  const catalog_folder_ref_t *parent,
                                  const uint16_t *units, uint16_t unit_count,
@@ -7403,40 +7391,10 @@ static bool catalog_child_folder(catalog_ctx_t *ctx,
     offset = catalog_slot(node, ctx->node_size, position);
     data = node + offset + catalog_record_data_offset(node + offset);
     if (read_be16(data) != HFS_CAT_FOLDER_RECORD) {
-        if (read_be16(data) == HFS_CAT_FILE_RECORD &&
-            (read_be16(data + 42u) & HFS_MODE_IFMT) == HFS_MODE_IFLNK) {
-            uint8_t target[ROOTFS_WORK_MAX_PATH + 1u];
-            size_t target_size = 0u;
-            uint32_t target_leaf = 0u;
-            uint16_t target_pos = 0u;
-            bool target_found = false;
-            uint8_t *target_record = NULL;
-
-            if (!catalog_read_parent_link(ctx, data, target, &target_size,
-                                          stage, result))
-                return false;
-            while (target_size > 0 && target[target_size - 1u] == '/')
-                target_size--;
-            target[target_size] = '\0';
-            if (!catalog_find_path_record(ctx, (const char *)target, true,
-                                          &target_leaf, &target_pos,
-                                          &target_found, &target_record,
-                                          stage, result))
-                return false;
-            if (!target_found || !target_record ||
-                read_be16(target_record) != HFS_CAT_FOLDER_RECORD) {
-                result_fail(result, ROOTFS_WORK_PROVISION_PARENT_MISSING, stage, 0,
-                            "a path component under CNID %u is a symlink to a non-folder",
-                            parent->cnid);
-                return false;
-            }
-            data = target_record;
-        } else {
-            result_fail(result, ROOTFS_WORK_PROVISION_PARENT_MISSING, stage, 0,
-                        "a path component under CNID %u exists but is not a "
-                        "folder", parent->cnid);
-            return false;
-        }
+        result_fail(result, ROOTFS_WORK_PROVISION_PARENT_MISSING, stage, 0,
+                    "a path component under CNID %u exists but is not a "
+                    "folder", parent->cnid);
+        return false;
     }
     folder->cnid = read_be32(data + 8);
     if (folder->cnid < HFS_FIRST_USER_CNID) {
@@ -7605,6 +7563,8 @@ static bool catalog_read_parent_link(catalog_ctx_t *ctx, const uint8_t *data,
  * provisioning and content rewrites keep their existing no-link contract. */
 static bool catalog_find_path_record(catalog_ctx_t *ctx, const char *path,
                                      bool follow_parent_symlinks,
+                                     bool follow_leaf_symlink,
+                                     char *out_resolved, size_t out_capacity,
                                      uint32_t *leaf, uint16_t *position,
                                      bool *found, uint8_t **record_data,
                                      rootfs_work_stage_t stage,
@@ -7621,6 +7581,8 @@ static bool catalog_find_path_record(catalog_ctx_t *ctx, const char *path,
     *position = 0u;
     *found = false;
     *record_data = NULL;
+    if (out_resolved && out_capacity > 0)
+        snprintf(out_resolved, out_capacity, "%s", path);
     if (!rootfs_path_split(path, components, &count, result)) return false;
     memcpy(resolved, path, strlen(path) + 1u);
     path = resolved;
@@ -7645,38 +7607,45 @@ restart:
             return false;
         offset = catalog_slot(node, ctx->node_size, *position);
         data = node + offset + catalog_record_data_offset(node + offset);
+        if (read_be16(data) == HFS_CAT_FILE_RECORD &&
+            (read_be16(data + 42u) & HFS_MODE_IFMT) == HFS_MODE_IFLNK) {
+            bool follow = (index + 1u < count) ? follow_parent_symlinks : follow_leaf_symlink;
+            if (follow) {
+                uint8_t target[ROOTFS_WORK_MAX_PATH];
+                char expanded[ROOTFS_WORK_MAX_PATH + 1u];
+                size_t target_size = 0u;
+                if (++links > 16u) {
+                    result_fail(result, ROOTFS_WORK_PROVISION_LIMIT, stage, 0,
+                                "metadata-repair parent links exceed 16 hops (possible loop)");
+                    return false;
+                }
+                if (!catalog_read_parent_link(ctx, data, target, &target_size,
+                                              stage, result)) return false;
+                size_t prefix = target[0] == '/' ? 0u : components[index].start;
+                const char *suffix = path + components[index].start + components[index].length;
+                size_t tail = strlen(suffix);
+                /* The remaining path starts with '/'; avoid doubling a target's
+                 * trailing separator, including a link to the image root. */
+                while (target_size && target[target_size - 1u] == '/') target_size--;
+                if (prefix + target_size + tail > ROOTFS_WORK_MAX_PATH) {
+                    result_fail(result, ROOTFS_WORK_PROVISION_LIMIT, stage, 0,
+                                "expanded metadata-repair path exceeds the path limit");
+                    return false;
+                }
+                memcpy(expanded, path, prefix);
+                memcpy(expanded + prefix, target, target_size);
+                memcpy(expanded + prefix + target_size, suffix, tail + 1u);
+                memcpy(resolved, expanded, prefix + target_size + tail + 1u);
+                if (out_resolved && out_capacity > 0)
+                    snprintf(out_resolved, out_capacity, "%s", resolved);
+                goto restart;
+            }
+        }
         if (index + 1u == count) {
+            if (out_resolved && out_capacity > 0)
+                snprintf(out_resolved, out_capacity, "%s", resolved);
             *record_data = data;
             return true;
-        }
-        if (follow_parent_symlinks && read_be16(data) == HFS_CAT_FILE_RECORD &&
-            (read_be16(data + 42u) & HFS_MODE_IFMT) == HFS_MODE_IFLNK) {
-            uint8_t target[ROOTFS_WORK_MAX_PATH];
-            char expanded[ROOTFS_WORK_MAX_PATH + 1u];
-            size_t target_size = 0u;
-            if (++links > 16u) {
-                result_fail(result, ROOTFS_WORK_PROVISION_LIMIT, stage, 0,
-                            "metadata-repair parent links exceed 16 hops (possible loop)");
-                return false;
-            }
-            if (!catalog_read_parent_link(ctx, data, target, &target_size,
-                                          stage, result)) return false;
-            size_t prefix = target[0] == '/' ? 0u : components[index].start;
-            const char *suffix = path + components[index].start + components[index].length;
-            size_t tail = strlen(suffix);
-            /* The remaining path starts with '/'; avoid doubling a target's
-             * trailing separator, including a link to the image root. */
-            while (target_size && target[target_size - 1u] == '/') target_size--;
-            if (prefix + target_size + tail > ROOTFS_WORK_MAX_PATH) {
-                result_fail(result, ROOTFS_WORK_PROVISION_LIMIT, stage, 0,
-                            "expanded metadata-repair path exceeds the path limit");
-                return false;
-            }
-            memcpy(expanded, path, prefix);
-            memcpy(expanded + prefix, target, target_size);
-            memcpy(expanded + prefix + target_size, suffix, tail + 1u);
-            memcpy(resolved, expanded, prefix + target_size + tail + 1u);
-            goto restart;
         }
         if (read_be16(data) != HFS_CAT_FOLDER_RECORD) {
             result_fail(result, ROOTFS_WORK_FILE_REPAIR_MISMATCH, stage, 0,
@@ -7848,7 +7817,8 @@ static bool catalog_file_repair(catalog_ctx_t *ctx,
         return false;
     }
     if (!catalog_find_path_record(ctx, repair->path,
-                                  repair->follow_parent_symlinks, &leaf, &position,
+                                  repair->follow_parent_symlinks, false, NULL, 0,
+                                  &leaf, &position,
                                   &found, &data, stage, result))
         return false;
     if (!found) {
@@ -7941,7 +7911,8 @@ static bool catalog_file_rewrite(
                     "the exact file-rewrite request is malformed");
         return false;
     }
-    if (!catalog_find_path_record(ctx, rewrite->path, false, &leaf, &position,
+    if (!catalog_find_path_record(ctx, rewrite->path, false, false, NULL, 0,
+                                  &leaf, &position,
                                   &found, &data, stage, result))
         return false;
     if (!found) {
@@ -10259,6 +10230,78 @@ rootfs_work_status_t rootfs_work_reconcile_cold_boot_clone(const char *path,
     result->allocation_bits_repaired = allocation.allocation_bits_repaired;
     result->allocation_free_count_repaired = allocation.allocation_free_count_repaired;
     return status;
+}
+
+bool rootfs_work_resolve_parent_symlinks(const char *image_path, const char *input_path,
+                                         char *out_resolved, size_t out_capacity) {
+    if (!image_path || !input_path || !out_resolved || out_capacity == 0)
+        return false;
+
+    snprintf(out_resolved, out_capacity, "%s", input_path);
+
+    char clean_path[ROOTFS_WORK_MAX_PATH + 1u];
+    size_t in_len = strlen(input_path);
+    while (in_len > 1u && input_path[in_len - 1u] == '/')
+        in_len--;
+    if (in_len >= sizeof(clean_path) || input_path[0] != '/')
+        return false;
+    memcpy(clean_path, input_path, in_len);
+    clean_path[in_len] = '\0';
+
+    host_file_t file;
+    file_stamp_t stamp;
+    rootfs_work_result_t result;
+    hfs_volume_t volume;
+    catalog_ctx_t catalog;
+    uint32_t error = 0;
+    bool success = false;
+    uint8_t *buffer = NULL;
+
+    result_reset(&result);
+    host_file_init(&file);
+    memset(&stamp, 0, sizeof(stamp));
+    memset(&volume, 0, sizeof(volume));
+    memset(&catalog, 0, sizeof(catalog));
+
+    buffer = (uint8_t *)malloc(ROOTFS_WORK_MAX_IO_BUFFER);
+    if (!buffer)
+        return false;
+
+#ifdef _WIN32
+    if (!windows_open_source(image_path, &file, &stamp, &result))
+        goto cleanup;
+#else
+    if (!posix_open_source(image_path, &file, &stamp, &result))
+        goto cleanup;
+#endif
+
+    if (!hfs_validate(&file, stamp.size, &volume, buffer, ROOTFS_WORK_MAX_IO_BUFFER,
+                      true, ROOTFS_WORK_STAGE_SOURCE_VALIDATE, &result))
+        goto cleanup;
+
+    if (!catalog_open(&catalog, &file, stamp.size, &volume,
+                      ROOTFS_WORK_DEFAULT_MAC_TIME, &result))
+        goto cleanup;
+
+    uint32_t leaf = 0;
+    uint16_t position = 0;
+    bool found = false;
+    uint8_t *record_data = NULL;
+
+    if (catalog_find_path_record(&catalog, clean_path, true, true,
+                                 out_resolved, out_capacity,
+                                 &leaf, &position, &found, &record_data,
+                                 ROOTFS_WORK_STAGE_PROVISION_PLAN, &result)) {
+        if (found)
+            success = true;
+    }
+
+cleanup:
+    catalog_close(&catalog);
+    if (host_file_is_open(&file))
+        (void)host_file_close(&file, &error);
+    free(buffer);
+    return success;
 }
 
 rootfs_work_status_t rootfs_work_create(const char *source_path,
