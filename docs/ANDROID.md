@@ -127,12 +127,27 @@ The CMake project adds `core/` as a subdirectory and compiles the portable
 The APK is built with 16 KiB page alignment
 (`-Wl,-z,max-page-size=16384`), as current Android devices require.
 
+## Runtime scheduling
+
+The guest runs on one native interpreter thread. On Android 12+ devices that
+expose the [NDK Performance Hint API](https://developer.android.com/ndk/reference/group/a-performance-hint),
+the worker opens one ADPF session with a 16.67 ms target and reports each active
+60 Hz work interval. Android can use that measured workload to adjust CPU
+scheduling; the emulator does not create extra workers or pin itself to a core.
+The API is loaded dynamically, so Android 8–11 and devices without the API
+retain the existing behavior.
+
+The hint is best-effort, not a promise of a specific clock or frame rate, and
+has not been measured on a Helio G99 phone. Guest graphics remain CPU-side; this
+does not submit iPhone MBX or QuartzCore work to the Mali GPU. A host GPU
+renderer is a separate compatibility project.
+
 ## Testing notes
 
 - On an emulator without Bluetooth or audio, the guest still boots; audio output
   attaches to the default media route.
-- The interpreter is the performance limit. Expect the same order of magnitude
-  as the iOS interpreter build; there is no JIT on Android.
+- The interpreter remains the performance limit. The Android performance hint
+  improves scheduling only; there is no JIT on Android.
 - Import and snapshot operations block their background thread for seconds to
   minutes on a phone, so the UI always shows progress and keeps the screen on
   during an import.
