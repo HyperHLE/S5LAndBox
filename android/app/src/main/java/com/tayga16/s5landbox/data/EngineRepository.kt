@@ -96,6 +96,7 @@ class EngineRepository(private val handle: Long) {
                         rootfs = m.optBoolean("rootfs", false),
                         work = m.optBoolean("work", false),
                         detail = m.optString("detail", ""),
+                        diskGiB = m.optInt("diskGiB", 2),
                     ),
                 )
             }
@@ -105,8 +106,11 @@ class EngineRepository(private val handle: Long) {
     fun runningMachineId(): String =
         json(NativeEngine.nativeMachinesJson(handle)).optString("runningId", "")
 
-    fun createMachine(name: String, values: BooleanArray): BindResult =
-        bind(NativeEngine.nativeMachineCreate(handle, name, values))
+    fun createMachine(name: String, values: BooleanArray, diskGib: Int = 2): BindResult =
+        bind(NativeEngine.nativeMachineCreate(handle, name, values, diskGib))
+
+    fun setMachineDiskSize(id: String, diskGib: Int): BindResult =
+        bind(NativeEngine.nativeMachineSetDiskSize(handle, id, diskGib))
 
     fun renameMachine(id: String, name: String): BindResult =
         bind(NativeEngine.nativeMachineRename(handle, id, name))

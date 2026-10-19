@@ -40,6 +40,12 @@ object NativeEngine {
         handle: Long,
         name: String,
         options: BooleanArray,
+        diskGib: Int,
+    ): String
+    external fun nativeMachineSetDiskSize(
+        handle: Long,
+        id: String,
+        diskGib: Int,
     ): String
     external fun nativeMachineRename(handle: Long, id: String, name: String): String
     external fun nativeMachineDelete(handle: Long, id: String): String

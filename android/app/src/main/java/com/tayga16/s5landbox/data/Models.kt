@@ -19,6 +19,7 @@ data class Machine(
     val rootfs: Boolean,
     val work: Boolean,
     val detail: String,
+    val diskGiB: Int = 2,
 ) {
     /** 0 = ready, 1 = needs the writable image, 2 = firmware incomplete. */
     val needsProvision: Boolean get() = readiness == 1

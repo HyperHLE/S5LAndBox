@@ -51,12 +51,16 @@ int engine_firmware_json(engine_t *engine, char *out, size_t capacity);
 int engine_machines_json(engine_t *engine, char *out, size_t capacity);
 int engine_machine_create(engine_t *engine, const char *name,
                           const bool *options, unsigned option_count,
+                          unsigned disk_size_gib,
                           char *new_id, size_t id_capacity,
                           char *detail, size_t detail_capacity);
 int engine_machine_rename(engine_t *engine, const char *id, const char *name,
                           char *detail, size_t detail_capacity);
 int engine_machine_delete(engine_t *engine, const char *id,
                           char *detail, size_t detail_capacity);
+int engine_machine_set_disk_size(engine_t *engine, const char *id,
+                                 unsigned disk_size_gib,
+                                 char *detail, size_t detail_capacity);
 int engine_options_json(engine_t *engine, char *out, size_t capacity);
 int engine_machine_options_json(engine_t *engine, const char *id,
                                 char *out, size_t capacity);

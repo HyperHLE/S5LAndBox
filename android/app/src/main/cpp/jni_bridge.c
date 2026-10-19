@@ -312,7 +312,7 @@ Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeMachinesJson(
 JNIEXPORT jstring JNICALL
 Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeMachineCreate(
     JNIEnv *env, jclass clazz, jlong handle, jstring name,
-    jbooleanArray options)
+    jbooleanArray options, jint disk_gib)
 {
     engine_t *e = handle_of(handle);
     char *wanted;
@@ -330,10 +330,30 @@ Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeMachineCreate(
     read_options(env, options, values, &count);
     id[0] = '\0';
     detail[0] = '\0';
-    rc = engine_machine_create(e, wanted, values, count, id, sizeof id,
-                               detail, sizeof detail);
+    rc = engine_machine_create(e, wanted, values, count, (unsigned)disk_gib,
+                               id, sizeof id, detail, sizeof detail);
     free(wanted);
     result_json(out, sizeof out, rc == 0, id, detail);
+    return new_string(env, out);
+}
+
+JNIEXPORT jstring JNICALL
+Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeMachineSetDiskSize(
+    JNIEnv *env, jclass clazz, jlong handle, jstring id, jint disk_gib)
+{
+    engine_t *e = handle_of(handle);
+    char *wanted_id;
+    char detail[512];
+    char out[1024];
+    int rc;
+    (void)clazz;
+    if (!e || !id) return new_string(env, "{\"ok\":false}");
+    wanted_id = string_from_jni(env, id);
+    if (!wanted_id) return new_string(env, "{\"ok\":false}");
+    detail[0] = '\0';
+    rc = engine_machine_set_disk_size(e, wanted_id, (unsigned)disk_gib, detail, sizeof detail);
+    free(wanted_id);
+    result_json(out, sizeof out, rc == 0, "", detail);
     return new_string(env, out);
 }
 

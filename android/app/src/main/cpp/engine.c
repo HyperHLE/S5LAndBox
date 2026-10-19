@@ -37,6 +37,7 @@
 #include "VMFirmwareKeys.h"
 #include "VMGuest.h"
 #include "VMGuestInstallBuild.h"
+#include "VMDiskSize.h"
 #include "VMGuestPackageManifest.h"
 #include "VMInstancePaths.h"
 #include "VMInstances.h"
@@ -1038,15 +1039,22 @@ static void machine_json(engine_t *e, const vm_instance_t *instance, json_t *j)
         vm_instance_paths_to_boot(&paths, &boot_paths);
         vm_firmware_boot_probe(&boot_paths, &state);
     }
+    uint64_t disk_capacity = 0;
+    unsigned disk_gib = 2;
+    if (derived && vm_disk_size_read(paths.machine, &disk_capacity) && disk_capacity > 0) {
+        disk_gib = (unsigned)(disk_capacity / VM_DISK_GIB);
+        if (disk_gib != 2 && disk_gib != 4 && disk_gib != 8) disk_gib = 2;
+    }
     json_printf(j,
         ",\"ready\":%s,\"readyState\":%d,\"kernel\":%s,\"devicetree\":%s,"
-        "\"rootfs\":%s,\"work\":%s,\"detail\":",
+        "\"rootfs\":%s,\"work\":%s,\"diskGiB\":%u,\"detail\":",
         derived && state.readiness == VM_FW_BOOT_READY ? "true" : "false",
         derived ? (int)state.readiness : 3,
         derived && state.kernel_present ? "true" : "false",
         derived && state.devicetree_present ? "true" : "false",
         derived && state.rootfs_present ? "true" : "false",
-        derived && state.work_present ? "true" : "false");
+        derived && state.work_present ? "true" : "false",
+        disk_gib);
     json_string(j, derived ? state.detail : vm_instance_paths_status_text(ps));
     json_raw(j, "}");
 }
@@ -1079,6 +1087,7 @@ int engine_machines_json(engine_t *engine, char *out, size_t capacity)
 
 int engine_machine_create(engine_t *engine, const char *name,
                           const bool *options, unsigned option_count,
+                          unsigned disk_size_gib,
                           char *new_id, size_t id_capacity,
                           char *detail, size_t detail_capacity)
 {
@@ -1151,9 +1160,59 @@ int engine_machine_create(engine_t *engine, const char *name,
         if (vm_instance_paths_derive(e->firmware, e->machines, id, &paths) ==
             VM_INSTANCE_PATHS_OK) {
             mkdir_p(paths.machine);
+            unsigned gib = (disk_size_gib == 4 || disk_size_gib == 8) ? disk_size_gib : 2u;
+            const char *rec = vm_disk_size_record(gib);
+            if (rec) {
+                char size_path[ENGINE_PATH_CAP];
+                if (join_path(size_path, sizeof size_path, paths.machine, VM_DISK_SIZE_FILE)) {
+                    FILE *sf = fopen(size_path, "wb");
+                    if (sf) {
+                        fputs(rec, sf);
+                        fclose(sf);
+                    }
+                }
+            }
         }
     }
     if (new_id && id_capacity) snprintf(new_id, id_capacity, "%s", id);
+    return 0;
+}
+
+int engine_machine_set_disk_size(engine_t *engine, const char *id,
+                                 unsigned disk_size_gib,
+                                 char *detail, size_t detail_capacity)
+{
+    engine_t *e = engine;
+    vm_instance_paths_t paths;
+    unsigned gib;
+    const char *rec;
+    char size_path[ENGINE_PATH_CAP];
+    FILE *f;
+
+    if (detail && detail_capacity) detail[0] = '\0';
+    if (!e || !id || !id[0]) return -1;
+    gib = (disk_size_gib == 4 || disk_size_gib == 8) ? disk_size_gib : 2u;
+    rec = vm_disk_size_record(gib);
+    if (!rec) return -1;
+
+    pthread_mutex_lock(&e->lock);
+    if (e->phase != PHASE_IDLE && !strcmp(id, e->instance_id)) {
+        pthread_mutex_unlock(&e->lock);
+        if (detail && detail_capacity)
+            snprintf(detail, detail_capacity, "Stop the machine before changing disk size.");
+        return -1;
+    }
+    pthread_mutex_unlock(&e->lock);
+
+    if (vm_instance_paths_derive(e->firmware, e->machines, id, &paths) != VM_INSTANCE_PATHS_OK)
+        return -1;
+    mkdir_p(paths.machine);
+    if (!join_path(size_path, sizeof size_path, paths.machine, VM_DISK_SIZE_FILE))
+        return -1;
+    f = fopen(size_path, "wb");
+    if (!f) return -1;
+    fputs(rec, f);
+    fclose(f);
     return 0;
 }
 

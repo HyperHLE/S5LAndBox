@@ -35,6 +35,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExtendedFloatingActionButton
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -212,11 +213,11 @@ fun MachinesScreen(
         CreateMachineDialog(
             suggestedName = "iPhone ${machines.size + 1}",
             onDismiss = { creating = false },
-            onCreate = { name ->
+            onCreate = { name, diskGiB ->
                 creating = false
                 scope.launch {
                     val result = withContext(Dispatchers.IO) {
-                        repository.createMachine(name, BooleanArray(0))
+                        repository.createMachine(name, BooleanArray(0), diskGiB)
                     }
                     if (result.ok) {
                         snackbar.showSnackbar("Machine created.")
@@ -412,7 +413,7 @@ private fun MachineCard(
                     }
                 }
                 Text(
-                    text = "iPhone OS 3.1.3 · n82ap",
+                    text = "iPhone OS 3.1.3 · n82ap · ${machine.diskGiB} GB",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -488,9 +489,10 @@ private fun MachineCard(
 private fun CreateMachineDialog(
     suggestedName: String,
     onDismiss: () -> Unit,
-    onCreate: (String) -> Unit,
+    onCreate: (String, Int) -> Unit,
 ) {
     var name by remember { mutableStateOf(suggestedName) }
+    var diskGiB by remember { mutableStateOf(4) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("New machine") },
@@ -503,15 +505,31 @@ private fun CreateMachineDialog(
                     label = { Text("Name") },
                 )
                 Text(
-                    text = "The first boot copies the root filesystem into this machine's " +
-                        "own writable image (about 450 MB).",
+                    text = "Storage Capacity",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(2, 4, 8).forEach { size ->
+                        FilterChip(
+                            selected = diskGiB == size,
+                            onClick = { diskGiB = size },
+                            label = { Text("$size GB") },
+                        )
+                    }
+                }
+                Text(
+                    text = "The first boot creates a $diskGiB GB rootfs disk image for this machine. 4 GB or 8 GB is recommended for installing Cydia tweaks and IPA apps.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         },
         confirmButton = {
-            TextButton(onClick = { onCreate(name.trim()) }, enabled = name.trim().isNotEmpty()) {
+            TextButton(
+                onClick = { onCreate(name.trim(), diskGiB) },
+                enabled = name.trim().isNotEmpty(),
+            ) {
                 Text("Create")
             }
         },
