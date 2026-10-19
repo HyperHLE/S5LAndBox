@@ -438,7 +438,7 @@ fun EmulatorScreen(
                 val current = status
                 if (current != null && current.preparing) {
                     PreparingCard(current, Modifier.align(Alignment.Center))
-                } else if (current != null && !current.idle && current.fps <= 0.0 && current.instructions in 100_000L..2_500_000_000L) {
+                } else if (current != null && !current.idle && current.fps <= 0.0 && current.retired in 100_000L..2_500_000_000L) {
                     Card(
                         colors = CardDefaults.cardColors(
                             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.95f),
@@ -459,7 +459,7 @@ fun EmulatorScreen(
                                 "Booting iOS…",
                                 style = MaterialTheme.typography.titleSmall,
                             )
-                            val pct = (current.instructions.toDouble() / 2_500_000_000.0 * 100.0).coerceIn(1.0, 99.0).toInt()
+                            val pct = (current.retired.toDouble() / 2_500_000_000.0 * 100.0).coerceIn(1.0, 99.0).toInt()
                             LinearProgressIndicator(
                                 progress = { pct / 100f },
                                 modifier = Modifier.fillMaxWidth(),

@@ -2068,6 +2068,7 @@ static void engine_thread_main(engine_t *e)
         machine->i2s[0].frame = vm_audio_guest_frame;
         machine->i2s[0].frame_ctx = &e->audio;
         vm_audio_buffer_active(&e->audio, true);
+        atomic_store_explicit(&e->audio.host_running, true, memory_order_release);
         audio_running = true;
     }
 
@@ -2222,6 +2223,7 @@ static void engine_thread_main(engine_t *e)
     }
 
     if (audio_running) {
+        atomic_store_explicit(&e->audio.host_running, false, memory_order_release);
         vm_audio_buffer_active(&e->audio, false);
         audio_running = false;
     }
@@ -3177,7 +3179,9 @@ int engine_render_audio(engine_t *engine, float *interleaved, unsigned frames)
 {
     engine_t *e = engine;
     unsigned done = 0;
-    if (!e || !interleaved || !e->audio_ok) return 0;
+    if (!e || !interleaved || !e->audio_ok ||
+        !atomic_load_explicit(&e->audio.host_running, memory_order_acquire))
+        return 0;
     while (frames > 0) {
         unsigned chunk = frames > ENGINE_AUDIO_SCRATCH
                              ? ENGINE_AUDIO_SCRATCH : frames;
