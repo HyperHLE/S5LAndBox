@@ -60,6 +60,17 @@ When you're done, choose **Save & close** to keep your place.
 Firmware downloads come directly from Apple; Apple firmware is not included
 with S5LBox.
 
+## Android
+
+An Android port lives in [`android/`](android/) and runs the same portable core
+in interpreter mode: import an iPhone1,2 3.1.3 IPSW, create machines, boot to
+SpringBoard, use touch and the hardware buttons, take snapshots and listen to
+the guest. It builds an installable APK in GitHub Actions on every push to
+`android-port` and on pull requests against `main` (Actions → `android-build` →
+`s5landbox-debug-apk`). USB services, IPA installation and Cydia are not in the
+Android build yet. See [docs/ANDROID.md](docs/ANDROID.md) for the feature list,
+storage layout and build instructions.
+
 ## Good to know
 
 S5LBox is experimental. Speed varies by device, and not every app,
