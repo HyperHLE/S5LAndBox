@@ -4,6 +4,10 @@ name: android-build
 # identity in CI: the debug APK is installable as-is, and a manual run also
 # produces the release APK, signed with the debug key by android/app's Gradle
 # configuration. Nothing is published to a store from here.
+# The app's native library compiles a set of files out of tools/ (rootfs
+# provisioning, the file-block device, payload extraction, SHA-256 and the
+# iOS 3 host shims, see android/app/src/main/cpp/CMakeLists.txt), so a change
+# there changes the APK and has to run this job.
 on:
   push:
     branches:
@@ -12,6 +16,7 @@ on:
       - 'android/**'
       - 'core/**'
       - 'app/Sources/**'
+      - 'tools/**'
       - 'CMakeLists.txt'
       - '.github/workflows/android-build.yml'
   pull_request:
@@ -21,6 +26,7 @@ on:
       - 'android/**'
       - 'core/**'
       - 'app/Sources/**'
+      - 'tools/**'
       - 'CMakeLists.txt'
       - '.github/workflows/android-build.yml'
   workflow_dispatch:
