@@ -41,6 +41,9 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#endif
 #endif
 
 #define HFS_VH_OFF 1024u
@@ -1381,13 +1384,15 @@ static int posix_fsync_bounded(int descriptor) {
  */
 static int posix_rename_no_replace(int from_descriptor, const char *from_leaf,
                                    int to_descriptor, const char *to_leaf) {
-#if defined(__linux__)
+#if defined(__linux__) && defined(SYS_renameat2)
     unsigned retries = 0;
-    int rc;
+    long rc;
 
+    /* bionic does not declare renameat2() in its headers, so ask the kernel
+     * through the syscall wrapper; glibc's declaration is equivalent. */
     do {
-        rc = renameat2(from_descriptor, from_leaf, to_descriptor, to_leaf,
-                       RENAME_NOREPLACE);
+        rc = syscall(SYS_renameat2, from_descriptor, from_leaf,
+                     to_descriptor, to_leaf, RENAME_NOREPLACE);
     } while (rc != 0 && errno == EINTR &&
              retries++ < ROOTFS_EINTR_RETRY_LIMIT);
     if (rc == 0)
