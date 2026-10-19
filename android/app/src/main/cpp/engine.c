@@ -2172,7 +2172,7 @@ static void engine_thread_main(engine_t *e)
             }
             if (status != ARM_OK) {
                 console_printf(e, "[vm] CPU stop / fault: status=%d at PC=0x%08x, LR=0x%08x, CPSR=0x%08x, retired=%llu\n",
-                               status, machine->cpu.pc, machine->cpu.r[14], machine->cpu.cpsr, (unsigned long long)retired);
+                               status, machine->cpu.r[15], machine->cpu.r[14], machine->cpu.cpsr, (unsigned long long)retired);
                 break;
             }
             if (cap > 0 && retired >= cap) {
@@ -2223,7 +2223,7 @@ static void engine_thread_main(engine_t *e)
                                        &status);
                 if (status != ARM_OK) {
                     console_printf(e, "[vm] CPU stop / fault during checkpoint: status=%d at PC=0x%08x, LR=0x%08x\n",
-                                   status, machine->cpu.pc, machine->cpu.r[14]);
+                                   status, machine->cpu.r[15], machine->cpu.r[14]);
                     break;
                 }
             }
