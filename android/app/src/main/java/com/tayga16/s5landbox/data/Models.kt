@@ -127,7 +127,7 @@ data class GuestManifest(
     val appsync: GuestPackage?,
 ) {
     /** The base set the guest needs, in manifest order. */
-    val installSet: List<GuestPackage> get() = packages.filter { it.installs }
+    val installSet: List<GuestPackage> get() = packages
 }
 
 object InstallStatus {
