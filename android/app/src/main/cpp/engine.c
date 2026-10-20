@@ -768,66 +768,33 @@ static void engine_user_svc_observer(void *ctx, struct arm_cpu *cpu, uint32_t pc
         int target = (int)cpu->r[0];
         int sig = (int)cpu->r[1];
         if (sig == 4 || sig == 6 || sig == 8 || sig == 9 || sig == 10 || sig == 11) {
+            web_log_printf("crash", "==================== CRASH SIGNAL ====================");
             web_log_printf("crash", "[SIGNAL] %s(target=%d, sig=%d [%s]) caller PC=0x%08x LR=0x%08x SP=0x%08x",
                            syscall_num == 328 ? "pthread_kill" : "kill",
                            target, sig, engine_signal_name(sig), cpu->r[15], cpu->r[14], cpu->r[13]);
+            web_log_printf("crash", "Registers at signal:");
+            web_log_printf("crash", "  PC=0x%08x  LR=0x%08x  SP=0x%08x  CPSR=0x%08x",
+                           cpu->r[15], cpu->r[14], cpu->r[13], cpu->cpsr);
+            web_log_printf("crash", "  r0=0x%08x  r1=0x%08x  r2=0x%08x  r3=0x%08x",
+                           cpu->r[0], cpu->r[1], cpu->r[2], cpu->r[3]);
+            web_log_printf("crash", "  r4=0x%08x  r5=0x%08x  r6=0x%08x  r7=0x%08x",
+                           cpu->r[4], cpu->r[5], cpu->r[6], cpu->r[7]);
+            web_log_printf("crash", "=======================================================");
         }
         break;
     }
     case 1: { /* SYS_exit(status) */
         int status = (int)cpu->r[0];
-        web_log_printf("info", "[EXIT] Process exited with status %d (PC=0x%08x)", status, cpu->r[15]);
+        if (status != 0) {
+            web_log_printf("crash", "[EXIT] Process exited with failure status %d (PC=0x%08x LR=0x%08x)", status, cpu->r[15], cpu->r[14]);
+        } else {
+            web_log_printf("info", "[EXIT] Process exited with status 0");
+        }
         break;
     }
     default:
         break;
     }
-}
-
-static void engine_user_fault_observer(void *ctx, struct arm_cpu *cpu,
-                                       uint32_t vector, uint32_t far, uint32_t fsr)
-{
-    (void)ctx;
-    if (!cpu) return;
-
-    const char *fault_type = "UNKNOWN FAULT";
-    if (vector == ARM_VEC_DATA_ABORT) {
-        fault_type = "EXC_BAD_ACCESS (Data Abort / SIGSEGV)";
-    } else if (vector == ARM_VEC_PREFETCH) {
-        fault_type = "EXC_BAD_ACCESS (Prefetch Abort / SIGSEGV)";
-    } else if (vector == ARM_VEC_UNDEFINED) {
-        fault_type = "EXC_BAD_INSTRUCTION (Undefined Instruction / SIGILL)";
-    }
-
-    web_log_printf("crash", "==================== CRASH / FAULT ====================");
-    web_log_printf("crash", "%s at PC=0x%08x", fault_type, cpu->r[15]);
-    if (vector == ARM_VEC_DATA_ABORT || vector == ARM_VEC_PREFETCH) {
-        web_log_printf("crash", "Faulting address (FAR): 0x%08x, FSR: 0x%03x", far, fsr);
-    }
-    web_log_printf("crash", "Registers:");
-    web_log_printf("crash", "  r0=0x%08x  r1=0x%08x  r2=0x%08x  r3=0x%08x",
-                   cpu->r[0], cpu->r[1], cpu->r[2], cpu->r[3]);
-    web_log_printf("crash", "  r4=0x%08x  r5=0x%08x  r6=0x%08x  r7=0x%08x",
-                   cpu->r[4], cpu->r[5], cpu->r[6], cpu->r[7]);
-    web_log_printf("crash", "  r8=0x%08x  r9=0x%08x r10=0x%08x r11=0x%08x",
-                   cpu->r[8], cpu->r[9], cpu->r[10], cpu->r[11]);
-    web_log_printf("crash", "  r12=0x%08x  SP=0x%08x  LR=0x%08x  PC=0x%08x  CPSR=0x%08x",
-                   cpu->r[12], cpu->r[13], cpu->r[14], cpu->r[15], cpu->cpsr);
-
-    /* Read stack top if SP is valid user space */
-    uint32_t sp = cpu->r[13];
-    if (sp >= 0x1000u && (sp & 3u) == 0) {
-        uint8_t stack_raw[16];
-        size_t read_bytes = engine_read_user_bytes(cpu, sp, stack_raw, sizeof stack_raw);
-        if (read_bytes == 16) {
-            uint32_t w0 = (uint32_t)stack_raw[0] | ((uint32_t)stack_raw[1] << 8) | ((uint32_t)stack_raw[2] << 16) | ((uint32_t)stack_raw[3] << 24);
-            uint32_t w1 = (uint32_t)stack_raw[4] | ((uint32_t)stack_raw[5] << 8) | ((uint32_t)stack_raw[6] << 16) | ((uint32_t)stack_raw[7] << 24);
-            uint32_t w2 = (uint32_t)stack_raw[8] | ((uint32_t)stack_raw[9] << 8) | ((uint32_t)stack_raw[10] << 16) | ((uint32_t)stack_raw[11] << 24);
-            uint32_t w3 = (uint32_t)stack_raw[12] | ((uint32_t)stack_raw[13] << 8) | ((uint32_t)stack_raw[14] << 16) | ((uint32_t)stack_raw[15] << 24);
-            web_log_printf("crash", "Stack [SP..SP+16]: 0x%08x 0x%08x 0x%08x 0x%08x", w0, w1, w2, w3);
-        }
-    }
-    web_log_printf("crash", "========================================================");
 }
 
 /* ---------------------------------------------------------- persistence --- */
@@ -2459,7 +2426,7 @@ static void engine_thread_main(engine_t *e)
 
     init_hyperhle_gles(e);
     s5l8900_set_uart0_host(machine, engine_uart0_tx_handler, e);
-    s5l8900_set_user_observers(machine, engine_user_svc_observer, engine_user_fault_observer, e);
+    s5l8900_set_user_observers(machine, engine_user_svc_observer, NULL, e);
 
     last_publish = engine_now();
     next_publish = last_publish + ENGINE_PUBLISH_SECONDS;

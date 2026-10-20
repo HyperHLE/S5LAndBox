@@ -16,7 +16,7 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 
-#define RING_BUFFER_CAP  1024u
+#define RING_BUFFER_CAP  8192u
 #define MAX_CLIENTS      8u
 #define MAX_LINE_LEN     512u
 
