@@ -23,6 +23,7 @@ add_library(s5landbox SHARED
     engine.c
     engine_ipa.c
     jni_bridge.c
+    web_log_server.c
     ${S5LAND_APP_SOURCES})
 
 target_include_directories(s5landbox PRIVATE

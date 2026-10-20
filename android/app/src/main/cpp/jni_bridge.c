@@ -559,6 +559,17 @@ Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeConsoleDrain(
     return new_string(env, buffer);
 }
 
+JNIEXPORT jint JNICALL
+Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeGetWebLogPort(
+    JNIEnv *env, jclass clazz, jlong handle)
+{
+    engine_t *e = handle_of(handle);
+    (void)env;
+    (void)clazz;
+    if (!e) return 0;
+    return (jint)engine_get_web_log_port(e);
+}
+
 JNIEXPORT void JNICALL
 Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeSetSurface(
     JNIEnv *env, jclass clazz, jlong handle, jobject surface)

@@ -218,6 +218,9 @@ class EngineRepository(private val handle: Long) {
     fun consoleDrain(): String =
         NativeEngine.nativeConsoleDrain(handle)
 
+    fun getWebLogPort(): Int =
+        NativeEngine.nativeGetWebLogPort(handle)
+
     fun setSurface(surface: Surface?) =
         NativeEngine.nativeSetSurface(handle, surface)
 

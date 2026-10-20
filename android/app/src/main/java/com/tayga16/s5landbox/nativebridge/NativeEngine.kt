@@ -71,6 +71,7 @@ object NativeEngine {
     external fun nativeSetInstructionCap(handle: Long, cap: Long)
     external fun nativeStatusJson(handle: Long): String
     external fun nativeConsoleDrain(handle: Long): String
+    external fun nativeGetWebLogPort(handle: Long): Int
 
     // Display and input.
     external fun nativeSetSurface(handle: Long, surface: Surface?)

@@ -51,6 +51,7 @@
 #include "VMTouchQueue.h"
 #include "VMAudioBuffer.h"
 #include "file_block.h"
+#include "web_log_server.h"
 
 #define ENGINE_LOG_TAG "S5LAndBox"
 #define ENGINE_LOG(...) __android_log_print(ANDROID_LOG_INFO, ENGINE_LOG_TAG, __VA_ARGS__)
@@ -415,6 +416,7 @@ static void json_string(json_t *j, const char *text)
 static void console_append_len_locked(engine_t *e, const char *text, size_t n)
 {
     if (!text || n == 0) return;
+    web_log_post_raw("kernel", text, n);
     if (e->machine_log_path[0]) {
         FILE *lf = fopen(e->machine_log_path, "ab");
         if (lf) {
@@ -457,6 +459,7 @@ static void console_printf(engine_t *e, const char *format, ...)
     vsnprintf(line, sizeof line, format, args);
     va_end(args);
     console_append(e, line);
+    web_log_post("info", line);
 }
 
 /* ---------------------------------------------------------- persistence --- */
@@ -1996,6 +1999,8 @@ static void publish_retired(engine_t *e, s5l8900_t *machine,
                  status_text(status, machine));
     }
     e->last_arm_status = status;
+    web_log_set_status(retired, e->fps, e->rate,
+                       machine ? machine->cpu.cp15.ttbr0 : 0u, e->status);
     pthread_mutex_unlock(&e->lock);
 
     post_frame(e);
@@ -2173,6 +2178,13 @@ static void engine_thread_main(engine_t *e)
             if (status != ARM_OK) {
                 console_printf(e, "[vm] CPU stop / fault: status=%d at PC=0x%08x, LR=0x%08x, CPSR=0x%08x, retired=%llu\n",
                                status, machine->cpu.r[15], machine->cpu.r[14], machine->cpu.cpsr, (unsigned long long)retired);
+                web_log_printf("crash", "[CPU FAULT] status=%d at PC=0x%08x, LR=0x%08x, SP=0x%08x, CPSR=0x%08x, retired=%llu",
+                               status, machine->cpu.r[15], machine->cpu.r[14], machine->cpu.r[13], machine->cpu.cpsr, (unsigned long long)retired);
+                web_log_printf("crash", "r0=0x%08x r1=0x%08x r2=0x%08x r3=0x%08x r4=0x%08x r5=0x%08x r6=0x%08x r7=0x%08x",
+                               machine->cpu.r[0], machine->cpu.r[1], machine->cpu.r[2], machine->cpu.r[3],
+                               machine->cpu.r[4], machine->cpu.r[5], machine->cpu.r[6], machine->cpu.r[7]);
+                web_log_printf("crash", "r8=0x%08x r9=0x%08x r10=0x%08x r11=0x%08x r12=0x%08x",
+                               machine->cpu.r[8], machine->cpu.r[9], machine->cpu.r[10], machine->cpu.r[11], machine->cpu.r[12]);
                 break;
             }
             if (cap > 0 && retired >= cap) {
@@ -2342,6 +2354,7 @@ engine_t *engine_create(const char *root_directory)
     e->phase = PHASE_IDLE;
     snprintf(e->status, sizeof e->status, "idle");
     snprintf(e->mode, sizeof e->mode, "not started");
+    web_log_server_start(8080);
     return e;
 }
 
@@ -2384,6 +2397,7 @@ void engine_destroy(engine_t *engine)
 
     free(e->snapshot);
     pthread_mutex_destroy(&e->lock);
+    web_log_server_stop();
     free(e);
 }
 
@@ -2623,6 +2637,12 @@ size_t engine_console_drain(engine_t *engine, char *out, size_t capacity)
     }
     pthread_mutex_unlock(&e->lock);
     return take;
+}
+
+uint16_t engine_get_web_log_port(engine_t *engine)
+{
+    (void)engine;
+    return web_log_server_get_port();
 }
 
 /* ---------------------------------------------------------------- surface --- */

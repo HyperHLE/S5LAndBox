@@ -166,6 +166,10 @@ static const ios3_hle_site_t *site_at_pc(uint32_t pc) {
     return NULL;
 }
 
+#if defined(S5LBOX_ANDROID)
+void web_log_printf(const char *category, const char *fmt, ...);
+#endif
+
 static bool hle_pre_step(void *opaque) {
     s5l8900_t *m = (s5l8900_t *)opaque;
     ios3_hle_mem_t mem;
@@ -188,6 +192,13 @@ static bool hle_pre_step(void *opaque) {
     space = ttbr0_base(&m->cpu);
     site = site_at_pc(pc);
     if (!site) return false;
+
+#if defined(S5LBOX_ANDROID)
+    if (site->name && site->name[0] == 'g' && site->name[1] == 'l') {
+        web_log_printf("gles", "[GLES] %s (PC=0x%08x, TTBR0=0x%08x)",
+                       site->name, pc, space);
+    }
+#endif
 
     if (!g_space || space != g_space) {
         if (!ios3_hle_arm(&mem, space)) return false;

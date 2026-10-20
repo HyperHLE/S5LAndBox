@@ -45,6 +45,9 @@ import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.Language
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.material.icons.filled.VolumeDown
 import androidx.compose.material.icons.filled.VolumeMute
 import androidx.compose.material.icons.filled.VolumeUp
@@ -119,6 +122,27 @@ fun EmulatorScreen(
     var menuOpen by remember { mutableStateOf(false) }
     var showConsole by remember { mutableStateOf(false) }
     var consoleText by remember { mutableStateOf("") }
+    val webPort = remember { repository.getWebLogPort() }
+    val wifiIp = remember {
+        try {
+            var found = "127.0.0.1"
+            val ifaces = java.net.NetworkInterface.getNetworkInterfaces()
+            while (ifaces.hasMoreElements()) {
+                val iface = ifaces.nextElement()
+                if (iface.isLoopback || !iface.isUp) continue
+                val addrs = iface.inetAddresses
+                while (addrs.hasMoreElements()) {
+                    val a = addrs.nextElement()
+                    if (!a.isLoopbackAddress && a is java.net.Inet4Address) {
+                        found = a.hostAddress ?: found
+                        break
+                    }
+                }
+            }
+            found
+        } catch (_: Exception) { "127.0.0.1" }
+    }
+    val webUrl = "http://$wifiIp:$webPort"
 
     suspend fun startMachine(): BindResult = withContext(Dispatchers.IO) {
         val current = repository.status()
@@ -291,6 +315,20 @@ fun EmulatorScreen(
                                 },
                                 onClick = { menuOpen = false; showConsole = true },
                             )
+                            if (webPort > 0) {
+                                DropdownMenuItem(
+                                    text = { Text("Web Log Inspector") },
+                                    leadingIcon = {
+                                        Icon(Icons.Filled.Language, contentDescription = null)
+                                    },
+                                    onClick = {
+                                        menuOpen = false
+                                        try {
+                                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(webUrl)))
+                                        } catch (_: Exception) {}
+                                    },
+                                )
+                            }
                             DropdownMenuItem(
                                 text = { Text("Snapshots") },
                                 leadingIcon = {
@@ -587,7 +625,45 @@ fun EmulatorScreen(
     if (showConsole) {
         AlertDialog(
             onDismissRequest = { showConsole = false },
-            title = { Text("Guest console") },
+            title = {
+                Column {
+                    Text("Guest console")
+                    if (webPort > 0) {
+                        Spacer(Modifier.height(6.dp))
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    clipboard.setText(AnnotatedString(webUrl))
+                                    scope.launch {
+                                        snackbar.showSnackbar("Web URL copied: $webUrl")
+                                    }
+                                },
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(Icons.Filled.Language, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = "Wi-Fi: $webUrl",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                )
+                                Spacer(Modifier.weight(1f))
+                                Text(
+                                    text = "Copy",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            },
             text = {
                 val scroll = rememberScrollState()
                 LaunchedEffect(consoleText) { scroll.scrollTo(scroll.maxValue) }
@@ -643,6 +719,17 @@ fun EmulatorScreen(
                         Icon(Icons.Filled.SaveAlt, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
                         Text("Save")
+                    }
+                    if (webPort > 0) {
+                        TextButton(onClick = {
+                            try {
+                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(webUrl)))
+                            } catch (_: Exception) {}
+                        }) {
+                            Icon(Icons.Filled.Language, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("Web")
+                        }
                     }
                     TextButton(onClick = { showConsole = false }) { Text("Close") }
                 }

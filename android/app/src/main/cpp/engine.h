@@ -105,6 +105,8 @@ void engine_set_instruction_cap(engine_t *engine, uint64_t cap);
 int engine_status_json(engine_t *engine, char *out, size_t capacity);
 /* Returns bytes written, NUL-terminated; drains the pending UART text. */
 size_t engine_console_drain(engine_t *engine, char *out, size_t capacity);
+/* Returns listening port of live Web log server, or 0 if inactive. */
+uint16_t engine_get_web_log_port(engine_t *engine);
 
 /* ---------------------------------------------------------------- display */
 void engine_set_surface(engine_t *engine, ANativeWindow *window);
