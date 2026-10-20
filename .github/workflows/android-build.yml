@@ -93,11 +93,14 @@ jobs:
       - name: Build the HyperHLE GLES core
         run: |
           set -euo pipefail
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/27.0.12077973"
+          export NDK_HOME="$ANDROID_NDK_HOME"
+          ROOT_DIR="$(pwd)"
+          cd android/rust/hyperhle-gles
           cargo ndk \
             -t arm64-v8a -t x86_64 \
-            -o android/app/src/main/jniLibs \
-            build --release \
-            --manifest-path android/rust/hyperhle-gles/Cargo.toml
+            -o "$ROOT_DIR/android/app/src/main/jniLibs" \
+            build --release
 
       - name: Build the release and debug APKs
         run: gradle -p android :app:assembleRelease :app:assembleDebug --stacktrace

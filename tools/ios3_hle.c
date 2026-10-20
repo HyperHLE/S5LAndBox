@@ -331,6 +331,104 @@ static const uint32_t PROLOGUE_MBX2D_CTX_INITIALIZE[] = {
 };
 
 /*
+ * OPENGL ES ENTRY POINTS, from the same 7E18 shared-cache image.
+ *
+ *   python tools/dscsym.py <cache> _glClear       -> 0x323525b8
+ *   python tools/dscsym.py <cache> _glClearColor  -> 0x3235256c
+ *   python tools/dscsym.py <cache> _glViewport    -> 0x32350a94
+ *   python tools/dscsym.py <cache> _glGetString   -> 0x32351b4c
+ *   python tools/dscsym.py <cache> _glDrawArrays  -> 0x32352084
+ *
+ * These are the library's public wrappers, not the driver behind them: each
+ * reads the current context out of the ARM TLS register (mrc p15,0,rX,
+ * c13,c0,3) and forwards to a slot in that context's dispatch table. The slot
+ * offset is the only thing that tells identical-looking wrappers apart: glClear
+ * forwards through +0x38, glGetString through +0x1e4, glClearColor through
+ * +0x40 and glViewport through +0x54c. Those offsets appear at word 16 of the
+ * two long wrappers, which is why those two prologues are 17 words deep -- the
+ * first 16 words of glClearColor and glViewport are byte-identical.
+ *
+ * They enter as OBSERVE. A GL call is made by the app process that owns the
+ * context, never by SpringBoard, so hits here also prove that the harness is
+ * following the caller's address space rather than the space it first armed.
+ */
+static const uint32_t PROLOGUE_GL_CLEAR[] = {
+    0xee1d3f70u,   /* mrc  p15,0,r3,c13,c0,3 (TLS) */
+    0xe59330c0u,   /* ldr  r3, [r3, #0xc0]         */
+    0xe3530000u,   /* cmp  r3, #0                  */
+    0xe1a01000u,   /* mov  r1, r0                  */
+    0x012fff1eu,   /* bxeq lr                      */
+    0xe5932038u,   /* ldr  r2, [r3, #0x38]         */
+    0xe593000cu,   /* ldr  r0, [r3, #0xc]          */
+    0xe12fff12u,   /* bx   r2                      */
+};
+static const uint32_t PROLOGUE_GL_CLEAR_COLOR[] = {
+    0xe92d4090u,   /* push {r4, r7, lr}            */
+    0xe28d7004u,   /* add  r7, sp, #4              */
+    0xe24dd004u,   /* sub  sp, sp, #4              */
+    0xe1a04002u,   /* mov  r4, r2                  */
+    0xee1d2f70u,   /* mrc  p15,0,r2,c13,c0,3 (TLS) */
+    0xe592c0c0u,   /* ldr  ip, [r2, #0xc0]         */
+    0xe1a0e000u,   /* mov  lr, r0                  */
+    0xe35c0000u,   /* cmp  ip, #0                  */
+    0xe1a09001u,   /* mov  r9, r1                  */
+    0x0a000006u,   /* beq  +0x18                   */
+    0xe59c000cu,   /* ldr  r0, [ip, #0xc]          */
+    0xe1a0100eu,   /* mov  r1, lr                  */
+    0xe58d3000u,   /* str  r3, [sp]                */
+    0xe1a02009u,   /* mov  r2, r9                  */
+    0xe1a03004u,   /* mov  r3, r4                  */
+    0xe1a0e00fu,   /* mov  lr, pc                  */
+    0xe59cf040u,   /* ldr  ip, [ip, #0x40]         */
+};
+static const uint32_t PROLOGUE_GL_VIEWPORT[] = {
+    0xe92d4090u,   /* push {r4, r7, lr}            */
+    0xe28d7004u,   /* add  r7, sp, #4              */
+    0xe24dd004u,   /* sub  sp, sp, #4              */
+    0xe1a04002u,   /* mov  r4, r2                  */
+    0xee1d2f70u,   /* mrc  p15,0,r2,c13,c0,3 (TLS) */
+    0xe592c0c0u,   /* ldr  ip, [r2, #0xc0]         */
+    0xe1a0e000u,   /* mov  lr, r0                  */
+    0xe35c0000u,   /* cmp  ip, #0                  */
+    0xe1a09001u,   /* mov  r9, r1                  */
+    0x0a000006u,   /* beq  +0x18                   */
+    0xe59c000cu,   /* ldr  r0, [ip, #0xc]          */
+    0xe1a0100eu,   /* mov  r1, lr                  */
+    0xe58d3000u,   /* str  r3, [sp]                */
+    0xe1a02009u,   /* mov  r2, r9                  */
+    0xe1a03004u,   /* mov  r3, r4                  */
+    0xe1a0e00fu,   /* mov  lr, pc                  */
+    0xe59cf54cu,   /* ldr  ip, [ip, #0x54c]        */
+};
+static const uint32_t PROLOGUE_GL_GET_STRING[] = {
+    0xe1a01000u,   /* mov  r1, r0                  */
+    0xee1d0f70u,   /* mrc  p15,0,r0,c13,c0,3 (TLS) */
+    0xe59000c0u,   /* ldr  r0, [r0, #0xc0]         */
+    0xe3500000u,   /* cmp  r0, #0                  */
+    0x012fff1eu,   /* bxeq lr                      */
+    0xe59031e4u,   /* ldr  r3, [r0, #0x1e4]        */
+    0xe590000cu,   /* ldr  r0, [r0, #0xc]          */
+    0xe12fff13u,   /* bx   r3                      */
+};
+static const uint32_t PROLOGUE_GL_DRAW_ARRAYS[] = {
+    0xe92d4080u,   /* push {r7, lr}                */
+    0xe28d7000u,   /* add  r7, sp, #0              */
+    0xe1a03002u,   /* mov  r3, r2                  */
+    0xee1d2f70u,   /* mrc  p15,0,r2,c13,c0,3 (TLS) */
+    0xe59220c0u,   /* ldr  r2, [r2, #0xc0]         */
+    0xe1a0e000u,   /* mov  lr, r0                  */
+    0xe3520000u,   /* cmp  r2, #0                  */
+    0xe1a09001u,   /* mov  r9, r1                  */
+    0x08bd8080u,   /* popeq {r7, pc}               */
+    0xe592c114u,   /* ldr  ip, [r2, #0x114]        */
+    0xe592000cu,   /* ldr  r0, [r2, #0xc]          */
+    0xe1a0100eu,   /* mov  r1, lr                  */
+    0xe1a02009u,   /* mov  r2, r9                  */
+    0xe8bd4080u,   /* pop  {r7, lr}                */
+    0xe12fff1cu,   /* bx   ip                      */
+};
+
+/*
  * Native nearest-32-bit samplers, transcribed from the decode above.
  *
  * Every guest access goes through mem->read / mem->write, which translate
@@ -2233,6 +2331,26 @@ static ios3_hle_site_t g_sites[] = {
       (unsigned)(sizeof PROLOGUE_MBX2D_CTX_BLIT_COPY /
                  sizeof PROLOGUE_MBX2D_CTX_BLIT_COPY[0]),
       hle_trace_blit_copy, IOS3_HLE_TRACE, false, false, 0, 0, 0, 0 },
+    { "glClear",            0x323525b8u, PROLOGUE_GL_CLEAR,
+      (unsigned)(sizeof PROLOGUE_GL_CLEAR /
+                 sizeof PROLOGUE_GL_CLEAR[0]),
+      NULL, IOS3_HLE_OBSERVE, false, false, 0, 0, 0, 0 },
+    { "glClearColor",       0x3235256cu, PROLOGUE_GL_CLEAR_COLOR,
+      (unsigned)(sizeof PROLOGUE_GL_CLEAR_COLOR /
+                 sizeof PROLOGUE_GL_CLEAR_COLOR[0]),
+      NULL, IOS3_HLE_OBSERVE, false, false, 0, 0, 0, 0 },
+    { "glViewport",         0x32350a94u, PROLOGUE_GL_VIEWPORT,
+      (unsigned)(sizeof PROLOGUE_GL_VIEWPORT /
+                 sizeof PROLOGUE_GL_VIEWPORT[0]),
+      NULL, IOS3_HLE_OBSERVE, false, false, 0, 0, 0, 0 },
+    { "glGetString",        0x32351b4cu, PROLOGUE_GL_GET_STRING,
+      (unsigned)(sizeof PROLOGUE_GL_GET_STRING /
+                 sizeof PROLOGUE_GL_GET_STRING[0]),
+      NULL, IOS3_HLE_OBSERVE, false, false, 0, 0, 0, 0 },
+    { "glDrawArrays",       0x32352084u, PROLOGUE_GL_DRAW_ARRAYS,
+      (unsigned)(sizeof PROLOGUE_GL_DRAW_ARRAYS /
+                 sizeof PROLOGUE_GL_DRAW_ARRAYS[0]),
+      NULL, IOS3_HLE_OBSERVE, false, false, 0, 0, 0, 0 },
 };
 
 #define SITE_N ((unsigned)(sizeof g_sites / sizeof g_sites[0]))

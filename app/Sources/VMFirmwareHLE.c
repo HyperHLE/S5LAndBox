@@ -189,11 +189,11 @@ static bool hle_pre_step(void *opaque) {
     site = site_at_pc(pc);
     if (!site) return false;
 
-    if (!g_space) {
+    if (!g_space || space != g_space) {
         if (!ios3_hle_arm(&mem, space)) return false;
         g_space = space;
         note_pending();
-    } else if (g_pending && space == g_space && !site->armed) {
+    } else if (g_pending && !site->armed) {
         (void)ios3_hle_arm(&mem, g_space);
         note_pending();
     }

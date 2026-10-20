@@ -3746,15 +3746,17 @@ static bool hle_prepare(arm_cpu_t *cpu, ios3_hle_mem_t *mem,
     as = diagnostic_ttbr0_base(cpu);
     pc = cpu->r[15] & ~1u;
 
-    if (!g_hle_space) {
-        for (unsigned i = 0; i < ios3_hle_site_count(); i++) {
-            const ios3_hle_site_t *s = ios3_hle_site_at(i);
-            if (s && s->va == pc) {
-                if (ios3_hle_arm(mem, as)) {
-                    g_hle_space = as;
-                    hle_note_pending();
+    if (!g_hle_space || as != g_hle_space) {
+        if (pc >= 0x30000000u && pc <= 0x34000000u) {
+            for (unsigned i = 0; i < ios3_hle_site_count(); i++) {
+                const ios3_hle_site_t *s = ios3_hle_site_at(i);
+                if (s && s->va == pc) {
+                    if (ios3_hle_arm(mem, as)) {
+                        g_hle_space = as;
+                        hle_note_pending();
+                    }
+                    break;
                 }
-                break;
             }
         }
         if (!g_hle_space) return false;
