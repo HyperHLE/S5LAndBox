@@ -52,6 +52,8 @@
 #include "VMAudioBuffer.h"
 #include "file_block.h"
 #include "web_log_server.h"
+#include "ios3_hle.h"
+#include <dlfcn.h>
 
 #define ENGINE_LOG_TAG "S5LAndBox"
 #define ENGINE_LOG(...) __android_log_print(ANDROID_LOG_INFO, ENGINE_LOG_TAG, __VA_ARGS__)
@@ -459,6 +461,108 @@ static void console_printf(engine_t *e, const char *format, ...)
     va_end(args);
     console_append(e, line);
     web_log_post("info", line);
+}
+
+/* -------------------------------------------------------- hyperhle gles --- */
+
+typedef struct GlesHandle GlesHandle;
+
+static GlesHandle *(*p_s5l_gles_create)(int32_t api, void *native_window, uint32_t width, uint32_t height) = NULL;
+static void (*p_s5l_gles_destroy)(GlesHandle *handle) = NULL;
+static int32_t (*p_s5l_gles_make_current)(GlesHandle *handle) = NULL;
+static int32_t (*p_s5l_gles_swap_buffers)(GlesHandle *handle) = NULL;
+static void (*p_s5l_gles_clear_color)(GlesHandle *handle, float r, float g, float b, float a) = NULL;
+static void (*p_s5l_gles_clear)(GlesHandle *handle, uint32_t mask) = NULL;
+static void (*p_s5l_gles_viewport)(GlesHandle *handle, int32_t x, int32_t y, int32_t width, int32_t height) = NULL;
+static void (*p_s5l_gles_draw_arrays)(GlesHandle *handle, uint32_t mode, int32_t first, int32_t count) = NULL;
+static const char *(*p_s5l_gles_get_string)(GlesHandle *handle, uint32_t name) = NULL;
+
+static void *s_hyperhle_lib = NULL;
+static GlesHandle *s_hyperhle_ctx = NULL;
+
+static void hyperhle_dispatch_clear(uint32_t mask) {
+    if (s_hyperhle_ctx && p_s5l_gles_clear) {
+        p_s5l_gles_clear(s_hyperhle_ctx, mask);
+        web_log_printf("gles", "glClear(0x%04x)", mask);
+    }
+}
+
+static void hyperhle_dispatch_clear_color(float r, float g, float b, float a) {
+    if (s_hyperhle_ctx && p_s5l_gles_clear_color) {
+        p_s5l_gles_clear_color(s_hyperhle_ctx, r, g, b, a);
+        web_log_printf("gles", "glClearColor(%.2f, %.2f, %.2f, %.2f)", r, g, b, a);
+    }
+}
+
+static void hyperhle_dispatch_viewport(int32_t x, int32_t y, int32_t width, int32_t height) {
+    if (s_hyperhle_ctx && p_s5l_gles_viewport) {
+        p_s5l_gles_viewport(s_hyperhle_ctx, x, y, width, height);
+        web_log_printf("gles", "glViewport(%d, %d, %d, %d)", x, y, width, height);
+    }
+}
+
+static void hyperhle_dispatch_draw_arrays(uint32_t mode, int32_t first, int32_t count) {
+    if (s_hyperhle_ctx && p_s5l_gles_draw_arrays) {
+        p_s5l_gles_draw_arrays(s_hyperhle_ctx, mode, first, count);
+        web_log_printf("gles", "glDrawArrays(0x%x, first=%d, count=%d)", mode, first, count);
+    }
+}
+
+static const char *hyperhle_dispatch_get_string(uint32_t name) {
+    if (s_hyperhle_ctx && p_s5l_gles_get_string) {
+        const char *s = p_s5l_gles_get_string(s_hyperhle_ctx, name);
+        web_log_printf("gles", "glGetString(0x%x) -> %s", name, s ? s : "(null)");
+        return s;
+    }
+    return NULL;
+}
+
+static const ios3_hle_gles_dispatch_t s_hyperhle_dispatch = {
+    hyperhle_dispatch_clear,
+    hyperhle_dispatch_clear_color,
+    hyperhle_dispatch_viewport,
+    hyperhle_dispatch_get_string,
+    hyperhle_dispatch_draw_arrays
+};
+
+static void init_hyperhle_gles(engine_t *e) {
+    (void)e;
+    if (s_hyperhle_lib) return;
+    s_hyperhle_lib = dlopen("libhyperhle_gles.so", RTLD_NOW | RTLD_LOCAL);
+    if (!s_hyperhle_lib) {
+        ENGINE_LOG("hyperhle-gles: libhyperhle_gles.so not loaded: %s", dlerror());
+        return;
+    }
+    p_s5l_gles_create = (GlesHandle *(*)(int32_t, void *, uint32_t, uint32_t))dlsym(s_hyperhle_lib, "s5l_gles_create");
+    p_s5l_gles_destroy = (void (*)(GlesHandle *))dlsym(s_hyperhle_lib, "s5l_gles_destroy");
+    p_s5l_gles_make_current = (int32_t (*)(GlesHandle *))dlsym(s_hyperhle_lib, "s5l_gles_make_current");
+    p_s5l_gles_swap_buffers = (int32_t (*)(GlesHandle *))dlsym(s_hyperhle_lib, "s5l_gles_swap_buffers");
+    p_s5l_gles_clear_color = (void (*)(GlesHandle *, float, float, float, float))dlsym(s_hyperhle_lib, "s5l_gles_clear_color");
+    p_s5l_gles_clear = (void (*)(GlesHandle *, uint32_t))dlsym(s_hyperhle_lib, "s5l_gles_clear");
+    p_s5l_gles_viewport = (void (*)(GlesHandle *, int32_t, int32_t, int32_t, int32_t))dlsym(s_hyperhle_lib, "s5l_gles_viewport");
+    p_s5l_gles_draw_arrays = (void (*)(GlesHandle *, uint32_t, int32_t, int32_t))dlsym(s_hyperhle_lib, "s5l_gles_draw_arrays");
+    p_s5l_gles_get_string = (const char *(*)(GlesHandle *, uint32_t))dlsym(s_hyperhle_lib, "s5l_gles_get_string");
+
+    if (p_s5l_gles_create) {
+        s_hyperhle_ctx = p_s5l_gles_create(2, NULL, 320, 480);
+        if (s_hyperhle_ctx) {
+            ios3_hle_set_gles_dispatch(&s_hyperhle_dispatch);
+            ENGINE_LOG("hyperhle-gles: acceleration initialized and armed");
+            web_log_printf("info", "HyperHLE GLES hardware acceleration initialized and armed");
+        }
+    }
+}
+
+static void term_hyperhle_gles(void) {
+    ios3_hle_set_gles_dispatch(NULL);
+    if (s_hyperhle_ctx && p_s5l_gles_destroy) {
+        p_s5l_gles_destroy(s_hyperhle_ctx);
+        s_hyperhle_ctx = NULL;
+    }
+    if (s_hyperhle_lib) {
+        dlclose(s_hyperhle_lib);
+        s_hyperhle_lib = NULL;
+    }
 }
 
 /* ---------------------------------------------------------- persistence --- */
@@ -2095,6 +2199,8 @@ static void engine_thread_main(engine_t *e)
                    VM_GUEST_RAM_SIZE / (1024u * 1024u), VM_GUEST_RAM_BASE,
                    vm_guest_fb_pa(VM_GUEST_RAM_BASE, VM_GUEST_RAM_SIZE));
 
+    init_hyperhle_gles(e);
+
     last_publish = engine_now();
     next_publish = last_publish + ENGINE_PUBLISH_SECONDS;
 
@@ -2253,6 +2359,7 @@ static void engine_thread_main(engine_t *e)
         usb_host_disconnect(&e->usb_host, machine);
     }
 
+    term_hyperhle_gles();
     web_log_flush_raw();
     s5l8900_free(machine);
     free(machine);

@@ -2269,6 +2269,56 @@ static bool hle_trace_ctx_init(arm_cpu_t *cpu, const ios3_hle_mem_t *mem) {
     return trace_args("mbx2DCtxInitialize", cpu, mem, 3, 0);
 }
 
+static const ios3_hle_gles_dispatch_t *g_gles_dispatch = NULL;
+
+void ios3_hle_set_gles_dispatch(const ios3_hle_gles_dispatch_t *dispatch) {
+    g_gles_dispatch = dispatch;
+}
+
+static bool hle_gl_clear(arm_cpu_t *cpu, const ios3_hle_mem_t *mem) {
+    (void)mem;
+    if (!g_gles_dispatch || !g_gles_dispatch->clear) return false;
+    g_gles_dispatch->clear(cpu->r[0]);
+    cpu->r[15] = cpu->r[14];
+    return true;
+}
+
+static bool hle_gl_clear_color(arm_cpu_t *cpu, const ios3_hle_mem_t *mem) {
+    (void)mem;
+    if (!g_gles_dispatch || !g_gles_dispatch->clear_color) return false;
+    float r = 0.0f, g = 0.0f, b = 0.0f, a = 0.0f;
+    memcpy(&r, &cpu->r[0], sizeof r);
+    memcpy(&g, &cpu->r[1], sizeof g);
+    memcpy(&b, &cpu->r[2], sizeof b);
+    memcpy(&a, &cpu->r[3], sizeof a);
+    g_gles_dispatch->clear_color(r, g, b, a);
+    cpu->r[15] = cpu->r[14];
+    return true;
+}
+
+static bool hle_gl_viewport(arm_cpu_t *cpu, const ios3_hle_mem_t *mem) {
+    (void)mem;
+    if (!g_gles_dispatch || !g_gles_dispatch->viewport) return false;
+    g_gles_dispatch->viewport((int32_t)cpu->r[0], (int32_t)cpu->r[1],
+                              (int32_t)cpu->r[2], (int32_t)cpu->r[3]);
+    cpu->r[15] = cpu->r[14];
+    return true;
+}
+
+static bool hle_gl_draw_arrays(arm_cpu_t *cpu, const ios3_hle_mem_t *mem) {
+    (void)mem;
+    if (!g_gles_dispatch || !g_gles_dispatch->draw_arrays) return false;
+    g_gles_dispatch->draw_arrays(cpu->r[0], (int32_t)cpu->r[1], (int32_t)cpu->r[2]);
+    cpu->r[15] = cpu->r[14];
+    return true;
+}
+
+static bool hle_gl_get_string(arm_cpu_t *cpu, const ios3_hle_mem_t *mem) {
+    (void)cpu;
+    (void)mem;
+    return false;
+}
+
 static ios3_hle_site_t g_sites[] = {
     { "CGBlt_fillBytes",    0x338f61b0u, PROLOGUE_CGBLT_FILLBYTES,
       (unsigned)(sizeof PROLOGUE_CGBLT_FILLBYTES /
@@ -2334,23 +2384,23 @@ static ios3_hle_site_t g_sites[] = {
     { "glClear",            0x323525b8u, PROLOGUE_GL_CLEAR,
       (unsigned)(sizeof PROLOGUE_GL_CLEAR /
                  sizeof PROLOGUE_GL_CLEAR[0]),
-      NULL, IOS3_HLE_OBSERVE, false, false, 0, 0, 0, 0 },
+      hle_gl_clear, IOS3_HLE_REPLACE, false, false, 0, 0, 0, 0 },
     { "glClearColor",       0x3235256cu, PROLOGUE_GL_CLEAR_COLOR,
       (unsigned)(sizeof PROLOGUE_GL_CLEAR_COLOR /
                  sizeof PROLOGUE_GL_CLEAR_COLOR[0]),
-      NULL, IOS3_HLE_OBSERVE, false, false, 0, 0, 0, 0 },
+      hle_gl_clear_color, IOS3_HLE_REPLACE, false, false, 0, 0, 0, 0 },
     { "glViewport",         0x32350a94u, PROLOGUE_GL_VIEWPORT,
       (unsigned)(sizeof PROLOGUE_GL_VIEWPORT /
                  sizeof PROLOGUE_GL_VIEWPORT[0]),
-      NULL, IOS3_HLE_OBSERVE, false, false, 0, 0, 0, 0 },
+      hle_gl_viewport, IOS3_HLE_REPLACE, false, false, 0, 0, 0, 0 },
     { "glGetString",        0x32351b4cu, PROLOGUE_GL_GET_STRING,
       (unsigned)(sizeof PROLOGUE_GL_GET_STRING /
                  sizeof PROLOGUE_GL_GET_STRING[0]),
-      NULL, IOS3_HLE_OBSERVE, false, false, 0, 0, 0, 0 },
+      hle_gl_get_string, IOS3_HLE_TRACE, false, false, 0, 0, 0, 0 },
     { "glDrawArrays",       0x32352084u, PROLOGUE_GL_DRAW_ARRAYS,
       (unsigned)(sizeof PROLOGUE_GL_DRAW_ARRAYS /
                  sizeof PROLOGUE_GL_DRAW_ARRAYS[0]),
-      NULL, IOS3_HLE_OBSERVE, false, false, 0, 0, 0, 0 },
+      hle_gl_draw_arrays, IOS3_HLE_REPLACE, false, false, 0, 0, 0, 0 },
 };
 
 #define SITE_N ((unsigned)(sizeof g_sites / sizeof g_sites[0]))

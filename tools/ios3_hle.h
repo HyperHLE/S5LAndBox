@@ -256,6 +256,21 @@ bool ios3_hle_oracle_prepare(const arm_cpu_t *cpu,
                              ios3_hle_oracle_t *out,
                              uint8_t *expected, uint32_t expected_capacity);
 
+/*
+ * Optional host-side OpenGL ES dispatch interface.
+ * When provided, GLES sites in IOS3_HLE_REPLACE mode route directly to native
+ * ES acceleration instead of declining the call.
+ */
+typedef struct {
+    void (*clear)(uint32_t mask);
+    void (*clear_color)(float r, float g, float b, float a);
+    void (*viewport)(int32_t x, int32_t y, int32_t width, int32_t height);
+    const char *(*get_string)(uint32_t name);
+    void (*draw_arrays)(uint32_t mode, int32_t first, int32_t count);
+} ios3_hle_gles_dispatch_t;
+
+void ios3_hle_set_gles_dispatch(const ios3_hle_gles_dispatch_t *dispatch);
+
 #ifdef __cplusplus
 }
 #endif
