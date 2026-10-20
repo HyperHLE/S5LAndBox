@@ -2645,6 +2645,12 @@ uint16_t engine_get_web_log_port(engine_t *engine)
     return web_log_server_get_port();
 }
 
+size_t engine_log_entries_json(engine_t *engine, uint32_t last_id, char *out, size_t capacity)
+{
+    (void)engine;
+    return web_log_get_entries_json(last_id, out, capacity);
+}
+
 /* ---------------------------------------------------------------- surface --- */
 
 void engine_set_surface(engine_t *engine, ANativeWindow *window)

@@ -570,6 +570,20 @@ Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeGetWebLogPort(
     return (jint)engine_get_web_log_port(e);
 }
 
+JNIEXPORT jstring JNICALL
+Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeGetLogsJson(
+    JNIEnv *env, jclass clazz, jlong handle, jlong lastId)
+{
+    engine_t *e = handle_of(handle);
+    char buffer[65536];
+    size_t len;
+    (void)clazz;
+    if (!e) return new_string(env, "[]");
+    len = engine_log_entries_json(e, (uint32_t)lastId, buffer, sizeof buffer);
+    if (len == 0) return new_string(env, "[]");
+    return new_string(env, buffer);
+}
+
 JNIEXPORT void JNICALL
 Java_com_tayga16_s5landbox_nativebridge_NativeEngine_nativeSetSurface(
     JNIEnv *env, jclass clazz, jlong handle, jobject surface)

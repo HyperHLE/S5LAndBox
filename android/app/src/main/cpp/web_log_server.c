@@ -491,6 +491,42 @@ void web_log_set_status(uint64_t retired, double fps, double mips,
     pthread_mutex_unlock(&s_lock);
 }
 
+size_t web_log_get_entries_json(uint32_t last_id, char *out, size_t capacity)
+{
+    if (!out || capacity < 3) return 0;
+    pthread_mutex_lock(&s_lock);
+    size_t o = 0;
+    out[o++] = '[';
+
+    bool first = true;
+    for (uint32_t i = 0; i < s_count; i++) {
+        uint32_t idx = (s_head + i) % RING_BUFFER_CAP;
+        log_entry_t *entry = &s_ring[idx];
+        if (entry->id <= last_id) continue;
+
+        char esc_msg[MAX_LINE_LEN * 2];
+        escape_json_string(entry->text, esc_msg, sizeof esc_msg);
+
+        char item[MAX_LINE_LEN * 3];
+        int item_len = snprintf(item, sizeof item,
+            "%s{\"id\":%u,\"time\":\"%s\",\"cat\":\"%s\",\"msg\":\"%s\"}",
+            first ? "" : ",", entry->id, entry->time_str, entry->category, esc_msg);
+
+        if (item_len > 0) {
+            if (o + (size_t)item_len + 2 >= capacity) {
+                break;
+            }
+            memcpy(out + o, item, (size_t)item_len);
+            o += (size_t)item_len;
+            first = false;
+        }
+    }
+    out[o++] = ']';
+    out[o] = '\0';
+    pthread_mutex_unlock(&s_lock);
+    return o;
+}
+
 static void send_sse_backlog(int fd)
 {
     pthread_mutex_lock(&s_lock);

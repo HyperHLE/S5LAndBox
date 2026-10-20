@@ -112,6 +112,8 @@ fun EmulatorScreen(
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val audio = remember { AudioOutput(repository) }
+    val context = LocalContext.current
+    val clipboard = LocalClipboardManager.current
 
     var machineName by remember { mutableStateOf("Machine") }
     var status by remember { mutableStateOf<EngineStatus?>(null) }
@@ -623,117 +625,11 @@ fun EmulatorScreen(
     }
 
     if (showConsole) {
-        AlertDialog(
-            onDismissRequest = { showConsole = false },
-            title = {
-                Column {
-                    Text("Guest console")
-                    if (webPort > 0) {
-                        Spacer(Modifier.height(6.dp))
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    clipboard.setText(AnnotatedString(webUrl))
-                                    scope.launch {
-                                        snackbar.showSnackbar("Web URL copied: $webUrl")
-                                    }
-                                },
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Icon(Icons.Filled.Language, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(6.dp))
-                                Text(
-                                    text = "Wi-Fi: $webUrl",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary,
-                                )
-                                Spacer(Modifier.weight(1f))
-                                Text(
-                                    text = "Copy",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
-                    }
-                }
-            },
-            text = {
-                val scroll = rememberScrollState()
-                LaunchedEffect(consoleText) { scroll.scrollTo(scroll.maxValue) }
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(340.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(Color(0xFF04070B))
-                        .padding(10.dp),
-                ) {
-                    SelectionContainer {
-                        Text(
-                            text = consoleText.ifEmpty { "(no output yet)" },
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontFamily = FontFamily.Monospace,
-                            ),
-                            color = Color(0xFF9BE6B8),
-                            modifier = Modifier.verticalScroll(scroll),
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                val clipboard = LocalClipboardManager.current
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(onClick = {
-                        clipboard.setText(AnnotatedString(consoleText))
-                        scope.launch {
-                            snackbar.showSnackbar("Console log copied to clipboard.")
-                        }
-                    }) {
-                        Icon(Icons.Filled.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Copy")
-                    }
-                    TextButton(onClick = {
-                        try {
-                            val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-                            downloadDir.mkdirs()
-                            val safeName = machineName.replace(" ", "_")
-                            val logFile = File(downloadDir, "s5landbox-$safeName.log")
-                            logFile.writeText(consoleText)
-                            scope.launch {
-                                snackbar.showSnackbar("Saved to Downloads/${logFile.name}")
-                            }
-                        } catch (e: Exception) {
-                            scope.launch {
-                                snackbar.showSnackbar("Save failed: ${e.message}")
-                            }
-                        }
-                    }) {
-                        Icon(Icons.Filled.SaveAlt, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("Save")
-                    }
-                    if (webPort > 0) {
-                        TextButton(onClick = {
-                            try {
-                                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(webUrl)))
-                            } catch (_: Exception) {}
-                        }) {
-                            Icon(Icons.Filled.Language, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Web")
-                        }
-                    }
-                    TextButton(onClick = { showConsole = false }) { Text("Close") }
-                }
-            },
+        LogViewerDialog(
+            repository = repository,
+            machineName = machineName,
+            onDismiss = { showConsole = false },
+            onShowSnackbar = { msg -> scope.launch { snackbar.showSnackbar(msg) } },
         )
     }
 

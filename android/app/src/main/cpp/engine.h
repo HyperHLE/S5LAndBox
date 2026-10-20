@@ -107,6 +107,8 @@ int engine_status_json(engine_t *engine, char *out, size_t capacity);
 size_t engine_console_drain(engine_t *engine, char *out, size_t capacity);
 /* Returns listening port of live Web log server, or 0 if inactive. */
 uint16_t engine_get_web_log_port(engine_t *engine);
+/* Returns JSON array of log entries newer than last_id. */
+size_t engine_log_entries_json(engine_t *engine, uint32_t last_id, char *out, size_t capacity);
 
 /* ---------------------------------------------------------------- display */
 void engine_set_surface(engine_t *engine, ANativeWindow *window);

@@ -34,6 +34,11 @@ void web_log_printf(const char *category, const char *fmt, ...)
 void web_log_set_status(uint64_t retired, double fps, double mips,
                         uint32_t ttbr0, const char *state);
 
+/* Returns JSON array of log entries newer than last_id:
+ * [{"id":12,"time":"12:34:56.789","cat":"kernel","msg":"..."}, ...]
+ * Writes up to capacity bytes into out, null-terminated. Returns length. */
+size_t web_log_get_entries_json(uint32_t last_id, char *out, size_t capacity);
+
 #ifdef __cplusplus
 }
 #endif

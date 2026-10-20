@@ -251,3 +251,10 @@ data class IpaInfo(
     val uncompressedBytes: Long = 0,
     val detail: String = "",
 )
+
+data class LogEntry(
+    val id: Long = 0L,
+    val time: String = "",
+    val category: String = "info",
+    val message: String = "",
+)

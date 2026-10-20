@@ -72,6 +72,7 @@ object NativeEngine {
     external fun nativeStatusJson(handle: Long): String
     external fun nativeConsoleDrain(handle: Long): String
     external fun nativeGetWebLogPort(handle: Long): Int
+    external fun nativeGetLogsJson(handle: Long, lastId: Long): String
 
     // Display and input.
     external fun nativeSetSurface(handle: Long, surface: Surface?)

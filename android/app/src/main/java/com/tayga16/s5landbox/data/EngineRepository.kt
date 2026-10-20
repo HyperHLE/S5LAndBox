@@ -221,6 +221,29 @@ class EngineRepository(private val handle: Long) {
     fun getWebLogPort(): Int =
         NativeEngine.nativeGetWebLogPort(handle)
 
+    fun getLogs(lastId: Long = 0L): List<LogEntry> {
+        val jsonStr = NativeEngine.nativeGetLogsJson(handle, lastId)
+        if (jsonStr.isEmpty() || jsonStr == "[]") return emptyList()
+        return try {
+            val array = org.json.JSONArray(jsonStr)
+            buildList {
+                for (i in 0 until array.length()) {
+                    val obj = array.getJSONObject(i)
+                    add(
+                        LogEntry(
+                            id = obj.optLong("id", 0L),
+                            time = obj.optString("time", ""),
+                            category = obj.optString("cat", "info"),
+                            message = obj.optString("msg", ""),
+                        )
+                    )
+                }
+            }
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
     fun setSurface(surface: Surface?) =
         NativeEngine.nativeSetSurface(handle, surface)
 
