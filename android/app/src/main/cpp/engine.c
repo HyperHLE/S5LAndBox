@@ -2362,39 +2362,44 @@ static void publish_retired(engine_t *e, s5l8900_t *machine,
         static uint64_t s_last_mbx_degraded = 0;
         static uint64_t s_last_pre_step_matches = 0;
         static uint64_t s_last_pre_step_handled = 0;
+        static double s_last_telemetry_time = 0.0;
 
-        if (machine->mbx_telemetry.rejected_3d != s_last_mbx_rejected) {
-            uint64_t diff = machine->mbx_telemetry.rejected_3d - s_last_mbx_rejected;
-            s_last_mbx_rejected = machine->mbx_telemetry.rejected_3d;
-            uint64_t seq = machine->mbx_telemetry.rejected_3d;
-            const s5l_mbx_3d_rejection_witness_t *w =
-                &machine->mbx_telemetry.rejected_3d_history[(seq - 1u) % S5L_MBX_3D_REJECTION_HISTORY];
-            web_log_printf("gles", "[MBX3D] Reject +%llu (total %llu): fail_word=0x%08x fb_ctrl=0x%x target=0x%08x",
-                           (unsigned long long)diff, (unsigned long long)seq,
-                           w->ta_failure_word, w->framebuffer_control, w->target);
-        }
-        if (machine->mbx_telemetry.completed_3d != s_last_mbx_completed) {
-            uint64_t diff = machine->mbx_telemetry.completed_3d - s_last_mbx_completed;
-            s_last_mbx_completed = machine->mbx_telemetry.completed_3d;
-            web_log_printf("gles", "[MBX3D] Complete +%llu (total %llu): pixels=%llu",
-                           (unsigned long long)diff, (unsigned long long)machine->mbx_telemetry.completed_3d,
-                           (unsigned long long)machine->mbx_telemetry.pixels_3d);
-        }
-        if (machine->mbx_telemetry.degraded_3d != s_last_mbx_degraded) {
-            uint64_t diff = machine->mbx_telemetry.degraded_3d - s_last_mbx_degraded;
-            s_last_mbx_degraded = machine->mbx_telemetry.degraded_3d;
-            web_log_printf("gles", "[MBX3D] Degraded +%llu (total %llu)",
-                           (unsigned long long)diff, (unsigned long long)machine->mbx_telemetry.degraded_3d);
-        }
+        if (now - s_last_telemetry_time >= 2.5) {
+            s_last_telemetry_time = now;
 
-        uint64_t matches = s5l8900_pre_step_matches(machine);
-        uint64_t handled = s5l8900_pre_step_handled(machine);
-        if (matches != s_last_pre_step_matches || handled != s_last_pre_step_handled) {
-            web_log_printf("gles", "[HLE GLES] matches=+%llu (total %llu), handled=+%llu (total %llu)",
-                           (unsigned long long)(matches - s_last_pre_step_matches), (unsigned long long)matches,
-                           (unsigned long long)(handled - s_last_pre_step_handled), (unsigned long long)handled);
-            s_last_pre_step_matches = matches;
-            s_last_pre_step_handled = handled;
+            if (machine->mbx_telemetry.rejected_3d != s_last_mbx_rejected) {
+                uint64_t diff = machine->mbx_telemetry.rejected_3d - s_last_mbx_rejected;
+                uint64_t seq = machine->mbx_telemetry.rejected_3d;
+                s_last_mbx_rejected = machine->mbx_telemetry.rejected_3d;
+                const s5l_mbx_3d_rejection_witness_t *w =
+                    &machine->mbx_telemetry.rejected_3d_history[(seq - 1u) % S5L_MBX_3D_REJECTION_HISTORY];
+                web_log_printf("gles", "[MBX3D] Reject +%llu (total %llu): fail_word=0x%08x fb_ctrl=0x%x target=0x%08x",
+                               (unsigned long long)diff, (unsigned long long)seq,
+                               w->ta_failure_word, w->framebuffer_control, w->target);
+            }
+            if (machine->mbx_telemetry.completed_3d != s_last_mbx_completed) {
+                uint64_t diff = machine->mbx_telemetry.completed_3d - s_last_mbx_completed;
+                s_last_mbx_completed = machine->mbx_telemetry.completed_3d;
+                web_log_printf("gles", "[MBX3D] Complete +%llu (total %llu): pixels=%llu",
+                               (unsigned long long)diff, (unsigned long long)machine->mbx_telemetry.completed_3d,
+                               (unsigned long long)machine->mbx_telemetry.pixels_3d);
+            }
+            if (machine->mbx_telemetry.degraded_3d != s_last_mbx_degraded) {
+                uint64_t diff = machine->mbx_telemetry.degraded_3d - s_last_mbx_degraded;
+                s_last_mbx_degraded = machine->mbx_telemetry.degraded_3d;
+                web_log_printf("gles", "[MBX3D] Degraded +%llu (total %llu)",
+                               (unsigned long long)diff, (unsigned long long)machine->mbx_telemetry.degraded_3d);
+            }
+
+            uint64_t matches = s5l8900_pre_step_matches(machine);
+            uint64_t handled = s5l8900_pre_step_handled(machine);
+            if (matches != s_last_pre_step_matches || handled != s_last_pre_step_handled) {
+                web_log_printf("gles", "[HLE GLES] matches=+%llu (total %llu), handled=+%llu (total %llu)",
+                               (unsigned long long)(matches - s_last_pre_step_matches), (unsigned long long)matches,
+                               (unsigned long long)(handled - s_last_pre_step_handled), (unsigned long long)handled);
+                s_last_pre_step_matches = matches;
+                s_last_pre_step_handled = handled;
+            }
         }
     }
 
