@@ -635,6 +635,25 @@ static const char *engine_signal_name(int sig)
     }
 }
 
+static bool is_printable_text(const char *buf, size_t len)
+{
+    if (!buf || len == 0) return false;
+    size_t printable = 0;
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)buf[i];
+        if (c >= 0x20 && c <= 0x7e) printable++;
+        else if (c == '\n' || c == '\r' || c == '\t') printable++;
+    }
+    return (printable * 100u / len) >= 70u;
+}
+
+static void engine_uart0_tx_handler(void *ctx, uint8_t byte)
+{
+    (void)ctx;
+    char c = (char)byte;
+    web_log_post_raw("kernel", &c, 1);
+}
+
 static void engine_user_svc_observer(void *ctx, struct arm_cpu *cpu, uint32_t pc, uint32_t swi_num)
 {
     (void)ctx;
@@ -656,7 +675,9 @@ static void engine_user_svc_observer(void *ctx, struct arm_cpu *cpu, uint32_t pc
     }
 
     switch (syscall_num) {
-    case 4: { /* SYS_write(fd, buf, count) */
+    case 4:   /* SYS_write(fd, buf, count) */
+    case 397: /* SYS_write_nocancel */
+    case 133: /* SYS_sendto (used by asl_log / syslog) */ {
         uint32_t fd = cpu->r[0];
         uint32_t buf_va = cpu->r[1];
         uint32_t count = cpu->r[2];
@@ -675,29 +696,59 @@ static void engine_user_svc_observer(void *ctx, struct arm_cpu *cpu, uint32_t pc
                     web_log_post_raw("crash", text, read_bytes);
                 } else if (fd == 1 || fd == 2) {
                     web_log_post_raw("app", text, read_bytes);
-                } else if (strstr(text, "<Notice>:") != NULL || strstr(text, "<Error>:") != NULL ||
-                           strstr(text, "<Warning>:") != NULL || strstr(text, "SpringBoard") != NULL ||
-                           strstr(text, "default:") != NULL) {
+                } else if (is_printable_text(text, read_bytes)) {
                     web_log_post_raw("app", text, read_bytes);
                 }
             }
         }
         break;
     }
+    case 121: { /* SYS_writev(fd, iov, iovcnt) */
+        uint32_t fd = cpu->r[0];
+        uint32_t iov_va = cpu->r[1];
+        uint32_t iovcnt = cpu->r[2];
+        if (iovcnt > 0 && iov_va != 0) {
+            uint8_t iov_raw[8];
+            if (engine_read_user_bytes(cpu, iov_va, iov_raw, sizeof iov_raw) == 8) {
+                uint32_t base = (uint32_t)iov_raw[0] | ((uint32_t)iov_raw[1] << 8) | ((uint32_t)iov_raw[2] << 16) | ((uint32_t)iov_raw[3] << 24);
+                uint32_t len  = (uint32_t)iov_raw[4] | ((uint32_t)iov_raw[5] << 8) | ((uint32_t)iov_raw[6] << 16) | ((uint32_t)iov_raw[7] << 24);
+                if (len > 0 && len < 65536u && base != 0) {
+                    size_t to_read = len > 512u ? 512u : (size_t)len;
+                    char text[513];
+                    size_t read_bytes = engine_read_user_bytes(cpu, base, (uint8_t *)text, to_read);
+                    if (read_bytes > 0) {
+                        text[read_bytes] = '\0';
+                        if (strstr(text, "dyld:") || strstr(text, "Library not loaded")) {
+                            web_log_post_raw("dyld", text, read_bytes);
+                        } else if (strstr(text, "CrashReporter")) {
+                            web_log_post_raw("crash", text, read_bytes);
+                        } else if (fd == 1 || fd == 2 || is_printable_text(text, read_bytes)) {
+                            web_log_post_raw("app", text, read_bytes);
+                        }
+                    }
+                }
+            }
+        }
+        break;
+    }
     case 5:   /* SYS_open */
-    case 277: /* SYS_open_extended */ {
+    case 277: /* SYS_open_extended */
+    case 398: /* SYS_open_nocancel */ {
         char path[256];
         if (engine_read_user_string(cpu, cpu->r[0], path, sizeof path) > 0) {
             if (strstr(path, ".dylib") || strstr(path, "Frameworks") ||
                 strstr(path, ".framework") || strstr(path, ".app") ||
                 strstr(path, "CrashReporter") || strstr(path, "dyld") ||
-                strstr(path, "Applications/") || strstr(path, "Library/")) {
+                strstr(path, "Applications/") || strstr(path, "Library/") ||
+                strstr(path, ".plist") || strstr(path, ".pvr") ||
+                strstr(path, ".caf") || strstr(path, ".png")) {
                 web_log_printf("dyld", "open(\"%s\", 0x%x)", path, cpu->r[1]);
             }
         }
         break;
     }
-    case 59: { /* SYS_execve(path, argv, envp) */
+    case 59:  /* SYS_execve(path, argv, envp) */
+    case 380: /* SYS___mac_execve */ {
         char path[256];
         if (engine_read_user_string(cpu, cpu->r[0], path, sizeof path) > 0) {
             web_log_printf("dyld", "[EXECVE] %s", path);
@@ -712,12 +763,14 @@ static void engine_user_svc_observer(void *ctx, struct arm_cpu *cpu, uint32_t pc
         }
         break;
     }
-    case 37: { /* SYS_kill(pid, sig) */
-        int pid = (int)cpu->r[0];
+    case 37:   /* SYS_kill(pid, sig) */
+    case 328:  /* SYS___pthread_kill(thread, sig) */ {
+        int target = (int)cpu->r[0];
         int sig = (int)cpu->r[1];
         if (sig == 4 || sig == 6 || sig == 8 || sig == 9 || sig == 10 || sig == 11) {
-            web_log_printf("crash", "[SIGNAL] kill(pid=%d, sig=%d [%s]) caller PC=0x%08x LR=0x%08x SP=0x%08x",
-                           pid, sig, engine_signal_name(sig), cpu->r[15], cpu->r[14], cpu->r[13]);
+            web_log_printf("crash", "[SIGNAL] %s(target=%d, sig=%d [%s]) caller PC=0x%08x LR=0x%08x SP=0x%08x",
+                           syscall_num == 328 ? "pthread_kill" : "kill",
+                           target, sig, engine_signal_name(sig), cpu->r[15], cpu->r[14], cpu->r[13]);
         }
         break;
     }
@@ -2412,6 +2465,7 @@ static void engine_thread_main(engine_t *e)
                    vm_guest_fb_pa(VM_GUEST_RAM_BASE, VM_GUEST_RAM_SIZE));
 
     init_hyperhle_gles(e);
+    s5l8900_set_uart0_host(machine, engine_uart0_tx_handler, e);
     s5l8900_set_user_observers(machine, engine_user_svc_observer, engine_user_fault_observer, e);
 
     last_publish = engine_now();
@@ -2572,6 +2626,7 @@ static void engine_thread_main(engine_t *e)
         usb_host_disconnect(&e->usb_host, machine);
     }
 
+    s5l8900_set_uart0_host(machine, NULL, NULL);
     s5l8900_set_user_observers(machine, NULL, NULL, NULL);
     term_hyperhle_gles();
     web_log_flush_raw();

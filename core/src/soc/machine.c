@@ -506,6 +506,8 @@ static void bus_write(void *ctx, uint32_t addr, uint32_t val, unsigned bytes) {
                 m->uart4_host_tx(m->uart4_host_ctx, (uint8_t)val);
         } else {
             s5l_uart_write(&m->uart0, off, val);
+            if (off == UART_UTXH && m->uart0_host_tx)
+                m->uart0_host_tx(m->uart0_host_ctx, (uint8_t)val);
         }
         return;
     }
@@ -518,6 +520,8 @@ static void bus_write(void *ctx, uint32_t addr, uint32_t val, unsigned bytes) {
          * that byte in uart0's capture for the same logical-routing reason. */
         if (m->dma_access_active && off == UART_UTXH) {
             s5l_uart_write(&m->uart0, off, val);
+            if (off == UART_UTXH && m->uart0_host_tx)
+                m->uart0_host_tx(m->uart0_host_ctx, (uint8_t)val);
         } else {
             s5l_uart_write(&m->uart4, off, val);
             if (off == UART_UTXH && m->uart4_host_tx)
@@ -910,6 +914,14 @@ bool s5l8900_set_uart4_host(s5l8900_t *m, s5l_uart4_host_tx_fn tx,
     m->uart4_host_tx = tx;
     m->uart4_host_service = service;
     m->uart4_host_refill = refill;
+    return true;
+}
+
+bool s5l8900_set_uart0_host(s5l8900_t *m, s5l_uart0_host_tx_fn tx, void *ctx) {
+    if (!m) return false;
+    if (!tx && ctx) return false;
+    m->uart0_host_ctx = ctx;
+    m->uart0_host_tx = tx;
     return true;
 }
 

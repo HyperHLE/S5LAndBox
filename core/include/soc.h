@@ -4090,6 +4090,7 @@ typedef bool (*s5l_active_host_now_fn)(void *ctx, uint64_t *nanoseconds);
 typedef void (*s5l_uart4_host_tx_fn)(void *ctx, uint8_t byte);
 typedef void (*s5l_uart4_host_service_fn)(void *ctx, unsigned retired);
 typedef void (*s5l_uart4_host_refill_fn)(void *ctx);
+typedef void (*s5l_uart0_host_tx_fn)(void *ctx, uint8_t byte);
 
 /*
  * Optional host restart service. The watchdog only identifies the board-level
@@ -4473,6 +4474,9 @@ typedef struct {
     s5l_uart4_host_refill_fn  uart4_host_refill;
     void                     *uart4_host_ctx;
 
+    s5l_uart0_host_tx_fn      uart0_host_tx;
+    void                     *uart0_host_ctx;
+
     /* Host lifecycle wiring, deliberately not serialized. */
     s5l_restart_host_service_fn restart_host_service;
     void                       *restart_host_ctx;
@@ -4745,6 +4749,7 @@ bool s5l8900_resume_active_host_clock(s5l8900_t *m,
 bool s5l8900_set_uart4_host(s5l8900_t *m, s5l_uart4_host_tx_fn tx,
                             s5l_uart4_host_service_fn service,
                             s5l_uart4_host_refill_fn refill, void *ctx);
+bool s5l8900_set_uart0_host(s5l8900_t *m, s5l_uart0_host_tx_fn tx, void *ctx);
 
 /* Install or clear the host owner of a watchdog reboot edge. Installing and
  * clearing are between-run operations; a partial clear is rejected. */
