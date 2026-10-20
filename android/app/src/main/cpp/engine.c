@@ -2377,13 +2377,6 @@ static void publish_retired(engine_t *e, s5l8900_t *machine,
 
 /* ------------------------------------------------------------------- run --- */
 
-static void thread_set_phase(engine_t *e, int phase)
-{
-    pthread_mutex_lock(&e->lock);
-    e->phase = phase;
-    pthread_mutex_unlock(&e->lock);
-}
-
 static void engine_thread_main(engine_t *e)
 {
     /* Prioritize emulation thread for big/performance CPU cores (e.g. Cortex-A75/A78) */

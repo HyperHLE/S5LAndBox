@@ -234,7 +234,11 @@ SNAP_SIZE_GUARD(s5l_stub_t,        56,    "snap_stubs");
  * retained from the destination on load. No serialized byte/version changes. */
 /* 258576 adds the nonserialized USB reset witness and alignment, measured
  * from the compiler. snap_usbotg() clears it on load; no format change. */
-SNAP_SIZE_GUARD(s5l8900_t,         258592, "snap_mach");
+/* 258640 adds host-only user SVC/fault observers on arm_bus_t (32) and
+ * streaming uart0_host_tx callback/context on s5l8900_t (16), measured
+ * from the compiler. Like other bus/host hooks, these are excluded from MACH
+ * and retained across load; no serialized byte/version changes. */
+SNAP_SIZE_GUARD(s5l8900_t,         258640, "snap_mach");
 #endif
 
 /* ---------------------------------------------------------------- the IO --- */
