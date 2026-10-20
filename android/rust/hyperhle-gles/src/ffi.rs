@@ -159,6 +159,19 @@ pub unsafe extern "C" fn s5l_gles_viewport(
     });
 }
 
+/// `glDrawArrays`.
+#[no_mangle]
+pub unsafe extern "C" fn s5l_gles_draw_arrays(
+    handle: *mut GlesHandle,
+    mode: u32,
+    first: i32,
+    count: i32,
+) {
+    with_gles(handle, |gl| unsafe {
+        gl.DrawArrays(mode, first, count)
+    });
+}
+
 /// `glFlush`.
 #[no_mangle]
 pub unsafe extern "C" fn s5l_gles_flush(handle: *mut GlesHandle) {
