@@ -13,6 +13,7 @@ on:
     branches:
       - android-port
       - main
+      - 'graphics/**'
     paths:
       - 'android/**'
       - 'core/**'
@@ -78,6 +79,25 @@ jobs:
           sdkmanager --install "platforms;android-35" "build-tools;35.0.0"
           sdkmanager --install "cmake;3.22.1"
           sdkmanager --install "ndk;27.0.12077973" || (sleep 5 && sdkmanager --install "ndk;27.0.12077973")
+
+      # HyperHLE's GLES core is a Rust crate (android/rust/hyperhle-gles).
+      # It is built for every ABI the APK ships.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Build the HyperHLE GLES core
+        run: |
+          set -euo pipefail
+          cargo ndk \
+            -t arm64-v8a -t x86_64 \
+            -o android/app/src/main/jniLibs \
+            build --release \
+            --manifest-path android/rust/hyperhle-gles/Cargo.toml
 
       - name: Build the release and debug APKs
         run: gradle -p android :app:assembleRelease :app:assembleDebug --stacktrace
