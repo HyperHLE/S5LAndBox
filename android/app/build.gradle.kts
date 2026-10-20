@@ -35,6 +35,7 @@ android {
                 // app sources use POSIX pread/fcntl and NDK's strict -std=c11
                 // hides them behind feature-test macros.
                 cFlags += listOf("-O3", "-fomit-frame-pointer")
+                arguments += "-DANDROID_STL=c++_shared"
             }
         }
     }

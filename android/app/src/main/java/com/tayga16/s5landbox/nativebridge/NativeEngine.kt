@@ -16,6 +16,10 @@ import android.view.Surface
 object NativeEngine {
     init {
         try {
+            System.loadLibrary("c++_shared")
+        } catch (_: Throwable) {
+        }
+        try {
             System.loadLibrary("hyperhle_gles")
         } catch (_: Throwable) {
         }
