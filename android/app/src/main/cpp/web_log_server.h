@@ -23,8 +23,11 @@ uint16_t web_log_server_get_port(void);
  * Categories: "kernel", "gles", "dyld", "crash", "info". */
 void web_log_post(const char *category, const char *msg);
 
-/* Post raw text (e.g. UART chunk), splitting into lines. */
+/* Post raw text (e.g. UART chunk), buffering until newline. */
 void web_log_post_raw(const char *category, const char *data, size_t len);
+
+/* Flush any pending incomplete line in the raw buffer. */
+void web_log_flush_raw(void);
 
 /* Formatted log post. */
 void web_log_printf(const char *category, const char *fmt, ...)

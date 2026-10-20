@@ -416,7 +416,6 @@ static void json_string(json_t *j, const char *text)
 static void console_append_len_locked(engine_t *e, const char *text, size_t n)
 {
     if (!text || n == 0) return;
-    web_log_post_raw("kernel", text, n);
     if (e->machine_log_path[0]) {
         FILE *lf = fopen(e->machine_log_path, "ab");
         if (lf) {
@@ -1954,6 +1953,7 @@ static void publish_retired(engine_t *e, s5l8900_t *machine,
         size_t captured = machine->uart0.tx_len;
         if (captured > UART_TX_BUFFER - 1u) captured = UART_TX_BUFFER - 1u;
         console_append_len_locked(e, machine->uart0.tx, captured);
+        web_log_post_raw("kernel", machine->uart0.tx, captured);
         machine->uart0.tx_len = 0;
     }
     if (fb && e->snapshot) {
@@ -2150,6 +2150,7 @@ static void engine_thread_main(engine_t *e)
             stopped_by_request = true;
             e->stop_mode = ENGINE_STOP_POWER_OFF;
             console_append(e, "[vm] guest standby confirmed; powering off\n");
+            web_log_post("info", "[vm] guest standby confirmed; powering off");
             publish_retired(e, machine, retired, 0.0, ARM_OK);
             break;
         }
@@ -2211,6 +2212,7 @@ static void engine_thread_main(engine_t *e)
                     checkpoint_saved = true;
                     console_append(e,
                         "[vm] automatic resume checkpoint saved\n");
+                    web_log_post("info", "[vm] automatic resume checkpoint saved");
                     pthread_mutex_lock(&e->lock);
                     snprintf(e->note, sizeof e->note,
                              "The machine was saved and will resume here next "
@@ -2251,6 +2253,7 @@ static void engine_thread_main(engine_t *e)
         usb_host_disconnect(&e->usb_host, machine);
     }
 
+    web_log_flush_raw();
     s5l8900_free(machine);
     free(machine);
     vm_firmware_boot_destroy(&boot);

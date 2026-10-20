@@ -436,35 +436,53 @@ void web_log_post(const char *category, const char *msg)
     pthread_mutex_unlock(&s_lock);
 }
 
+static char s_raw_pending[MAX_LINE_LEN];
+static size_t s_raw_pending_len = 0;
+
+void web_log_flush_raw(void)
+{
+    pthread_mutex_lock(&s_lock);
+    if (s_raw_pending_len > 0) {
+        s_raw_pending[s_raw_pending_len] = '\0';
+        s_raw_pending_len = 0;
+        pthread_mutex_unlock(&s_lock);
+        web_log_post("kernel", s_raw_pending);
+        return;
+    }
+    pthread_mutex_unlock(&s_lock);
+}
+
 void web_log_post_raw(const char *category, const char *data, size_t len)
 {
     if (!data || len == 0) return;
-    char line[MAX_LINE_LEN];
-    size_t line_len = 0;
+    const char *cat = category ? category : "kernel";
 
+    pthread_mutex_lock(&s_lock);
     for (size_t i = 0; i < len; i++) {
         char c = data[i];
         if (c == '\r') continue;
         if (c == '\n') {
-            line[line_len] = '\0';
-            if (line_len > 0)
-                web_log_post(category, line);
-            line_len = 0;
+            s_raw_pending[s_raw_pending_len] = '\0';
+            if (s_raw_pending_len > 0) {
+                pthread_mutex_unlock(&s_lock);
+                web_log_post(cat, s_raw_pending);
+                pthread_mutex_lock(&s_lock);
+            }
+            s_raw_pending_len = 0;
         } else {
-            if (line_len + 1 < sizeof line) {
-                line[line_len++] = c;
+            if (s_raw_pending_len + 1 < sizeof s_raw_pending) {
+                s_raw_pending[s_raw_pending_len++] = c;
             } else {
-                line[line_len] = '\0';
-                web_log_post(category, line);
-                line_len = 0;
-                line[line_len++] = c;
+                s_raw_pending[s_raw_pending_len] = '\0';
+                pthread_mutex_unlock(&s_lock);
+                web_log_post(cat, s_raw_pending);
+                pthread_mutex_lock(&s_lock);
+                s_raw_pending_len = 0;
+                s_raw_pending[s_raw_pending_len++] = c;
             }
         }
     }
-    if (line_len > 0) {
-        line[line_len] = '\0';
-        web_log_post(category, line);
-    }
+    pthread_mutex_unlock(&s_lock);
 }
 
 void web_log_printf(const char *category, const char *fmt, ...)
@@ -791,6 +809,7 @@ uint16_t web_log_server_start(uint16_t preferred_port)
 void web_log_server_stop(void)
 {
     if (!s_running) return;
+    web_log_flush_raw();
     s_running = false;
 
     if (s_stop_pipe[1] >= 0) {
