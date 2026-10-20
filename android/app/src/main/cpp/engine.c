@@ -530,9 +530,12 @@ static void init_hyperhle_gles(engine_t *e) {
     if (s_hyperhle_lib) return;
     s_hyperhle_lib = dlopen("libhyperhle_gles.so", RTLD_NOW | RTLD_LOCAL);
     if (!s_hyperhle_lib) {
-        ENGINE_LOG("hyperhle-gles: libhyperhle_gles.so not loaded: %s", dlerror());
+        const char *err = dlerror();
+        ENGINE_LOG("hyperhle-gles: libhyperhle_gles.so not loaded: %s", err ? err : "unknown error");
+        web_log_printf("warn", "hyperhle-gles: libhyperhle_gles.so not loaded: %s", err ? err : "unknown error");
         return;
     }
+    web_log_printf("info", "hyperhle-gles: libhyperhle_gles.so loaded successfully via dlopen");
     p_s5l_gles_create = (GlesHandle *(*)(int32_t, void *, uint32_t, uint32_t))dlsym(s_hyperhle_lib, "s5l_gles_create");
     p_s5l_gles_destroy = (void (*)(GlesHandle *))dlsym(s_hyperhle_lib, "s5l_gles_destroy");
     p_s5l_gles_make_current = (int32_t (*)(GlesHandle *))dlsym(s_hyperhle_lib, "s5l_gles_make_current");
@@ -549,7 +552,11 @@ static void init_hyperhle_gles(engine_t *e) {
             ios3_hle_set_gles_dispatch(&s_hyperhle_dispatch);
             ENGINE_LOG("hyperhle-gles: acceleration initialized and armed");
             web_log_printf("info", "HyperHLE GLES hardware acceleration initialized and armed");
+        } else {
+            web_log_printf("warn", "hyperhle-gles: s5l_gles_create returned NULL");
         }
+    } else {
+        web_log_printf("warn", "hyperhle-gles: symbol s5l_gles_create not found");
     }
 }
 
@@ -742,7 +749,7 @@ static void engine_user_svc_observer(void *ctx, struct arm_cpu *cpu, uint32_t pc
                 strstr(path, "Applications/") || strstr(path, "Library/") ||
                 strstr(path, ".plist") || strstr(path, ".pvr") ||
                 strstr(path, ".caf") || strstr(path, ".png")) {
-                web_log_printf("dyld", "open(\"%s\", 0x%x)", path, cpu->r[1]);
+                web_log_printf("dyld", "open(\"%s\", 0x%x) [ttbr0=0x%08x]", path, cpu->r[1], cpu->cp15.ttbr0);
             }
         }
         break;
@@ -751,7 +758,7 @@ static void engine_user_svc_observer(void *ctx, struct arm_cpu *cpu, uint32_t pc
     case 380: /* SYS___mac_execve */ {
         char path[256];
         if (engine_read_user_string(cpu, cpu->r[0], path, sizeof path) > 0) {
-            web_log_printf("dyld", "[EXECVE] %s", path);
+            web_log_printf("dyld", "[EXECVE] %s (ttbr0=0x%08x)", path, cpu->cp15.ttbr0);
         }
         break;
     }
@@ -759,7 +766,7 @@ static void engine_user_svc_observer(void *ctx, struct arm_cpu *cpu, uint32_t pc
     case 361: {
         char path[256];
         if (engine_read_user_string(cpu, cpu->r[1], path, sizeof path) > 0) {
-            web_log_printf("dyld", "[SPAWN] %s", path);
+            web_log_printf("dyld", "[SPAWN] %s (ttbr0=0x%08x)", path, cpu->cp15.ttbr0);
         }
         break;
     }
@@ -785,10 +792,20 @@ static void engine_user_svc_observer(void *ctx, struct arm_cpu *cpu, uint32_t pc
     }
     case 1: { /* SYS_exit(status) */
         int status = (int)cpu->r[0];
+        uint32_t stack_sample[8] = {0};
+        size_t n = engine_read_user_bytes(cpu, cpu->r[13], (uint8_t *)stack_sample, sizeof stack_sample);
+        int words = (int)(n / 4u);
         if (status != 0) {
-            web_log_printf("crash", "[EXIT] Process exited with failure status %d (PC=0x%08x LR=0x%08x)", status, cpu->r[15], cpu->r[14]);
+            web_log_printf("crash", "[EXIT] Process exited with failure status %d (ttbr0=0x%08x PC=0x%08x LR=0x%08x SP=0x%08x)",
+                           status, cpu->cp15.ttbr0, cpu->r[15], cpu->r[14], cpu->r[13]);
         } else {
-            web_log_printf("info", "[EXIT] Process exited with status 0");
+            web_log_printf("info", "[EXIT] Process exited with status 0 (ttbr0=0x%08x PC=0x%08x LR=0x%08x SP=0x%08x)",
+                           cpu->cp15.ttbr0, cpu->r[15], cpu->r[14], cpu->r[13]);
+        }
+        if (words >= 4) {
+            web_log_printf("info", "  [EXIT SP..SP+31] %08x %08x %08x %08x %08x %08x %08x %08x",
+                           stack_sample[0], stack_sample[1], stack_sample[2], stack_sample[3],
+                           stack_sample[4], stack_sample[5], stack_sample[6], stack_sample[7]);
         }
         break;
     }
@@ -2338,6 +2355,48 @@ static void publish_retired(engine_t *e, s5l8900_t *machine,
     web_log_set_status(retired, e->fps, e->rate,
                        machine ? machine->cpu.cp15.ttbr0 : 0u, e->status);
     pthread_mutex_unlock(&e->lock);
+
+    if (machine) {
+        static uint64_t s_last_mbx_rejected = 0;
+        static uint64_t s_last_mbx_completed = 0;
+        static uint64_t s_last_mbx_degraded = 0;
+        static uint64_t s_last_pre_step_matches = 0;
+        static uint64_t s_last_pre_step_handled = 0;
+
+        if (machine->mbx_telemetry.rejected_3d != s_last_mbx_rejected) {
+            uint64_t diff = machine->mbx_telemetry.rejected_3d - s_last_mbx_rejected;
+            s_last_mbx_rejected = machine->mbx_telemetry.rejected_3d;
+            uint64_t seq = machine->mbx_telemetry.rejected_3d;
+            const s5l_mbx_3d_rejection_witness_t *w =
+                &machine->mbx_telemetry.rejected_3d_history[(seq - 1u) % S5L_MBX_3D_REJECTION_HISTORY];
+            web_log_printf("gles", "[MBX3D] Reject +%llu (total %llu): fail_word=0x%08x fb_ctrl=0x%x target=0x%08x",
+                           (unsigned long long)diff, (unsigned long long)seq,
+                           w->ta_failure_word, w->framebuffer_control, w->target);
+        }
+        if (machine->mbx_telemetry.completed_3d != s_last_mbx_completed) {
+            uint64_t diff = machine->mbx_telemetry.completed_3d - s_last_mbx_completed;
+            s_last_mbx_completed = machine->mbx_telemetry.completed_3d;
+            web_log_printf("gles", "[MBX3D] Complete +%llu (total %llu): pixels=%llu",
+                           (unsigned long long)diff, (unsigned long long)machine->mbx_telemetry.completed_3d,
+                           (unsigned long long)machine->mbx_telemetry.pixels_3d);
+        }
+        if (machine->mbx_telemetry.degraded_3d != s_last_mbx_degraded) {
+            uint64_t diff = machine->mbx_telemetry.degraded_3d - s_last_mbx_degraded;
+            s_last_mbx_degraded = machine->mbx_telemetry.degraded_3d;
+            web_log_printf("gles", "[MBX3D] Degraded +%llu (total %llu)",
+                           (unsigned long long)diff, (unsigned long long)machine->mbx_telemetry.degraded_3d);
+        }
+
+        uint64_t matches = s5l8900_pre_step_matches(machine);
+        uint64_t handled = s5l8900_pre_step_handled(machine);
+        if (matches != s_last_pre_step_matches || handled != s_last_pre_step_handled) {
+            web_log_printf("gles", "[HLE GLES] matches=+%llu (total %llu), handled=+%llu (total %llu)",
+                           (unsigned long long)(matches - s_last_pre_step_matches), (unsigned long long)matches,
+                           (unsigned long long)(handled - s_last_pre_step_handled), (unsigned long long)handled);
+            s_last_pre_step_matches = matches;
+            s_last_pre_step_handled = handled;
+        }
+    }
 
     post_frame(e);
 }

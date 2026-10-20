@@ -15,6 +15,10 @@ import android.view.Surface
  */
 object NativeEngine {
     init {
+        try {
+            System.loadLibrary("hyperhle_gles")
+        } catch (_: Throwable) {
+        }
         System.loadLibrary("s5landbox")
     }
 
