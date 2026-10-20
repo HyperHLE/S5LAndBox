@@ -103,8 +103,14 @@ jobs:
             build --release
           mkdir -p "$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a"
           mkdir -p "$ROOT_DIR/android/app/src/main/jniLibs/x86_64"
-          find "$ANDROID_NDK_HOME" -name "libc++_shared.so" | grep "aarch64-linux-android" | head -n 1 | xargs -I{} cp {} "$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a/"
-          find "$ANDROID_NDK_HOME" -name "libc++_shared.so" | grep "x86_64-linux-android" | head -n 1 | xargs -I{} cp {} "$ROOT_DIR/android/app/src/main/jniLibs/x86_64/"
+          for lib in $(find "$ANDROID_NDK_HOME" -name "libc++_shared.so"); do
+            if [[ "$lib" == *"aarch64"* ]]; then
+              cp -vf "$lib" "$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a/"
+            elif [[ "$lib" == *"x86_64"* ]]; then
+              cp -vf "$lib" "$ROOT_DIR/android/app/src/main/jniLibs/x86_64/"
+            fi
+          done
+          ls -la "$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a"
 
       - name: Build the release and debug APKs
         run: gradle -p android :app:assembleRelease :app:assembleDebug --stacktrace

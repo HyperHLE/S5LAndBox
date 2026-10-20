@@ -194,9 +194,13 @@ static bool hle_pre_step(void *opaque) {
     if (!site) return false;
 
 #if defined(S5LBOX_ANDROID)
-    if (site->name && site->name[0] == 'g' && site->name[1] == 'l') {
-        web_log_printf("gles", "[GLES] %s (PC=0x%08x, TTBR0=0x%08x)",
-                       site->name, pc, space);
+    static uint32_t s_last_logged_pc = 0;
+    static uint64_t s_log_count = 0;
+    if (pc != s_last_logged_pc && s_log_count < 30) {
+        s_last_logged_pc = pc;
+        s_log_count++;
+        web_log_printf("gles", "[HLE SITE] %s (PC=0x%08x, TTBR0=0x%08x, armed=%d)",
+                       site->name ? site->name : "unknown", pc, space, (int)site->armed);
     }
 #endif
 
