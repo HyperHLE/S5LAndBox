@@ -316,6 +316,10 @@ typedef struct arm_bus {
     void                         *privileged_svc_ctx;
     arm_prepare_fetch_fn prepare_fetch;
     void *prepare_fetch_ctx;
+    void (*user_svc_observer)(void *ctx, struct arm_cpu *cpu, uint32_t pc, uint32_t swi_num);
+    void *user_svc_ctx;
+    void (*user_fault_observer)(void *ctx, struct arm_cpu *cpu, uint32_t vector, uint32_t far, uint32_t fsr);
+    void *user_fault_ctx;
 } arm_bus_t;
 
 /*

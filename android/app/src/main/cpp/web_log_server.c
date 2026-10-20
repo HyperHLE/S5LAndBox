@@ -181,6 +181,7 @@ static const char HTML_PAGE[] =
 "  user-select: none;\n"
 "}\n"
 ".tag-kernel { color: #38bdf8; background: rgba(56, 189, 248, 0.12); }\n"
+".tag-app    { color: #34d399; background: rgba(52, 211, 153, 0.12); font-weight: 600; }\n"
 ".tag-gles   { color: #4ade80; background: rgba(74, 222, 128, 0.12); }\n"
 ".tag-dyld   { color: #c084fc; background: rgba(192, 132, 252, 0.12); }\n"
 ".tag-crash  { color: #ef4444; background: rgba(239, 68, 68, 0.22); font-weight: 700; }\n"
@@ -205,6 +206,7 @@ static const char HTML_PAGE[] =
 "<div class=\"toolbar\">\n"
 "  <div class=\"filter-group\">\n"
 "    <button class=\"filter-btn active\" data-cat=\"all\">All</button>\n"
+"    <button class=\"filter-btn\" data-cat=\"app\">App</button>\n"
 "    <button class=\"filter-btn\" data-cat=\"kernel\">Kernel</button>\n"
 "    <button class=\"filter-btn\" data-cat=\"gles\">GLES</button>\n"
 "    <button class=\"filter-btn\" data-cat=\"dyld\">dyld</button>\n"
@@ -438,6 +440,7 @@ void web_log_post(const char *category, const char *msg)
 
 static char s_raw_pending[MAX_LINE_LEN];
 static size_t s_raw_pending_len = 0;
+static char s_raw_pending_cat[16] = "kernel";
 
 void web_log_flush_raw(void)
 {
@@ -445,8 +448,10 @@ void web_log_flush_raw(void)
     if (s_raw_pending_len > 0) {
         s_raw_pending[s_raw_pending_len] = '\0';
         s_raw_pending_len = 0;
+        char cat[16];
+        snprintf(cat, sizeof cat, "%s", s_raw_pending_cat);
         pthread_mutex_unlock(&s_lock);
-        web_log_post("kernel", s_raw_pending);
+        web_log_post(cat, s_raw_pending);
         return;
     }
     pthread_mutex_unlock(&s_lock);
@@ -458,6 +463,17 @@ void web_log_post_raw(const char *category, const char *data, size_t len)
     const char *cat = category ? category : "kernel";
 
     pthread_mutex_lock(&s_lock);
+    if (s_raw_pending_len > 0 && strcmp(s_raw_pending_cat, cat) != 0) {
+        s_raw_pending[s_raw_pending_len] = '\0';
+        char prev_cat[16];
+        snprintf(prev_cat, sizeof prev_cat, "%s", s_raw_pending_cat);
+        s_raw_pending_len = 0;
+        pthread_mutex_unlock(&s_lock);
+        web_log_post(prev_cat, s_raw_pending);
+        pthread_mutex_lock(&s_lock);
+    }
+    snprintf(s_raw_pending_cat, sizeof s_raw_pending_cat, "%s", cat);
+
     for (size_t i = 0; i < len; i++) {
         char c = data[i];
         if (c == '\r') continue;

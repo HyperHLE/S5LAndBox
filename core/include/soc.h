@@ -4783,6 +4783,10 @@ void s5l8900_ram_changed(void *machine, uint32_t pa, uint32_t length);
  */
 bool s5l8900_set_pre_step_hook(s5l8900_t *m, s5l_pre_step_fn fn, void *ctx,
                                const uint32_t *targets, unsigned count);
+void s5l8900_set_user_observers(s5l8900_t *m,
+                                void (*svc)(void *ctx, struct arm_cpu *cpu, uint32_t pc, uint32_t swi_num),
+                                void (*fault)(void *ctx, struct arm_cpu *cpu, uint32_t vector, uint32_t far, uint32_t fsr),
+                                void *ctx);
 bool s5l8900_pre_step_target(const s5l8900_t *m, uint32_t pc);
 uint64_t s5l8900_pre_step_matches(const s5l8900_t *m);
 uint64_t s5l8900_pre_step_handled(const s5l8900_t *m);

@@ -529,6 +529,8 @@ static void take_exception(arm_cpu_t *c, uint32_t vector, uint32_t mode,
  * return directly from their decoder and must take the same exception there. */
 static void take_pending_data_abort(arm_cpu_t *c, uint32_t pc) {
     uint32_t vec;
+    if (c->bus && c->bus->user_fault_observer && !cpu_is_priv(c))
+        c->bus->user_fault_observer(c->bus->user_fault_ctx, c, ARM_VEC_DATA_ABORT, c->abort_far, c->abort_fsr);
     c->abort_pending = false;
     c->cp15.dfsr = c->abort_fsr;
     c->cp15.dfar = c->abort_far;
@@ -642,6 +644,8 @@ static bool vfp_lazy_enable_trap(const arm_cpu_t *c, uint32_t insn) {
  */
 static arm_status_t take_undefined_instruction(arm_cpu_t *c, uint32_t pc) {
     uint32_t vec;
+    if (c->bus && c->bus->user_fault_observer && !cpu_is_priv(c))
+        c->bus->user_fault_observer(c->bus->user_fault_ctx, c, ARM_VEC_UNDEFINED, pc, 0);
     take_exception(c, ARM_VEC_UNDEFINED, ARM_MODE_UND, pc + 4u, false, &vec);
     c->r[15] = vec;
     return ARM_OK;
@@ -2706,8 +2710,11 @@ static arm_status_t thumb_step(arm_cpu_t *c, uint32_t pc, uint16_t insn,
             if (result == ARM_SVC_ERROR) return ARM_HALT;
             if (result == ARM_SVC_REDIRECTED)
                 *next = c->r[15];
-            else if (result != ARM_SVC_HANDLED)
+            else if (result != ARM_SVC_HANDLED) {
+                if (c->bus && c->bus->user_svc_observer && !cpu_is_priv(c))
+                    c->bus->user_svc_observer(c->bus->user_svc_ctx, c, pc, (uint32_t)(insn & 0xffu));
                 take_exception(c, ARM_VEC_SWI, ARM_MODE_SVC, pc + 2, false, next);
+            }
             return ARM_OK;
         }
         if (cond == 0xe) return ARM_UNDEFINED;   /* permanently undefined */
@@ -2806,6 +2813,8 @@ arm_status_t arm_step(arm_cpu_t *c) {
             c->cycles++;
             c->cp15.ifsr = fetch_fsr;
             c->cp15.ifar = pc;
+            if (c->bus && c->bus->user_fault_observer && !cpu_is_priv(c))
+                c->bus->user_fault_observer(c->bus->user_fault_ctx, c, ARM_VEC_PREFETCH, pc, fetch_fsr);
             take_exception(c, ARM_VEC_PREFETCH, ARM_MODE_ABT, pc + 4, false,
                            &vec);
             c->r[15] = vec;
@@ -3319,8 +3328,11 @@ arm_status_t arm_step(arm_cpu_t *c) {
         if (result == ARM_SVC_ERROR) return ARM_HALT;
         if (result == ARM_SVC_REDIRECTED)
             next = c->r[15];
-        else if (result != ARM_SVC_HANDLED)
+        else if (result != ARM_SVC_HANDLED) {
+            if (c->bus && c->bus->user_svc_observer && !cpu_is_priv(c))
+                c->bus->user_svc_observer(c->bus->user_svc_ctx, c, pc, insn & 0x00ffffffu);
             take_exception(c, ARM_VEC_SWI, ARM_MODE_SVC, pc + 4, false, &next);
+        }
     } else if ((insn & 0x0c000000u) == 0x00000000u) {     /* data processing / PSR */
         st = exec_data_processing(c, pc, insn, &next);
     } else {

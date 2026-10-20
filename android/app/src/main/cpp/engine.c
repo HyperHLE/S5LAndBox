@@ -565,6 +565,218 @@ static void term_hyperhle_gles(void) {
     }
 }
 
+/* ------------------------------------------- user diagnostic observers --- */
+
+static bool engine_read_user_byte(arm_cpu_t *cpu, uint32_t va, uint8_t *out)
+{
+    if (!cpu || !cpu->bus || !out) return false;
+    uint32_t pa = 0;
+    uint32_t fsr = arm_mmu_translate(cpu, va, ARM_ACCESS_READ, false, &pa);
+    if (fsr != 0) return false;
+    if (cpu->bus->host_ram) {
+        uint8_t *ptr = cpu->bus->host_ram(cpu->bus->ctx, pa, 1);
+        if (ptr) {
+            *out = *ptr;
+            return true;
+        }
+    }
+    if (cpu->bus->read8) {
+        *out = cpu->bus->read8(cpu->bus->ctx, pa);
+        return true;
+    }
+    return false;
+}
+
+static size_t engine_read_user_string(arm_cpu_t *cpu, uint32_t va, char *out, size_t max_len)
+{
+    if (!cpu || !out || max_len == 0 || va == 0) return 0;
+    size_t len = 0;
+    while (len + 1 < max_len) {
+        uint8_t b = 0;
+        if (!engine_read_user_byte(cpu, va + (uint32_t)len, &b)) break;
+        if (b == 0) break;
+        out[len++] = (char)b;
+    }
+    out[len] = '\0';
+    return len;
+}
+
+static size_t engine_read_user_bytes(arm_cpu_t *cpu, uint32_t va, uint8_t *out, size_t count)
+{
+    if (!cpu || !out || count == 0 || va == 0) return 0;
+    size_t i = 0;
+    for (; i < count; i++) {
+        uint8_t b = 0;
+        if (!engine_read_user_byte(cpu, va + (uint32_t)i, &b)) break;
+        out[i] = b;
+    }
+    return i;
+}
+
+static const char *engine_signal_name(int sig)
+{
+    switch (sig) {
+        case 1: return "SIGHUP";
+        case 2: return "SIGINT";
+        case 3: return "SIGQUIT";
+        case 4: return "SIGILL";
+        case 5: return "SIGTRAP";
+        case 6: return "SIGABRT";
+        case 7: return "SIGEMT";
+        case 8: return "SIGFPE";
+        case 9: return "SIGKILL";
+        case 10: return "SIGBUS";
+        case 11: return "SIGSEGV";
+        case 12: return "SIGSYS";
+        case 13: return "SIGPIPE";
+        case 14: return "SIGALRM";
+        case 15: return "SIGTERM";
+        default: return "UNKNOWN";
+    }
+}
+
+static void engine_user_svc_observer(void *ctx, struct arm_cpu *cpu, uint32_t pc, uint32_t swi_num)
+{
+    (void)ctx;
+    (void)pc;
+    (void)swi_num;
+    if (!cpu) return;
+
+    int32_t raw_r12 = (int32_t)cpu->r[12];
+    uint32_t syscall_num = 0;
+    if (raw_r12 < 0) {
+        /* Mach trap: negative syscall numbers (e.g. -31 mach_msg_trap) */
+        return;
+    } else if (raw_r12 == 0) {
+        /* Indirect syscall: SYS_syscall */
+        syscall_num = cpu->r[0];
+    } else {
+        /* Direct BSD syscall */
+        syscall_num = (uint32_t)raw_r12;
+    }
+
+    switch (syscall_num) {
+    case 4: { /* SYS_write(fd, buf, count) */
+        uint32_t fd = cpu->r[0];
+        uint32_t buf_va = cpu->r[1];
+        uint32_t count = cpu->r[2];
+        if (count > 0 && count < 65536u && buf_va != 0) {
+            size_t to_read = count > 512u ? 512u : (size_t)count;
+            char text[513];
+            size_t read_bytes = engine_read_user_bytes(cpu, buf_va, (uint8_t *)text, to_read);
+            if (read_bytes > 0) {
+                text[read_bytes] = '\0';
+                if (strstr(text, "dyld:") != NULL || strstr(text, "Library not loaded") != NULL ||
+                    strstr(text, "Symbol not found") != NULL) {
+                    web_log_post_raw("dyld", text, read_bytes);
+                } else if (strstr(text, "CrashReporter") != NULL ||
+                           strstr(text, "Incident Identifier") != NULL ||
+                           strstr(text, "Exception Type") != NULL) {
+                    web_log_post_raw("crash", text, read_bytes);
+                } else if (fd == 1 || fd == 2) {
+                    web_log_post_raw("app", text, read_bytes);
+                } else if (strstr(text, "<Notice>:") != NULL || strstr(text, "<Error>:") != NULL ||
+                           strstr(text, "<Warning>:") != NULL || strstr(text, "SpringBoard") != NULL ||
+                           strstr(text, "default:") != NULL) {
+                    web_log_post_raw("app", text, read_bytes);
+                }
+            }
+        }
+        break;
+    }
+    case 5:   /* SYS_open */
+    case 277: /* SYS_open_extended */ {
+        char path[256];
+        if (engine_read_user_string(cpu, cpu->r[0], path, sizeof path) > 0) {
+            if (strstr(path, ".dylib") || strstr(path, "Frameworks") ||
+                strstr(path, ".framework") || strstr(path, ".app") ||
+                strstr(path, "CrashReporter") || strstr(path, "dyld") ||
+                strstr(path, "Applications/") || strstr(path, "Library/")) {
+                web_log_printf("dyld", "open(\"%s\", 0x%x)", path, cpu->r[1]);
+            }
+        }
+        break;
+    }
+    case 59: { /* SYS_execve(path, argv, envp) */
+        char path[256];
+        if (engine_read_user_string(cpu, cpu->r[0], path, sizeof path) > 0) {
+            web_log_printf("dyld", "[EXECVE] %s", path);
+        }
+        break;
+    }
+    case 244:  /* SYS_posix_spawn */
+    case 361: {
+        char path[256];
+        if (engine_read_user_string(cpu, cpu->r[1], path, sizeof path) > 0) {
+            web_log_printf("dyld", "[SPAWN] %s", path);
+        }
+        break;
+    }
+    case 37: { /* SYS_kill(pid, sig) */
+        int pid = (int)cpu->r[0];
+        int sig = (int)cpu->r[1];
+        if (sig == 4 || sig == 6 || sig == 8 || sig == 9 || sig == 10 || sig == 11) {
+            web_log_printf("crash", "[SIGNAL] kill(pid=%d, sig=%d [%s]) caller PC=0x%08x LR=0x%08x SP=0x%08x",
+                           pid, sig, engine_signal_name(sig), cpu->r[15], cpu->r[14], cpu->r[13]);
+        }
+        break;
+    }
+    case 1: { /* SYS_exit(status) */
+        int status = (int)cpu->r[0];
+        web_log_printf("info", "[EXIT] Process exited with status %d (PC=0x%08x)", status, cpu->r[15]);
+        break;
+    }
+    default:
+        break;
+    }
+}
+
+static void engine_user_fault_observer(void *ctx, struct arm_cpu *cpu,
+                                       uint32_t vector, uint32_t far, uint32_t fsr)
+{
+    (void)ctx;
+    if (!cpu) return;
+
+    const char *fault_type = "UNKNOWN FAULT";
+    if (vector == ARM_VEC_DATA_ABORT) {
+        fault_type = "EXC_BAD_ACCESS (Data Abort / SIGSEGV)";
+    } else if (vector == ARM_VEC_PREFETCH) {
+        fault_type = "EXC_BAD_ACCESS (Prefetch Abort / SIGSEGV)";
+    } else if (vector == ARM_VEC_UNDEFINED) {
+        fault_type = "EXC_BAD_INSTRUCTION (Undefined Instruction / SIGILL)";
+    }
+
+    web_log_printf("crash", "==================== CRASH / FAULT ====================");
+    web_log_printf("crash", "%s at PC=0x%08x", fault_type, cpu->r[15]);
+    if (vector == ARM_VEC_DATA_ABORT || vector == ARM_VEC_PREFETCH) {
+        web_log_printf("crash", "Faulting address (FAR): 0x%08x, FSR: 0x%03x", far, fsr);
+    }
+    web_log_printf("crash", "Registers:");
+    web_log_printf("crash", "  r0=0x%08x  r1=0x%08x  r2=0x%08x  r3=0x%08x",
+                   cpu->r[0], cpu->r[1], cpu->r[2], cpu->r[3]);
+    web_log_printf("crash", "  r4=0x%08x  r5=0x%08x  r6=0x%08x  r7=0x%08x",
+                   cpu->r[4], cpu->r[5], cpu->r[6], cpu->r[7]);
+    web_log_printf("crash", "  r8=0x%08x  r9=0x%08x r10=0x%08x r11=0x%08x",
+                   cpu->r[8], cpu->r[9], cpu->r[10], cpu->r[11]);
+    web_log_printf("crash", "  r12=0x%08x  SP=0x%08x  LR=0x%08x  PC=0x%08x  CPSR=0x%08x",
+                   cpu->r[12], cpu->r[13], cpu->r[14], cpu->r[15], cpu->cpsr);
+
+    /* Read stack top if SP is valid user space */
+    uint32_t sp = cpu->r[13];
+    if (sp >= 0x1000u && (sp & 3u) == 0) {
+        uint8_t stack_raw[16];
+        size_t read_bytes = engine_read_user_bytes(cpu, sp, stack_raw, sizeof stack_raw);
+        if (read_bytes == 16) {
+            uint32_t w0 = (uint32_t)stack_raw[0] | ((uint32_t)stack_raw[1] << 8) | ((uint32_t)stack_raw[2] << 16) | ((uint32_t)stack_raw[3] << 24);
+            uint32_t w1 = (uint32_t)stack_raw[4] | ((uint32_t)stack_raw[5] << 8) | ((uint32_t)stack_raw[6] << 16) | ((uint32_t)stack_raw[7] << 24);
+            uint32_t w2 = (uint32_t)stack_raw[8] | ((uint32_t)stack_raw[9] << 8) | ((uint32_t)stack_raw[10] << 16) | ((uint32_t)stack_raw[11] << 24);
+            uint32_t w3 = (uint32_t)stack_raw[12] | ((uint32_t)stack_raw[13] << 8) | ((uint32_t)stack_raw[14] << 16) | ((uint32_t)stack_raw[15] << 24);
+            web_log_printf("crash", "Stack [SP..SP+16]: 0x%08x 0x%08x 0x%08x 0x%08x", w0, w1, w2, w3);
+        }
+    }
+    web_log_printf("crash", "========================================================");
+}
+
 /* ---------------------------------------------------------- persistence --- */
 
 static bool persist_instances_locked(engine_t *e)
@@ -2200,6 +2412,7 @@ static void engine_thread_main(engine_t *e)
                    vm_guest_fb_pa(VM_GUEST_RAM_BASE, VM_GUEST_RAM_SIZE));
 
     init_hyperhle_gles(e);
+    s5l8900_set_user_observers(machine, engine_user_svc_observer, engine_user_fault_observer, e);
 
     last_publish = engine_now();
     next_publish = last_publish + ENGINE_PUBLISH_SECONDS;
@@ -2359,6 +2572,7 @@ static void engine_thread_main(engine_t *e)
         usb_host_disconnect(&e->usb_host, machine);
     }
 
+    s5l8900_set_user_observers(machine, NULL, NULL, NULL);
     term_hyperhle_gles();
     web_log_flush_raw();
     s5l8900_free(machine);

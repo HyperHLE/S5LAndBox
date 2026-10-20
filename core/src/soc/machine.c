@@ -991,6 +991,17 @@ uint64_t s5l8900_pre_step_handled(const s5l8900_t *m) {
     return m ? m->pre_step_handled : 0u;
 }
 
+void s5l8900_set_user_observers(s5l8900_t *m,
+                                void (*svc)(void *ctx, struct arm_cpu *cpu, uint32_t pc, uint32_t swi_num),
+                                void (*fault)(void *ctx, struct arm_cpu *cpu, uint32_t vector, uint32_t far, uint32_t fsr),
+                                void *ctx) {
+    if (!m) return;
+    m->bus.user_svc_observer = svc;
+    m->bus.user_svc_ctx = ctx;
+    m->bus.user_fault_observer = fault;
+    m->bus.user_fault_ctx = ctx;
+}
+
 /* -------------------------------------------------------- wake sources ---
  *
  * Which modelled devices can end a WFI, and how far away each one's next
